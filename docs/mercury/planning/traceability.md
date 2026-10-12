@@ -27,7 +27,7 @@
 | Non-functional | `NFR-001…109` (bands §1.2) | F | this file §3 | Absorbs A's `NFR-LAT/REL/…` and D's `REL-nn` (aliases §8.1) |
 | Operational | `OPS-001…099` | F | this file §3 | Environment, rollout, operator procedures |
 | Security | `SEC-1xx…9xx` | E (text), F (registration) | `security/threat-model.md` §5.1; registered in §4 | F's `SEC-001…099` reservation **retired** (§4.2) |
-| Design invariants | `INV-01…` | C | `architecture/state-machine.md` §4 | C's `I1…I20` renamed in order (I1 → INV-01) |
+| Design invariants | `INV-01…27` | C | `architecture/state-machine.md` §4 | C's `I1…I20` renamed in order (I1 → INV-01) |
 | Test properties | `PROP-01…` | F | `testing/verification-plan.md` §5 | Each cites the INV/CON it checks |
 | Test cases | `TC-<LEVEL>-nnn` | F (IDs, levels, gates); C, D, E contribute content | `testing/verification-plan.md` §4, §8 | Only test-ID scheme. Contributor IDs are aliases (§8.3) |
 | Security acceptance criteria | `SAC-01…20` | E | `security/threat-model.md` §10.1 | Each SAC names its gate G-S1…G-S5 (verification plan §7) |
@@ -406,8 +406,8 @@ Each brief item and discovery pain point maps to at least one requirement. Phase
 
 | ID | Requirement | Rationale / source | Pri | Acceptance criterion (pass/fail) | Verification | Owning design |
 |---|---|---|---|---|---|---|
-| **FR-300** | During MIG-1…MIG-2, MERCURY-managed issues are marked by the opt-in label (OD-10) and excluded from the legacy scripts so that no issue is driven by both systems; MERCURY refuses issues with a legacy claim. | Fact 2; ADR-012 | M | Pilot log: 0 issues with both legacy gate files and MERCURY tasks. | Inspection + Demo | TDD §24, §27 · `planning/roadmap.md` §3 |
-| **FR-301** | At cutover (MIG-3) Slack-based coordination for MERCURY-managed work is disabled and its bot token revoked (SEC-806). | Fact 12 | M | 30-day watch: 0 Slack posts for MERCURY tasks; revocation recorded. | Inspection | TDD §24, §27 · `planning/roadmap.md` §3 |
+| **FR-300** | During MIG-1…MIG-2, MERCURY-managed issues are marked by the opt-in label (OD-10) and excluded from the legacy scripts so that no issue is driven by both systems; MERCURY refuses issues with a legacy claim. | Fact 2; ADR-012 | M | Pilot log: 0 issues with both legacy gate files and MERCURY tasks. | Inspection + Demo | TDD §24, §27 · `planning/roadmap.md` §2 |
+| **FR-301** | At cutover (MIG-3) Slack-based coordination for MERCURY-managed work is disabled and its bot token revoked (SEC-806). | Fact 12 | M | 30-day watch: 0 Slack posts for MERCURY tasks; revocation recorded. | Inspection | TDD §24, §27 · `planning/roadmap.md` §2 |
 
 ### FR — Explicitly out of scope for this release (Won't)
 
@@ -524,7 +524,7 @@ Each brief item and discovery pain point maps to at least one requirement. Phase
 | **OPS-005** | Upgrades (coordinator, Node, agent CLIs, wrappers, helpers) follow the documented procedure with backup, contract tests and rollback. | Version churn | M | Upgrade + rollback demo (TC-OPS-007). | Demo | TDD §24 · `operations/macos-service.md` §13 |
 | **OPS-006** | Backup and restore procedures are documented and drilled at least quarterly. | Platform P2 | S | Drill log (TC-OPS-006). | Demo | TDD §20, §24 · `operations/recovery.md` |
 | **OPS-007** | Secrets live in Keychain items with the single prefix `com.usjbro.mercury.*`, are read once at start and on `mercury reload-credentials`, and are held in memory; rotation per SEC-504. | RD-18 | M | TC-SEC-020; inventory matches `operations/macos-service.md` §9.1. | Inspection + Test | TDD §19 · `operations/macos-service.md` §9 |
-| **OPS-008** | The pilot on `network_monitor` proceeds MIG-1 shadow → MIG-2 supervised → MIG-3 cutover → MIG-4 watch with the exit criteria in `planning/roadmap.md` §3 (OD-16). | ADR-012; RA-25; RF-18 | M | Exit criteria met and recorded (TC-PIL-001…004). | Demo + Analysis | TDD §27 · `planning/roadmap.md` |
+| **OPS-008** | The pilot on `network_monitor` proceeds MIG-1 shadow → MIG-2 supervised → MIG-3 cutover → MIG-4 watch with the exit criteria in `planning/roadmap.md` §2 (OD-16). | ADR-012; RA-25; RF-18 | M | Exit criteria met and recorded (TC-PIL-001…004). | Demo + Analysis | TDD §27 · `planning/roadmap.md` |
 | **OPS-009** | Slack decommission for MERCURY-managed work: disable `slack-notify.sh` paths, revoke the bot token, record the date. | Fact 12 | M | See FR-301. | Inspection | TDD §24 · `planning/roadmap.md` |
 | **OPS-010** | Incident runbooks cover unauthorized merge, credential compromise, governance drift, chain failure and the ruleset-emergency procedure. | Area G | M | Tabletop walkthrough recorded (TC-OPS-004). | Demo | TDD §19, §20 · `operations/recovery.md` |
 | **OPS-011** | Logs, artifacts, snapshots and worktrees are rotated/cleaned per retention without manual action. | NFR-061 | S | Housekeeping test (TC-OPS-008). | Test | TDD §21, §23 · `operations/macos-service.md` §10.5 |
@@ -756,7 +756,7 @@ Columns: requirement → ADR(s) → test case(s) → milestone where first verif
 | FR-163 | M | — | TC-E2E-004, TC-E2E-018, TC-SM-008, TC-SM-020 | M6 | BC |
 | FR-164 | M | ADR-019 | TC-SBX-006 | M6 | BC |
 | FR-165 | M | — | TC-E2E-013, TC-SM-025 | M6 | BC |
-| FR-166 | M | ADR-014 | TC-GOV-117, TC-E2E-019, P0-235 | M6 | BC |
+| FR-166 | M | ADR-014 | TC-GOV-117, TC-E2E-019, TC-SM-028, P0-235 | M6 | BC |
 | FR-167 | M | ADR-014, ADR-019 | TC-PI-138, TC-SM-016, TC-SEC-145 | M5 | BC |
 | FR-168 | M | — | TC-SEC-154 | M6 | BC |
 | FR-180 | M | ADR-014 | TC-GOV-005, TC-GOV-111, TC-GOV-112 | M5 | BC |
@@ -998,6 +998,7 @@ D's table is the **single source of values** (RD-10, Addendum B.4). This registr
 | Disk (§2.6) | `disk.dispatch_hold_gib`, `disk.dispatch_hold_pct`, `disk.interrupt_local_gib`, `disk.interrupt_codex_gib`, `disk.ballast_mib` | NFR-082 |
 | Observability and backups (§2.7) | `heartbeat.local_s`, `heartbeat.remote_min`, `watchdog.schedule`, `watchdog.stale_awake_min`, `watchdog.stale_sleeping_h`, `watchdog.renotify_h`, `credentials.*`, `backup.due_after_h`, `backup.retention`, `logs.*`, `runs.retention_d` | OPS-013, NFR-022, NFR-061, OPS-011 |
 | Hold ageing (§2.7) | `hold_age.spec_changed_h`, `hold_age.dependency_unresolved_d`, `hold_age.deprioritized_d` | FR-050 |
+| Agent configuration (B's proposed defaults; D to add to §2, `reviews/41-revision-B.md` §4) | `claude.<type>.max_turns`, `claude.<type>.max_budget_usd`, `claude.<type>.max_input_tokens`, `claude.daily_budget_usd`, `codex.max_tokens_per_run`, `budget.github_mutations_per_hour`, `budget.linear_mutations_per_hour`, `gate.max_changed_lines` | NFR-083, NFR-084, SEC-705, FR-124 |
 
 Security **bounds** (drift detection ≤ 60 min awake, merge-verification alert ≤ 5 min awake) are requirements (SEC-108, SEC-905, CON-014), not parameters; D's cadences must satisfy them.
 
@@ -1073,10 +1074,18 @@ Security **bounds** (drift detection ≤ 60 min awake, merge-verification alert 
 | I17 | INV-17 | PROP-03 |
 | I18 | INV-18 | PROP-17 |
 | I19 | INV-19 | PROP-08, TC-SM-019 |
-| I20 | INV-20 (extended by the timer rule, FR-085) | PROP-09, TC-SM-021 |
+| I20 | INV-20 (timer rule, FR-085) | PROP-09, TC-SM-021 |
 | VP I1…I10 (F, retired) | PROP-01…PROP-10 (same order) | verification plan §5 |
 
-C is asked to add INV-21 "replay determinism" (FR-084) and INV-22 "holds never change state" (FR-050); PROP-10 and PROP-20 check them in the meantime.
+| — (new in C's Phase 4) | INV-21 (CR/PL checks reach `success` only under the stated conditions) | PROP-25, TC-SM-028 |
+| — | INV-22 (safety-relaxing methods need a presence assertion) | PROP-21, TC-INT-024, TC-SEC-145 |
+| — | INV-23 (no result applied unless the authorization guard incl. `spec_sha256` passes at application) | PROP-01, PROP-22, TC-REC-038 |
+| — | INV-24 (agent-class processes run as `_mercuryagent` through `agent-exec`) | PROP-18, TC-SEC-120 |
+| — | INV-25 (SHA recorded only after objects and ref are durable) | TC-REC-034, TC-REC-020 |
+| — | INV-26 (security conditions never clear automatically) | PROP-21, TC-SM-014 |
+| — | INV-27 (no dispatch under security halt, safe mode or sleep grace incl. dark wake) | PROP-23, TC-SM-023 |
+
+PROP-10 (replay determinism, FR-084) and PROP-20 (holds never change state, FR-050) are F properties without a dedicated INV; C's SMT-10 and §11 engine contract state the same rules.
 
 ### 8.3 Test-ID aliases
 
@@ -1094,9 +1103,14 @@ C is asked to add INV-21 "replay determinism" (FR-084) and INV-22 "holds never c
 | C `SMT-07` | TC-SM-008 | |
 | C `SMT-08` | TC-SM-026 | |
 | C `SMT-09` | TC-SM-027 | |
-| C `SMT-10` | TC-SM-012 | |
+| C `SMT-10` | TC-SM-012, TC-SM-013, TC-SM-014 | |
+| C `SMT-11` | TC-SM-015 | |
+| C `SMT-12` | TC-SM-016 | |
+| C `SMT-13` | TC-SM-017, TC-SM-018 | |
+| C `SMT-14` | TC-SM-028 | |
 | C `DBT-01…04` | TC-INT-020…023 | |
 | C `CT-01…05` | TC-CON-009…013 | |
+| C `CT-06` | TC-UNIT-070 (+ P0-223 integration) | |
 | C `RT-01` | TC-REC-001 | |
 | C `RT-02` | TC-DUP-006 | |
 | C `RT-03` | TC-REC-031 | |
@@ -1106,7 +1120,9 @@ C is asked to add INV-21 "replay determinism" (FR-084) and INV-22 "holds never c
 | C `RT-07` | TC-SEC-150 | |
 | C `RT-08` | TC-CONC-001 | |
 | C `RT-09` | TC-INT-024 | |
-| C `RT-10` | TC-INT-006 | |
+| C `RT-10` | TC-REC-037 | |
+| C `RT-11` | TC-REC-020, TC-REC-034 | |
+| C `RT-12` | TC-REC-033 | |
 | D `T-REC-01` | TC-REC-001 | |
 | D `T-REC-02` | TC-REC-020 | |
 | D `T-REC-03` | TC-REC-030 | |

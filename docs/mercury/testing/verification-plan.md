@@ -147,7 +147,7 @@ A new TC cites ≥ 1 requirement ID from `planning/traceability.md`. If none fit
 
 ## 5. State-machine property suite (L2)
 
-The model-based test drives the real state-machine module with generated sequences of agent results, poll observations (including duplicates, reorderings and A→B→A flips), operator and presence commands, holds, timeouts, crashes, reboots, sleep gaps, dark wakes and restores. After every step it checks the properties below. C's transition table is the oracle; C's invariants (`INV-nn`, `architecture/state-machine.md` §4) are the safety properties.
+The model-based test drives the real state-machine module with generated sequences of agent results, poll observations (including duplicates, reorderings and A→B→A flips), operator and presence commands, holds, timeouts, crashes, reboots, sleep gaps, dark wakes and restores. After every step it checks the properties below. C's transition table is the oracle; C's invariants (`INV-01…27`, `architecture/state-machine.md` §4) are the safety properties.
 
 | PROP | Property (checked after every step) | INV / requirement |
 |---|---|---|
@@ -160,7 +160,7 @@ The model-based test drives the real state-machine module with generated sequenc
 | PROP-07 | Each revision counter ≤ its limit + Σ operator grants; reaching the limit implies `BLOCKED` with exactly one escalation | INV-15; CON-012 |
 | PROP-08 | Every state change has exactly one transition row with an allowed initiator, evidence and audit event | INV-07, INV-19; FR-081, NFR-060 |
 | PROP-09 | A sleep gap alone never causes `FAILED` or `BLOCKED`, in both clock modes; state timers obey the timer rule | INV-20; CON-009, FR-085 |
-| PROP-10 | Re-applying `task_transitions` (evidence and guard reports) to a fresh store yields identical `tasks` rows and counters | FR-084 (INV-21 proposed to C) |
+| PROP-10 | Re-applying `task_transitions` (evidence and guard reports) to a fresh store yields identical `tasks` rows and counters (raw-event replay is a separate fake-clock property) | FR-084 |
 | PROP-11 | ≤ 1 non-terminal task per Linear issue | INV-01 |
 | PROP-12 | `AWAITING_HUMAN_APPROVAL` only with code and security reviews approving the exact current head SHA | INV-06; FR-165 |
 | PROP-13 | Every external effect is an outbox row written in the same transaction as its cause | INV-11; FR-063 |
@@ -168,14 +168,15 @@ The model-based test drives the real state-machine module with generated sequenc
 | PROP-15 | Append-only tables are never updated or deleted | INV-13 |
 | PROP-16 | A worktree is removed only for a terminal task with no unarchived changes | INV-14; FR-184 |
 | PROP-17 | Authority rows are inserted only by the Decision Recorder from a successful Claude run | INV-18; CON-003 |
-| PROP-18 | No agent spawn spec carries GitHub/Linear credentials or the control token; agents never hold a DB handle | INV-10; SEC-202 |
-| PROP-20 | Setting or clearing a hold never changes `tasks.state` | FR-050 (INV-22 proposed to C) |
-| PROP-21 | Security holds (`security_halt`, `integrity_alert`) never clear without a presence-tier command; while set, 0 dispatches | FR-050, FR-243 |
-| PROP-22 | A result finishing after a spec change is not applied before a new authorization version exists | FR-024 |
-| PROP-23 | No dispatch during dark wake or before `wake.dark_wake_min_awake_s` without a full-wake signal | FR-052 |
+| PROP-18 | No agent spawn spec carries GitHub/Linear credentials or the control token; agents never hold a DB handle; every agent-class spawn goes through `agent-exec` as the agent uid | INV-10, INV-24; SEC-202 |
+| PROP-20 | Setting or clearing a hold never changes `tasks.state` | FR-050 |
+| PROP-21 | Security conditions never clear without a presence-tier command; safety-relaxing methods never execute without a presence assertion | INV-22, INV-26; FR-050, FR-242, FR-243 |
+| PROP-22 | A result finishing after a spec change is not applied before a new authorization version exists | INV-23; FR-024 |
+| PROP-23 | No dispatch during dark wake (before `wake.dark_wake_min_awake_s` without a full-wake signal), sleep grace, safe mode or a security halt in scope | INV-27; FR-052, FR-243 |
 | PROP-24 | `lost_by_host` outcomes never consume attempts; cap exhaustion raises an ops alert without a state change | FR-053 |
+| PROP-25 | `MERCURY / claude-review` reaches `success` on head H only via review acceptance or a same-scope hold release with INV-06 true for H; `MERCURY / policy` reaches `success` only with no unacknowledged escalation for H | INV-21; FR-166, FR-167 |
 
-Generator: ≥ 10,000 sequences per property per CI run (100,000 nightly), length 1–200 events, seed printed on failure, shrinking on, each sequence executed in both clock modes when it contains a sleep gap. Failing seeds become permanent regression fixtures. TC-SM-004 is the suite; TC-SM-007, -009, -012, -014, -015, -021, -023 isolate individual properties for diagnosis.
+Generator: ≥ 10,000 sequences per property per CI run (100,000 nightly), length 1–200 events, seed printed on failure, shrinking on, each sequence executed in both clock modes when it contains a sleep gap. Failing seeds become permanent regression fixtures. TC-SM-004 is the suite (C's SMT-03); TC-SM-007, -009, -012, -014, -015, -021, -023 isolate individual properties for diagnosis.
 
 ---
 
@@ -203,7 +204,7 @@ Phases and dependencies are defined in `planning/roadmap.md`. "Must pass" lists 
 | P0b | P0-026…032, P0-036, P0-044 (**[ROOT]**) | Agent uid installed; P0-027 canaries 0 reads with probe processes |
 | P0c | P0-060, P0-220…225, P0-230…241, P0-072, P0-074, TC-OPS-016 (sandbox), TC-GOV-110, TC-SEC-114 | Identities equal the inventory (SAC-02 rehearsal); SEC-T-16 cases (a)–(e) rejected on the sandbox |
 | P0d | TC-OPS-009, TC-OPS-010 | CI, secret scan and ID lint green |
-| M1 | TC-UNIT core, TC-SM-001…014, -019, -021, -023, -027, TC-CON-001, -009…013, TC-INT-003…005, -010, -012, -013, -020…025, -030, TC-CONC-001/004, TC-REC-001 (200 runs), TC-REC-030…036, TC-SEC-128 (FakeBroker grammar), TC-SEC-150, TC-SEC-161, TC-SEC-191 | 0 counterexamples; 0 ledger violations; **G-S1** recorded before any real agent run on the Mac |
+| M1 | TC-UNIT core, TC-SM-001…014, -019, -021, -023, -027, -028 (logic), TC-CON-001, -009…013, TC-INT-003…005, -010, -012, -013, -020…025, -030, TC-CONC-001/004, TC-REC-001 (200 runs), TC-REC-030…036, TC-SEC-128 (FakeBroker grammar), TC-SEC-150, TC-SEC-161, TC-SEC-191 | 0 counterexamples; 0 ledger violations; **G-S1** recorded before any real agent run on the Mac |
 | M2 | TC-INT-001/002, TC-CON-006/007, TC-SBX-001, TC-NET-001…003/006/008, TC-DUP-001/002/006, TC-PERF-002 (Linear), TC-GOV-115 (read only), TC-E2E-011/014/017 | 0 missed of 100 updates; 0 writes in sandbox audit |
 | M3 | TC-CON-003/014, TC-UNIT-010/011/013, TC-E2E-006/008, TC-SM-015, TC-SEC-103, -121, -123, -124, -127, -152, TC-PI-130…133 (guards with fakes), TC-AFS-001/005/006/011 | 0 Codex spawns without authorization; snapshot tests 100 % |
 | M4 | TC-CON-004/005, TC-E2E-002/003, TC-SM-007/008/026, TC-AFS-003/004/009/010, TC-INT-026, TC-SEC-122, -126, -194, TC-REC-037, TC-PERF-003 | 0 implementation spawns with stale approval; **G-S2 evidence**: TC-SEC-120, -121, -128, -129, -125 (verify/deps profiles) with real agents as `_mercuryagent` |
@@ -308,9 +309,9 @@ Phase 0 checks cited by requirements in this plan that live in B's table: P0-201
 | TC-SM-012 | Holds never change state; release resumes (SMT-10, PROP-20) | 0 violations | FR-050 |
 | TC-SM-013 | Hold ageing escalates once per hold episode (`hold_age.*`) | Exactly one escalation | FR-050 |
 | TC-SM-014 | Security holds never auto-clear (PROP-21) | 0 auto-clears | FR-050 |
-| TC-SM-015 | Spec drift: hold set; post-change results not applied; re-authorization creates a new version (PROP-22) | 0 applied results before re-authorization | FR-024, SEC-307 |
-| TC-SM-016 | Policy escalation: `BLOCKED(policy_ack_required)` cleared only by presence `policy ack` for that head | Ack for head X never clears head Y | FR-167 |
-| TC-SM-017 | Merge-verification failure scope: actor / not-on-base → global halt; other checks → repo `integrity_alert` | Scope exact per check | FR-182, SEC-906 |
+| TC-SM-015 | Spec drift (SMT-11): hold set; post-change results not applied; re-authorization creates a new version (PROP-22) | 0 applied results before re-authorization | FR-024, SEC-307 |
+| TC-SM-016 | Policy escalation (SMT-12): `BLOCKED(policy_ack_required)` cleared only by presence `policy ack` for that head | Ack for head X never clears head Y | FR-167 |
+| TC-SM-017 | Merge-verification failure scope (SMT-13): actor / not-on-base → global halt; other checks → repo `integrity_alert` | Scope exact per check | FR-182, SEC-906 |
 | TC-SM-018 | `merged_unreviewed_head` → policy notice, not security; `ack-merge` closes | No SECURITY notice; one policy notice | FR-182 |
 | TC-SM-019 | Initiator restriction fuzzing (SMT-02) | 0 accepted mismatches | FR-081 |
 | TC-SM-020 | Revision-request routing per source (RD-8) | Verbatim only for validated Claude reviews; all others via a `revision_request` run | FR-163 |
@@ -320,6 +321,7 @@ Phase 0 checks cited by requirements in this plan that live in B's table: P0-201
 | TC-SM-025 | Review bound to head SHA; foreign push (SMT-06) | Stale verdict never enables approval state | FR-165, SEC-308 |
 | TC-SM-026 | Scope amendment re-plans; limits-only amendment does not (SMT-08) | As specified | FR-102 |
 | TC-SM-027 | Recovery per state × run situation (SMT-09) | Each cell reaches the specified state | FR-280 |
+| TC-SM-028 | Gate checks (SMT-14, PROP-25): CR success only via T24/T24p or same-scope release; PL success only after acknowledgement; T22 never waits on MERCURY's own contexts | 0 violations | FR-144, FR-166, FR-167 |
 
 ### 8.4 TC-CON
 
