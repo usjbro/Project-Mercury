@@ -1,38 +1,49 @@
 # ADR-007: Outbound polling instead of webhooks
 
-## Status
-Proposed (Phase 2, Agent A). Date 2026-10-12.
+| | |
+|---|---|
+| Status | **Accepted** |
+| Date | 2026-10-12 (Phase 4 revision; first proposed Phase 2) |
+| Owner | Agent A. Agent B owns intervals, cursors and the retry matrix (`integrations/github.md`, `integrations/linear.md`) |
+| Related ADRs | [ADR-009](ADR-009-system-of-record-split.md), [ADR-015](ADR-015-task-condition-model.md) |
 
 ## Context
-- No public inbound access to the Mac (brief).
-- GitHub: conditional requests with `ETag`/`If-None-Match` returning `304` are not charged to the primary rate limit; Events and Notifications APIs have 30 s – 6 h latency; self-hosted runners discouraged on public repos (discovery fact 9).
-- Linear: webhooks need a public HTTPS URL; polling via `issues(filter: {updatedAt: {gt: cursor}})` works.
-- Webhook relays (smee, `gh webhook forward`, cloud relay) add a third party or a hosted component.
-- The Mac sleeps; anything event-based would miss deliveries anyway and need reconciliation.
+- There is no public inbound access to the Mac (CON-002).
+- GitHub conditional requests (`If-None-Match`) returning `304` do not count against the primary rate limit. The Events and Notifications APIs have 30 s to 6 h latency (discovery fact 9).
+- Linear webhooks need a public HTTPS URL; polling with an `updatedAt` cursor works.
+- Webhook relays (smee, `gh webhook forward`, a cloud relay) add a third party or a hosted component.
+- The Mac sleeps, so anything event-based would miss deliveries and need reconciliation anyway.
+- Phase 3 found that this ADR's interval values differed from B's (RA-35).
 
 ## Decision
-1. Poll GitHub REST with ETags and Linear GraphQL with durable `updatedAt` cursors (overlapping window 2 min, dedupe by `(id, updatedAt)`).
-2. Adaptive intervals (defaults; Agent B tunes):
+1. **Poll** GitHub REST with ETags and Linear GraphQL with durable `updatedAt` cursors and an overlap window. Intervals, overlap and reconcile cadence are defined only in `linear.md` §3 and `github.md`; they are not restated here.
+2. **Polling is level-triggered.** Pollers produce typed observations that the `InboxProcessor` applies through the `TransitionEngine`. A missed poll is harmless because the next one observes the current level. Deduplication keys follow B's catalogue (`github.md` §13), including an observation sequence so that A→B→A transitions are not lost.
+3. **Full reconcile** runs at startup, after wake, and on a fixed cadence; values in D's parameter table and B's documents.
+4. **Rate limits and errors** follow the single retry matrix in `github.md` Part B. Network-class failures do not consume run or outbox attempts while `network_down` is held (RD-18).
+5. **Connectivity probe** is an authenticated, ETag-conditional request, never an unauthenticated GitHub call (RD-18).
+6. **No webhook relay in v1.** A relay may be added later by a new ADR **only as a hint to poll immediately**, never as a source of truth (FR-901).
 
-   | Watch | Interval |
-   |---|---|
-   | Linear eligible-issue scan (team) | 60 s |
-   | PR with checks pending or coordinator just pushed | 30 s |
-   | PR awaiting operator review/merge | 60 s for 1 h, then 5 min |
-   | Full reconcile of all non-terminal tasks | 15 min, at startup, and after a wake gap > 60 s |
-3. One request at a time per integration; ≥ 1 s between mutations; honour `retry-after` and secondary limits with exponential backoff and jitter.
-4. Polling results become typed **facts** applied by the Workflow Engine (level-triggered). A missed poll is harmless.
-5. No webhook relay in the MVP. If latency becomes a problem, a relay may be added later **only as a hint to poll immediately**, never as a source of truth.
-
-## Alternatives
-- Webhooks via smee / `gh webhook forward`: third-party transit; channel URL is the only secret. Rejected for MVP.
-- Operator-owned cloud relay/queue: violates "locally hosted"; rejected unless a later ADR approves.
-- GitHub Events/Notifications API: too laggy for control flow.
-- GraphQL for GitHub: fewer round trips but no ETag; use only for occasional reconcile if needed.
+## Alternatives considered
+| Alternative | Why rejected |
+|---|---|
+| Webhooks through smee or `gh webhook forward` | Third-party transit; the channel URL is the only secret |
+| Operator-owned cloud relay or queue | Violates "locally hosted" |
+| GitHub Events or Notifications API | Too laggy for control flow |
+| GitHub GraphQL for polling | Fewer round trips but no ETag; acceptable only for occasional reconcile |
 
 ## Consequences
-- Latency bounded by intervals (see NFR-LAT-03/05); API budget within NFR-RES-02/03.
-- Works identically after sleep and restart; no inbound attack surface.
+- **Positive:** works identically after sleep and restart; no inbound attack surface.
+- **Negative:** latency is bounded by poll intervals; the targets are NFR-040 and NFR-041 and are measured from the first awake-and-online instant after the event (RD-16).
+- **Negative:** API budget is consumed continuously; bounded by NFR-081.
 
 ## Related requirements
-Brief "No public inbound access", §F (retry after connectivity loss); NFR-LAT-03, NFR-LAT-05, NFR-RES-02, NFR-RES-03; AP-5, AP-8.
+CON-002; FR-001, FR-283, FR-901; NFR-005, NFR-040, NFR-041, NFR-081.
+
+## Related findings
+RA-35 (parameter drift), RB-10, RB-11 (dedup keys), RB-12 (probe), RD-09, RD-22.
+
+## Operator decisions
+None.
+
+## Revision history
+- Phase 4: all numeric values removed and referenced; dedup catalogue, retry matrix and probe rules referenced from B.

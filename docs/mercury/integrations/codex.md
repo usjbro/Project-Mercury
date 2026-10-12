@@ -1,6 +1,9 @@
 # Integration: Codex CLI (execution role)
 
-**Owner:** Agent B, Phase 2 proposal. **Builds on:** `reviews/02-discovery-agent-runtimes.md` §3 (**RT**). Those facts were verified from source at `rust-v0.162.1`; nothing was executed. Every behavioural claim below that depends on running Codex on the Mac carries an `ASM-B-nn` identifier.
+**Owner:** Agent B. **Status:** Phase 4 revision. Implements RD-1, RD-11, RD-15 and RD-17 (`reviews/30-reconciliation.md`).
+**Builds on:** `reviews/02-discovery-agent-runtimes.md` §3 (**RT**, verified from source at `rust-v0.162.1`) and `reviews/21-review-B-interfaces.md` ([V-src] items). Behavioural claims that need a run on the Mac carry `ASM-B-nn`; each is linked to a Phase 0 check in `github.md` §20.
+
+**Single sources referenced, not restated here:** output contracts and the wire-copy generator (Agent C, `protocols/messages.md` §5); state transitions, holds and run-attempt caps (C, `architecture/state-machine.md` §3, §5, §7.1); worktree reset policy (C, `components.md` §9); filesystem layout (D, `operations/macos-service.md` §7.1); `agent-exec`/`agent-ctl` grammar and the fd-3 key hand-off (D, `macos-service.md` agent-uid runtime section, ADR-013); parameter values (D's parameter table); protected-path lists and SEC statements (E, `security/threat-model.md` SEC-209, SEC-310, SEC-312, SEC-403/404/406); failure-class accounting and retry matrix (`github.md` §15).
 
 ---
 
@@ -11,70 +14,59 @@ Codex produces two kinds of output:
 - **Plans:** a read-only analysis of a coordinator-prepared worktree.
 - **Code changes:** writes inside one task worktree.
 
-Codex never holds GitHub or Linear credentials. It never commits, pushes or opens PRs. Every Codex run is gated by the coordinator:
+Codex never holds a GitHub or Linear credential. It never commits, pushes or opens PRs; the coordinator does (§9, `github.md` §4).
 
 | ID | Invariant | Enforcement |
 |---|---|---|
-| CX-1 | No planning run without a valid, unrevoked `auth_` bound to `(task_id, repo, spec_hash)` | Coordinator dispatch guard. Run rows reference `auth_id` (FK) |
-| CX-2 | No implementation run without a plan approval bound to `plan_sha256`. The prompt contains exactly that artifact's text, re-hashed at dispatch | Coordinator dispatch guard. The plan text is loaded from the content-addressed store and its hash re-verified |
-| CX-3 | Planning cannot modify the filesystem | `--sandbox read-only` (Seatbelt) |
-| CX-4 | Implementation can write only inside the task worktree, and has no network | `--sandbox workspace-write` with `network_access=false` and `writable_roots=[]` (RT §3.2) |
-| CX-5 | Codex processes never see credentials other than their own model key, and the commands Codex runs never see even that key | Process `env` allowlist plus `shell_environment_policy` (§6) |
-| CX-6 | Repository content cannot loosen Codex's configuration | Per-task `CODEX_HOME`, `--ignore-user-config` is **not** used (we supply the config), project trust = untrusted, `--ignore-rules`, `--strict-config`, no hooks (§5) |
-| CX-7 | What gets committed is decided by the coordinator after deterministic gates, not by Codex | Coordinator commit pipeline (§9) |
+| CX-1 | No planning run without a valid, unrevoked authorization bound to `(task_id, repo, spec_hash)`; a result that arrives after a spec change is not acted on until re-authorization (RD-13) | Coordinator authorization guard at dispatch **and** at result application (SM §8.1) |
+| CX-2 | No implementation run without a plan approval bound to `plan_sha256`; the prompt contains exactly that artifact's text, re-hashed at dispatch | Approval binding guard (SM §8.2); plan loaded from the content-addressed store and re-verified |
+| CX-3 | Planning cannot modify the filesystem | `--sandbox read-only` (Seatbelt) plus a post-run check that the worktree is unchanged |
+| CX-4 | Implementation can write only inside the task worktree and its run scratch, and has no network | `--sandbox workspace-write`, `network_access=false`, `writable_roots=[]` (RT §3.2); OS: agent uid |
+| CX-5 | Codex never sees a credential other than its model key, and the commands it runs never see even that key | Key delivered on fd 3 to `agent-exec` (§6); `shell_environment_policy` |
+| CX-6 | Repository content cannot loosen Codex's configuration | Per-task `CODEX_HOME` with a coordinator-generated `config.toml`, regenerated and byte-verified before every run; project trust `untrusted`; `--ignore-rules`; `--strict-config`; no hooks or MCP (§5); instruction files byte-checked before every run including resumes (SEC-209) |
+| CX-7 | What gets committed is decided by the coordinator after deterministic gates | Coordinator commit pipeline using git plumbing against the mirror (§9) |
+| CX-8 | Every Codex process runs as `_mercuryagent` | `agent-exec` via the restricted sudoers drop-in (RD-1, ADR-013). Same-uid execution is allowed only with fakes and the sandbox repository (M1–M4) and never with workspace-write against a non-sandbox repository before SEC-T-20 passes |
 
 ---
 
 ## 2. Mechanism (decision)
 
-**Decision: drive `codex exec` directly as a supervised subprocess.** The TypeScript `@openai/codex-sdk` only wraps the same binary (RT §3.4). Running the binary directly gives:
+**Decision: drive `codex exec` directly, spawned through `agent-exec` as a detached, adoptable run with file stdio.** The `@openai/codex-sdk` only wraps the same binary (RT §3.4); its `index.d.ts` at the pinned version is the event-type contract for parsing JSONL.
 
-- exact argv for the audit;
-- ownership of the PID and process group;
-- no hidden env injection.
-
-The SDK's `index.d.ts` at the pinned version is used as the **event type contract** for parsing JSONL.
-
-Not used:
-
-- `codex app-server`, which is experimental;
-- `codex mcp-server`, which was removed in 0.162.x;
-- `--worktree`, because MERCURY manages worktrees;
-- `--full-auto`, which no longer exists;
-- `--yolo`, `--approve-for-me` and `--dangerously-bypass-hook-trust`, which are forbidden. A startup argv linter rejects them.
+Not used: `codex app-server` (experimental), `codex mcp-server` (removed in 0.162.x), `--worktree`, `--full-auto`, and the forbidden flags of SEC-208 (`--yolo`, `--approve-for-me`, `--dangerously-bypass-hook-trust`, `--add-dir`, `danger-full-access`, network on). `agent-exec`'s grammar and a coordinator argv linter both reject them.
 
 ---
 
 ## 3. Run types and command lines
 
-All runs use these settings:
+Common to all runs:
 
-- `cwd` = the task worktree (`~/Developer/mercury-worktrees/<repo>/<task_id>/`), outside TCC folders.
-- `CODEX_HOME` = the per-task home (§5).
-- stdin = the prompt envelope (§4). The prompt is never placed on argv.
-- stdout = JSONL. stderr is captured to the run log.
+- Spawn: `sudo -n -C 4 -u _mercuryagent -g mercury /usr/local/libexec/mercury/agent-exec --kind <codex_plan|codex_implement|codex_revise> --run-dir <WORK_ROOT>/runs/<run_id>`, detached. The argv below is written into the run's `spec.json` and validated by `agent-exec` against the fixed grammar for that kind.
+- `cwd` = the task worktree `WORK_ROOT/worktrees/<repo>/<task>/` (naming: `macos-service.md` §7.1).
+- `CODEX_HOME` = the task's home (§5).
+- fd 0 = `runs/<run_id>/inputs/prompt.txt` (the envelope, §4); the prompt is never on argv. fd 1 = `stdout.jsonl`, fd 2 = `stderr.log` (operator-owned, written through the inherited fds). fd 3 = model key.
+- `--output-schema` points at the run's copy of the `codex-strict` wire schema (§3.6); `-o` writes to `runs/<run_id>/out/final.json`.
 
 ### 3.1 Planning (initial)
 
 ```
 codex exec --json --strict-config --ignore-rules \
   --cd <worktree> --sandbox read-only \
-  -m <pinned_model> -c model_reasoning_effort="high" \
-  --output-schema <MERCURY_SCHEMAS>/codex-plan.v1.schema.json \
-  -o <run_dir>/final.json  -
+  -m <pinned_model> -c model_reasoning_effort=<codex.plan.reasoning_effort> \
+  --output-schema <run_dir>/inputs/schema.codex_plan.wire.json \
+  -o <run_dir>/out/final.json  -
 ```
 
 ### 3.2 Plan revision (resume the planning thread)
 
 ```
 codex exec resume <plan_thread_id> --json --strict-config --ignore-rules \
-  --cd <worktree> --sandbox read-only \
-  --output-schema <…>/codex-plan.v1.schema.json -o <run_dir>/final.json  -
+  --cd <same worktree> --sandbox read-only \
+  --output-schema <run_dir>/inputs/schema.codex_plan.wire.json -o <run_dir>/out/final.json  -
 ```
 
-- stdin carries the Claude `revision_request` instructions in the envelope.
-- Resume keeps Codex's codebase exploration and is cheaper.
-- **ASM-B-10:** `exec resume` accepts `--sandbox`, `--output-schema` and `-o` (the RT §3.1 flag table lists them for `exec`; resume inheritance is unverified). If it does not, a revision becomes a fresh `exec` with the prior plan and findings in the envelope. The design works either way.
+- stdin carries the `mercury.plan.revision_request.v1` instructions (Claude's words, §4).
+- `exec resume` loads `--output-schema` and builds resume parameters from the current config, including sandbox and cwd [V-src 0.162.1]. `--cd` is passed explicitly because cwd comes from config (RB-26). **ASM-B-10** is reduced to a runtime check that the sandbox is actually re-applied.
 
 ### 3.3 Implementation (fresh thread, deliberately not a resume)
 
@@ -84,89 +76,99 @@ codex exec --json --strict-config --ignore-rules \
   -c sandbox_workspace_write.network_access=false \
   -c 'sandbox_workspace_write.writable_roots=[]' \
   -c sandbox_workspace_write.exclude_slash_tmp=true \
-  --output-schema <…>/codex-impl-result.v1.schema.json -o <run_dir>/final.json  -
+  --output-schema <run_dir>/inputs/schema.codex_implementation.wire.json -o <run_dir>/out/final.json  -
 ```
 
-Implementation starts a **new thread** containing only the approved plan text (`plan_sha256`) and the authorization scope. Reasons:
+Implementation starts a **new thread** containing only the approved plan text (`plan_sha256`) and the authorization scope (ADR-005 as revised): the planning thread contains rejected plan versions and reviewer findings, and the sandbox mode changes.
 
-1. The planning thread contains rejected plan versions and reviewer findings. Resuming it would make "what Codex implemented" depend on conversational memory rather than on the approved artifact, which breaks CX-2's binding.
-2. The sandbox mode changes from read-only to workspace-write. A fresh thread avoids any ambiguity in resumed sandbox semantics.
-
-### 3.4 Implementation revision (resume the implementation thread)
+### 3.4 Implementation revision
 
 ```
 codex exec resume <impl_thread_id> --json --strict-config --ignore-rules \
-  --cd <worktree> --sandbox workspace-write -c sandbox_workspace_write.network_access=false … -
+  --cd <same worktree> --sandbox workspace-write -c sandbox_workspace_write.network_access=false … -
 ```
 
-- It runs after a Claude `revision_request` (review findings, CI failure, human changes requested or a conflict).
-- Before a revision run, the coordinator ensures the worktree is at the last pushed `head_sha`, with a clean status.
-- If a revision needs scope beyond the authorization (new paths, dependencies), the coordinator does **not** run Codex. The task goes to re-authorization (`needs_reauthorization`).
+- Runs after a `mercury.revision.request.v1` (verbatim Claude review text or a Claude `revision_request` run, `claude.md` §3.3).
+- **Precondition:** the worktree HEAD equals `tasks.last_commit_sha` (the last coordinator commit, pushed or not; RC-06) and the status is clean.
+- **Resume rule (RC-06):** a thread may be resumed only if the worktree has not been reset since that thread's last turn. After any reset (§12), the revision runs as a **fresh** thread with the approved plan plus the revision instruction.
+- If the instruction needs scope beyond the authorization (new paths, dependencies), Codex is not run: the Claude `revision_request` returns `replan` or `escalate`, or Claude amends the authorization (SM G4).
 
-### 3.5 Thread IDs
+### 3.5 Thread ids
 
-- Codex assigns the thread ID itself; it cannot be preassigned (RT §4).
-- The coordinator captures it from the first `thread.started` event and persists it **before** consuming further events, using `UPDATE runs SET codex_thread_id=?` in its own transaction.
-- If the coordinator crashes before persisting the ID, the run is abandoned and the next attempt starts fresh. `exec resume --last` is never used, because it is ambiguous under concurrency.
+- Codex assigns the thread id (RT §4). The coordinator captures it from the first `thread.started` event and persists it (`runs.codex_thread_id`, `tasks.codex_*_thread_id`) in its own transaction before consuming further events.
+- If the coordinator crashes before persisting it, the adopted run's `stdout.jsonl` is re-read from the start on adoption (§12.2), so the id is recovered. `exec resume --last` is never used.
+
+### 3.6 Output schemas: `codex-strict` wire copies (RD-15, RB-01)
+
+Codex sends the schema file verbatim with `strict: true` [V-src]; the provider enforces its strict-mode subset, and an unsupported keyword fails every run of that kind with a request-time 400. Therefore:
+
+1. The CI generator (Agent C) emits a `codex-strict` wire copy of `output.codex_plan.schema.json` and `output.codex_implementation.schema.json`: `$schema` and `$id` removed; `minLength`, `maxLength`, `minimum`, `maximum` and any `minItems`/`maxItems` the Phase 0 probe rejects removed and restated in `description`; an explicit `type` added beside every `enum`; all objects closed with every property required (already true of the canonical files).
+2. The coordinator copies the wire file into the run's inputs dir and records its sha256 and the canonical `schema_id` in the run row.
+3. `final.json` is validated with Ajv against the **canonical** schema (all bounds).
+4. A provider `invalid_json_schema` (or equivalent) rejection is `config_fatal` (§11).
+5. Phase 0 / contract test **ASM-B-61**: each wire schema is sent to the pinned Codex with a trivial prompt and must be accepted.
 
 ---
 
 ## 4. Prompt envelope (Codex)
 
-This uses the same nonce-delimited format as `claude.md` §5.2, with Codex-specific sections:
+Same nonce-delimited format as `claude.md` §5.2, with Codex sections:
 
 ```text
 <mercury_task schema="mercury.codex_envelope.v1" run_id="run_…" kind="implement" nonce="…">
 <authority>
 You are executing an approved plan for MERCURY. Approved plan: pln_… sha256=…  Authorization: auth_… v1.
-Allowed paths: src/foo/**, tests/foo/**.  Forbidden: .github/**, CODEOWNERS, AGENTS.md, .codex/**, .claude/**, .mcp.json, lockfiles (unless listed).
+Allowed paths: src/foo/**, tests/foo/**.  Forbidden: the protected paths listed below.
 Do not run git commit, git push, gh, or network tools. The coordinator commits.
 Run the test commands listed below and report results. Stop and report "blocked" instead of widening scope.
 </authority>
-<test_commands> ["npm test -- --runInBand", "npm run lint"] </test_commands>   <!-- from MERCURY repo config, not from repo files -->
+<protected_paths> …from the repo policy (SEC-310 classes)… </protected_paths>
+<test_commands> ["npm test -- --runInBand", "npm run lint"] </test_commands>   <!-- MERCURY repo config, never repo files -->
 <approved_plan sha256="…" nonce="…"> …verbatim approved plan… </approved_plan nonce="…">
+<revision_request id="…" producer="claude_run|coordinator_verbatim" sha256="…" nonce="…"> …Claude's instructions… </revision_request nonce="…">
 <untrusted source="linear.issue.description" sha256="…" nonce="…"> … </untrusted nonce="…">
 </mercury_task>
 ```
 
-- Repository `AGENTS.md` files are still read by Codex on its own (RT §3.3). They come from the base branch and are untrusted, but in practice operator-authored. The `<authority>` block states that the envelope's scope wins when the two conflict. **This is policy-enforced only.** The software backstops are:
-  - the diff guard (§9) rejects edits to forbidden paths;
-  - Claude's PR review checks plan conformance.
+- CI logs, check output and human comments never appear here directly; they reach Codex only through a Claude `revision_request` run (RD-8).
+- Repository `AGENTS.md` files are still read by Codex (RT §3.3). They come from the base SHA and are byte-checked before every run, including resumes (SEC-209). The `<authority>` block states that the envelope's scope wins on conflict; this is policy-enforced only, backed by the diff gate (§9) and Claude's PR review.
 
 ---
 
-## 5. Per-task `CODEX_HOME` and configuration isolation
+## 5. Per-task `CODEX_HOME` (RD-15)
 
-**Layout:** `~/Library/Application Support/Mercury/codex/<task_id>/home/`, mode 0700. Created at task authorization and removed at task cleanup, after the audit copies of session files have been archived.
+**Location:** `WORK_ROOT/codex-home/<task_id>/` (ownership and ACLs: `macos-service.md` §7.1). Created at the first Codex dispatch of the task; `sessions/` archived to the artifact store and the directory purged through `agent-ctl purge` at task terminal.
 
-| Path | Contents |
-|---|---|
-| `config.toml` | Generated by the coordinator from a pinned template (below) |
-| `sessions/` | Codex session files (needed for resume); archived to the artifact store on task completion |
-| No `auth.json` | API-key mode (§7) |
-| No `rules/`, no hooks, no `mcp_servers` | — |
+| Path | Owner / access | Contents |
+|---|---|---|
+| `config.toml` | operator-owned, agent read-only | Generated from the pinned template below. **Regenerated and byte-verified before every run**, so nothing a previous run or the repository wrote can persist |
+| `sessions/` | agent-writable | Codex session files; required by `exec resume` |
+| Other Codex-managed state (logs, state database) | agent-writable | Exact list verified in Phase 0 (**ASM-B-22**); none may contain configuration Codex reads |
+| No `auth.json`, no `rules/`, no hooks, no `mcp_servers` | — | Checked before every run; presence fails the run as `config_fatal` |
 
-The home is per **task** (not per run), so that resume works across a task's runs. Concurrent tasks never share a home, which removes the shared-sqlite and auth-refresh race (RT §3.6 #7).
+The home is per **task**, not per run, so that plan and implementation revisions can resume their threads (RB-07). Concurrency safety comes from "at most one Codex run per task" (SM invariant), not from per-run homes. SEC-203 is amended accordingly ("per-task, coordinator-generated").
+
+During a run, Codex's own commands cannot rewrite `config.toml` (Seatbelt writable roots are the worktree and the run scratch only); the Codex process itself does not write it. Regeneration before each run closes the remaining window.
 
 ```toml
-# config.toml template v1 (illustrative; keys verified in RT §3.3 schema, values ASM-B-11)
+# config.toml template v1 (keys verified in RT §3.3; values ASM-B-11)
 model = "<pinned codex model>"
-model_reasoning_effort = "high"
+model_reasoning_effort = "<codex.plan|impl.reasoning_effort>"
 approval_policy = "never"
 sandbox_mode = "read-only"                 # overridden per run by --sandbox
 check_for_update_on_startup = false
-cli_auth_credentials_store = "ephemeral"   # never write credentials to disk (ASM-B-12)
-web_search = "disabled"                    # ASM-B-11 (exact value name)
+cli_auth_credentials_store = "ephemeral"   # ASM-B-12
+web_search = "disabled"                    # ASM-B-11
 project_doc_max_bytes = 32768
 
 [sandbox_workspace_write]
 network_access = false
 writable_roots = []
 exclude_slash_tmp = true
-exclude_tmpdir_env_var = false             # TMPDIR is set to a per-run dir inside the worktree's sibling run dir
+exclude_tmpdir_env_var = false             # TMPDIR = the run's tmp dir
 
 [shell_environment_policy]
-inherit = "core"                           # ASM-B-13: accepted values in 0.162.1
+inherit = "core"                           # ASM-B-13
 ignore_default_excludes = false            # keep default *KEY*/*TOKEN*/*SECRET* excludes
 include_only = ["PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "CI", "TERM"]
 set = { CI = "1", MERCURY_RUN = "1" }
@@ -174,166 +176,164 @@ set = { CI = "1", MERCURY_RUN = "1" }
 [history]
 persistence = "none"
 
-[projects."/Users/<op>/Developer/mercury-worktrees"]
+[projects."<WORK_ROOT>/worktrees"]          # generated from the WORK_ROOT constant (RE-19)
 trust_level = "untrusted"                  # repo .codex/config.toml and hooks are not honoured
 ```
 
-- `--strict-config` makes an unknown key fatal. This turns silent drift between versions into a `config_fatal` failure at startup.
-- **Filesystem read exposure.** Codex's Seatbelt profile allows broad reads (RT §2.5 and §3.2). Credential paths are therefore *readable* by Codex commands:
-  - `~/.config/gh/hosts.yml` (the operator's admin token);
-  - `~/.ssh`;
-  - `~/.codex/auth.json`;
-  - `~/Library/Application Support/Mercury/`.
-
-  Network is off, so the exfiltration route is **writing a secret into the worktree** so that the coordinator pushes it. Controls:
-  1. Permission-profile deny-read rules (`[permissions.mercury.filesystem]` with `"~/.ssh"="deny"` and similar), if supported by the pinned version (**ASM-B-14**).
-  2. **Software gate:** secret scanning plus a forbidden-content scan on the diff before commit (§9). This is mandatory regardless of item 1.
-  3. **Strongest option, recommended to Agents D and E:** run `mercuryd` and its agents under a **dedicated macOS user** that holds no human credentials. This raises login-session questions; see report OQ-B-05.
+- `--strict-config` makes an unknown key fatal, turning silent drift between versions into `config_fatal` at self-test.
+- **Read exposure.** Codex's Seatbelt profile allows broad reads (RT §2.5). As `_mercuryagent`, Codex cannot read the operator's home, `MERCURY_HOME` or any Keychain (SEC-201); this is the primary control and replaces the earlier same-uid mitigations. Remaining readable content is group-readable `WORK_ROOT` data (mirrors, other worktrees), which holds no credentials. Deny-read permission profiles (**ASM-B-14**) remain an optional second layer. The pre-commit secret scan (§9) stays mandatory.
 
 ---
 
-## 6. Process environment (allowlist)
+## 6. Process environment (built by `agent-exec`)
 
 | Variable | Planning | Implementation |
 |---|---|---|
-| `PATH` | pinned toolchain dirs (node, git, language toolchains) + `/usr/bin:/bin` | same |
-| `HOME` | operator home (**ASM-B-15**: Codex needs HOME; a per-task fake HOME breaks toolchains) | same |
-| `CODEX_HOME` | per-task home | same |
-| `CODEX_API_KEY` | model key (§7) | same |
-| `TMPDIR` | `…/runs/<run_id>/tmp` | same |
+| `PATH` | Pinned toolchain dirs under `WORK_ROOT/toolchains/` (from the repo's toolchain manifest) + `/usr/bin:/bin` | same |
+| `HOME` | `/Users/_mercuryagent` (caches only; RD-1, RD-26) | same |
+| `CODEX_HOME` | `WORK_ROOT/codex-home/<task_id>/` | same |
+| `CODEX_API_KEY` | From fd 3 | same |
+| `TMPDIR` | `WORK_ROOT/runs/<run_id>/tmp/` | same |
 | `LANG`, `TERM=dumb`, `CI=1`, `NO_COLOR=1` | yes | yes |
 
-Excluded:
+Excluded: every `GITHUB_*`, `GH_*`, `LINEAR_*`, `ANTHROPIC_*`, `OPENAI_API_KEY`, `SSH_AUTH_SOCK` and `AWS_*` variable and anything not listed (SEC-202).
 
-- every `GITHUB_*`, `GH_*`, `LINEAR_*`, `ANTHROPIC_*`, `OPENAI_API_KEY`, `SSH_AUTH_SOCK` and `AWS_*` variable;
-- any variable not in the list above.
-
-`CODEX_API_KEY` is visible to the Codex process but excluded from the commands it runs by `shell_environment_policy`. Default excludes cover `*KEY*` (**ASM-B-13**).
-
-**Residual risk:** a sandboxed command might read the parent's environment through `ps -E` (or `ps eww`). Whether Seatbelt or macOS blocks this is **ASM-B-16**. Mitigation: use a dedicated OpenAI project key with a hard monthly limit, rotated quarterly.
+`CODEX_API_KEY` is visible to the Codex process but excluded from its commands by `shell_environment_policy`. **Residual risk ASM-B-16:** a sandboxed command running as the same agent uid might read the Codex process's environment (`ps -E`). Mitigation: a dedicated OpenAI project key with a hard spend cap (OD-04), rotated per SEC-504.
 
 ---
 
 ## 7. Authentication
 
-- **Recommended:** an OpenAI API key for a dedicated project "mercury" with a usage cap. It is stored in the Keychain as `dev.mercury.openai` and passed as `CODEX_API_KEY` per process. `exec` honours this variable (RT §3.5).
-- **Alternative:** ChatGPT-plan login. It requires `auth.json` in a `CODEX_HOME`, and refresh rewrites the file. Per-task homes would each need a copy, and copies diverge on refresh-token rotation (**ASM-B-17**). If the operator chooses ChatGPT billing:
-  - use one shared auth home and set `codex.max_concurrency = 1`;
-  - point per-task homes at it through `CODEX_HOME` only for auth (**ASM-B-18**, likely unsupported). Otherwise fall back to a single shared `CODEX_HOME`, with sessions namespaced by thread ID.
-  - This is **OQ-B-03**.
+- **Default (OD-04):** an OpenAI API key for a dedicated project with a usage cap, in the operator's login Keychain under `com.usjbro.mercury.*` (inventory: `macos-service.md` §9.1). `mercuryd` reads it once at start and on `mercury reload-credentials` and passes it per run on fd 3. `exec` honours `CODEX_API_KEY` (RT §3.5).
+- **ChatGPT-plan login is not supported in v1:** it needs an `auth.json` in a `CODEX_HOME` that refresh rewrites, which conflicts with per-task homes and with a coordinator-generated read-only configuration.
 
 ---
 
-## 8. Event consumption, progress and heartbeats
+## 8. Event consumption, progress, liveness
 
-The JSONL reader is line-buffered, with a 1 MiB maximum line length; longer lines are truncated, logged and flagged. Unknown `type` values are logged and ignored (RT §6 V6).
+The coordinator tails `stdout.jsonl` (line-buffered, maximum line length `codex.jsonl.max_line_bytes`; longer lines truncated, logged and flagged). Unknown `type` values are logged and ignored (RT §6 V6).
 
 | Event | Coordinator action |
 |---|---|
-| `thread.started{thread_id}` | Persist `codex_thread_id` (§3.5). Emit `mercury.implementation_progress.v1{phase:"started"}` |
-| `turn.started` | heartbeat |
-| `item.started/updated/completed` with `command_execution` | Heartbeat. On completion, record `{command, exit_code, duration}`, truncating output to 8 KiB in the run log. Commands matching `test_commands` become `codex_test_observations[]`. These are **advisory**; §10 holds the authoritative results |
-| `item.*` with `file_change` | Heartbeat. Accumulate the changed-path set. A path outside `allowed_paths` raises an early-warning `scope_drift` event (no kill; the gate is at §9) |
-| `item.*` with `agent_message` / `reasoning` / `todo_list` | Heartbeat. The `todo_list` is stored as the latest progress snapshot (coarse % = completed/total) |
-| `item.*` with `mcp_tool_call` / `web_search` | **Must never occur** (no MCP servers, web search disabled). Raise a security event and kill the run |
-| `turn.completed{usage}` | Accumulate tokens into `run.tokens_*`. Enforce `codex.max_tokens_per_run` (default 4 M input + 400 k output). If exceeded, interrupt the run |
+| `thread.started{thread_id}` | Persist the thread id (§3.5); emit `mercury.implementation.progress.v1{phase:"started"}` |
+| `turn.started` | Liveness |
+| `item.started` with `command_execution` | Liveness; mark "command in progress" (stall threshold rule below) |
+| `item.completed` with `command_execution` | Record `{command, exit_code, duration}` with output truncated in the run log. Commands matching `test_commands` become advisory `codex_test_observations[]`; §10 holds the authoritative results. Sandbox denials are counted (SEC-903) |
+| `item.*` with `file_change` | Accumulate the changed-path set; a path outside `allowed_paths` raises an early `scope_drift` event (no kill; the gate is §9) |
+| `item.*` with `agent_message` / `reasoning` / `todo_list` | Latest `todo_list` stored as the progress snapshot |
+| `item.*` with `mcp_tool_call` / `web_search` | **Must never occur.** Security event; kill the run; class `policy_violation` |
+| `turn.completed{usage}` | Accumulate tokens; enforce `codex.max_tokens_per_run`; interrupt when exceeded |
 | `turn.failed{error}` / `error{message}` | Classify (§11) |
 
-- **Progress messages.** `mercury.implementation_progress.v1` is emitted to the event log at most once per 60 s per run, or on a phase change. The `last_event_at` heartbeat is updated on every event in memory and flushed to SQLite every 15 s.
-- **Stall detection.** Planning has no events for 10 min; implementation has no events for 15 min, which allows long test commands. In either case the run is `stalled`, and a soft interrupt is followed by a kill (§12). Sleep gaps are excluded.
+- **Progress messages:** `mercury.implementation.progress.v1` at most once per `codex.progress.min_interval` per run or on a phase change.
+- **Liveness and stall (RD-15).** A run is live if `stdout.jsonl` grew **or** the process group's summed CPU time increased (`agent-ctl stats <run_id>`, sampled by the coordinator). `stalled` requires both to be flat for the stall threshold, measured in credited awake time. While a `command_execution` item is open, the threshold is at least the repository's `repo.test_timeout`, so a long, silent test suite is never killed as stalled. Thresholds: keys `codex.plan.stall`, `codex.impl.stall` (values in the parameter table).
 
 ---
 
-## 9. How commits happen (coordinator-owned)
+## 9. How commits happen (coordinator-owned, RD-17)
 
-**Decision:** Codex never commits. In workspace-write, `.git` is protected, and in a linked worktree the commit writes into the main repository's `.git/worktrees/<name>`, which is outside the writable roots (RT §3.2; **ASM-B-19**: commit is denied). Even if commits worked, the coordinator keeps commit authority so that the gates below are mandatory.
+Codex never commits: in workspace-write the linked worktree's git admin data lives in the mirror, outside the writable roots (RT §3.2; **ASM-B-19**), and the agent uid has read-only access to the mirror. Even if commits worked, the coordinator keeps commit authority so that the gates are mandatory.
 
-Pipeline after a successful implementation run (each step is idempotent; dedup key `git:commit:<run_id>`):
+**Git hardening (applies to every coordinator git invocation, not only commits):**
 
-1. **Snapshot.** `git -C <wt> status --porcelain=v2 -z --untracked-files=all` and `git diff --binary HEAD`.
-2. **Diff guard.** Software-enforced; any hit leaves the run `rejected_by_gate`, and Claude `revision_request` or escalation follows. The guard rejects:
-   - writes to paths in `authorization.scope.denied_paths`, plus the global protected list: `.github/**`, `CODEOWNERS`, `.gitattributes`, `.gitmodules`, `**/.git*`, `AGENTS.md`, `AGENTS.override.md`, `CLAUDE.md`, `.claude/**`, `.mcp.json`, `.codex/**`, `.agents/**`, `.husky/**`, `.npmrc`, `.yarnrc*`;
-   - lockfile changes unless the approved plan lists dependency changes;
-   - symlinks (new or modified) whose target is absolute or escapes the repo;
-   - new executable bits outside `scripts/**` allowed by the plan;
-   - files larger than 1 MiB, or binaries, unless the plan lists them;
-   - total diff over the configured limit (default 3,000 changed lines);
-   - submodule changes.
-3. **Secret scan.** Run a pinned `gitleaks` (or equivalent) on the diff, together with MERCURY's own patterns for known credential formats (GitHub tokens, `sk-ant-`, `sk-`, `lin_api_`, PEM headers). A hit blocks the run and raises a **security escalation**. The content is never logged; only the rule ID and path are recorded.
-4. **Scope report.** Paths outside the plan's `files_to_change` but inside the authorization scope are allowed and listed in the PR body for Claude review.
-5. **Commit.** Run `git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c commit.gpgsign=false -c user.name="mercury-bot[bot]" -c user.email="<APP_ID>+mercury-bot[bot]@users.noreply.github.com" commit --no-verify -F <msg>` with environment `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_CONFIG_NOSYSTEM=1` and `GIT_TERMINAL_PROMPT=0`. The message format is in github.md §4.
-6. **Push.** github.md §4.3. It uses an App token with `contents:write` only, which is never exposed to Codex or to the worktree's git config.
+- Never run git with configuration discovered from an agent-writable directory. Every invocation sets `GIT_DIR` explicitly to the mirror or to the worktree's admin directory inside the mirror (`<mirror>/worktrees/<name>/`, coordinator-writable, agent read-only), and `GIT_WORK_TREE` to the worktree, which is read as data only.
+- Before every invocation, verify that the worktree's `.git` entry is a regular file (not a symlink) whose content is exactly `gitdir: <mirror>/worktrees/<name>`, and that the admin directory's `commondir` and `gitdir` files point back as expected. A mismatch is `policy_violation` (worktree quarantined).
+- Fixed options: `-c core.hooksPath=/dev/null -c core.fsmonitor= -c core.untrackedCache=false -c protocol.allow=never -c core.sshCommand=/usr/bin/false -c core.attributesFile=/dev/null -c diff.external= -c core.pager=cat -c commit.gpgsign=false`; environment `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_CONFIG_NOSYSTEM=1`, `GIT_TERMINAL_PROMPT=0`, `GIT_OPTIONAL_LOCKS=0`, `GIT_NO_REPLACE_OBJECTS=1`, `GIT_ATTR_NOSYSTEM=1`; diffs with `--no-textconv --no-ext-diff`.
+- The mirror's own config is coordinator-written, includes `core.fsync=committed,reference`, and its hash is verified at startup.
+
+**Pipeline after a successful implementation run** (one `git_step` run; idempotent with key `git:commit:<run_id>`; if the branch tip already carries `Mercury-Run: <run_id>`, the step is skipped):
+
+1. **Snapshot of changes.** Using a coordinator-owned temporary index (`GIT_INDEX_FILE=<run_dir>/commit.index`) seeded with `read-tree tasks.last_commit_sha` (or `base_sha`), stage the worktree with `add -A` and compute `diff --cached --binary --no-renames`. Files are read with `O_NOFOLLOW`-equivalent checks; a path whose components resolve outside the worktree is rejected (SEC-404).
+2. **Diff gate** (deterministic; any hit leaves the run `rejected_by_gate`). Classes and lists come from SEC-310 and the repo policy:
+   - **Forbidden for Codex** (agent configuration, governance, editor auto-run): e.g. `.github/**`, `CODEOWNERS`, `.gitattributes`, `.gitmodules`, `AGENTS*.md`, `CLAUDE.md`, `.claude/**`, `.mcp.json`, `.codex/**`, `.agents/**`, `.husky/**`, `.vscode/**`, `.idea/**`, `.devcontainer/**`, `.envrc`, `.tool-versions`, `.npmrc`, `.yarnrc*` (RE-13). A hit is a security policy violation (SM T19).
+   - **Policy-escalated** (allowed only if the authorization and approved plan list them; then `MERCURY / policy` requires operator acknowledgement, `github.md` §6.2): dependency manifests and lockfiles, build scripts, other SEC-310 classes.
+   - Also rejected: paths in `authorization.scope.denied_paths`; symlinks whose target is absolute or escapes the repository; new executable bits not allowed by the plan; files over `gate.max_file_bytes` or binaries not listed in the plan; total diff over `gate.max_changed_lines`; submodule changes; `..` path components and APFS case-insensitive collisions (SEC-403); Unicode bidi controls, zero-width characters in identifiers and mixed-script identifiers (SEC-312).
+3. **Secret scan.** Pinned `gitleaks` (or equivalent) on the staged diff, plus MERCURY's own patterns (GitHub tokens, `sk-ant-`, `sk-`, `lin_api_`, PEM headers) and exact-match of every secret value the coordinator holds (SEC-501). A hit blocks the run and raises a security escalation; only the rule id and path are recorded.
+4. **Scope report.** Paths outside the plan's file list but inside the authorization scope are allowed and listed for Claude review and the PR body.
+5. **Commit via plumbing.** `write-tree` → `commit-tree <tree> -p <parent> -F <msg>` with author and committer `mercury-bot[bot] <APP_ID+mercury-bot[bot]@users.noreply.github.com>` (message format and trailers: `github.md` §4.2) → `update-ref refs/heads/<branch> <new> <old>` (compare-and-set) in the mirror → update the worktree's index in the admin directory to the new commit (`read-tree` with the explicit `GIT_DIR`).
+6. **Durability (RD-11).** Order: git commit (objects and ref fsynced by `core.fsync`) → DB transaction recording `tasks.last_commit_sha`. Recovery verifies `git cat-file -e` and the ref before trusting a recorded SHA.
+7. **Push.** From the mirror, never from the worktree (`github.md` §4.3).
+
+Checkpoint commits do not exist; the only commits are the ones created by this pipeline (RD-11).
 
 ---
 
-## 10. Where tests run (decision)
+## 10. Where tests run (decision, RD-17)
 
-**Decision: two layers. Codex runs tests inside its sandbox while iterating (advisory). The coordinator re-runs the authoritative test suite after Codex exits (gating). GitHub CI is the third, independent gate.**
+**Two local layers plus CI.** Codex runs tests inside its sandbox while iterating (advisory). The coordinator then runs the authoritative `verify` run as the agent uid. GitHub CI is the third, independent gate.
 
-| Layer | Who | Environment | Purpose | Gate? |
-|---|---|---|---|---|
-| L1 | Codex | Codex Seatbelt workspace-write, no network | Fast feedback loop for the implementer | No; recorded as `codex_test_observations` |
-| L2 | Coordinator `test-runner` | Seatbelt profile with no network, write only to the worktree and run tmp, env allowlist as §6 but **without** `CODEX_API_KEY`; wall limit `repo.test_timeout` (default 20 min); process group killed after | Authoritative local result; produces the `mercury.test_results.v1` artifact (`run_id`, commands, exit codes, duration, junit/TAP if available, sha of logs) | **Yes.** No push unless all required commands pass, or the plan explicitly declared known failures, which Claude PR review must then accept |
-| L3 | GitHub Actions (repo CI) | GitHub-hosted runners | Independent verification on the pushed SHA; required checks | **Yes.** Branch protection |
+| Layer | Who and how | Environment | Gate? |
+|---|---|---|---|
+| L1 | Codex, inside its run | Codex Seatbelt workspace-write, no network, agent uid | No; recorded as `codex_test_observations` |
+| L2 `verify` | `agent-exec --kind verify`, as `_mercuryagent` | MERCURY's fail-closed L2 Seatbelt profile (owned by E/D): **no network**, writes only to the worktree and run scratch, denies Keychain/`securityd` lookups (RE-29); environment as §6 **without** any model key; awake deadline `repo.test_timeout` | **Yes.** Produces `mercury.test.results.v1` (`source = local_verify`). No push unless every required command passes, or the plan declared the exact known failures, which Claude's PR review must accept |
+| L3 | GitHub Actions | GitHub-hosted runners, on the pushed head SHA; must run on draft PRs (`github.md` §9.4) | **Yes**, through required checks |
 
 Rules:
 
-- **Test commands come from MERCURY's per-repo config** (`repos.<owner/name>.test_commands`, `setup_commands`), which is coordinator-owned. They are never parsed from repo files that Codex could edit.
-- **L2 sandbox.** Reuse Codex's own Seatbelt wrapper if the pinned version exposes it as a subcommand (`codex sandbox macos -- <cmd>`, **ASM-B-20**). Otherwise use a MERCURY-shipped `sandbox-exec` profile (owned by Agent E/D).
-- **Dependency installation** (needs network) is a separate coordinator step, `deps_install`, run **before** the implementation run. It installs only what the lockfile or the approved plan specifies (`npm ci --ignore-scripts`; per-ecosystem table in repo config). It runs with network on, no credentials in env, and writes only to the worktree. Codex never gets network (`authorization.limits.network` is `none` or `deps_only`; the latter enables only this coordinator step). Lifecycle scripts stay disabled unless the operator allowlists the repo (OQ-B-04).
+- **Commands come from MERCURY's per-repo config** (`repos.<owner/name>.test_commands`, `setup_commands`, toolchain manifest), never from repository files Codex can edit.
+- **`deps_install`** (`agent-exec --kind deps_install`, agent uid) runs before implementation when the repo config requires it: lockfile-only installs with lifecycle scripts disabled (`npm ci --ignore-scripts` and per-ecosystem equivalents), egress limited to the registry allowlist, no credentials. A lockfile **changed by this task** is installed only after its change has been acknowledged through `MERCURY / policy` (`github.md` §6.2); until then `verify` runs against the base lockfile's dependencies and any resulting failure is reported as such. Codex never has network (OD-09).
+- Both `verify` and `deps_install` are detached and adoptable like Codex runs (RD-11).
 
 ---
 
 ## 11. Exit-code and failure mapping
 
-Codex `exec` exits 0 or 1 (RT §3.1). Classification uses exit status plus JSONL plus stderr patterns. The patterns are versioned per pinned Codex version and covered by contract tests.
+Codex `exec` exits 0 or 1 (RT §3.1). Classification uses the exit status, JSONL and stderr patterns (versioned per pinned Codex version, covered by contract tests). Accounting follows `github.md` §15.1; attempt caps per run kind are in SM §7.1.
 
-| Observation | Class | Retry | Revision budget |
-|---|---|---|---|
-| exit 0, `final.json` present and Ajv-valid against the schema, plan/impl semantic checks pass | `success` | — | — |
-| exit 0, `final.json` missing or invalid (**ASM-B-21**: Codex's own behaviour on schema mismatch) | `output_invalid` | 1 resume with "Return only the JSON object for the schema" | No |
-| exit 1, `turn.failed` or `error` mentioning 429, rate limit, overloaded, 5xx, or stream disconnect | `transient_api` | Backoff 2 m, 10 m, 30 m; max 3; resume if a thread exists | No |
-| exit 1, connection or DNS errors **and** global connectivity probe down | `network_down` | Not an attempt; wait for connectivity, then resume | No |
-| exit 1, 401/403 or "invalid api key" / auth | `auth_failed` | No retry; global Codex circuit breaker; notify operator | No |
-| exit 1 before `thread.started`, stderr matches config, `strict-config` or "Not inside a trusted directory" | `config_fatal` | No retry; disable Codex dispatch; notify | No |
-| killed by coordinator: deadline | `timeout` | 1 retry (resume), then escalate | **Yes** (counts 1) |
-| killed by coordinator: stall | `stalled` | 1 retry (resume), then escalate | No |
-| killed by signal not from coordinator, or exit >1 | `crash` | 2 retries (resume if a thread exists) | No |
-| exit 0 with `final.status = "blocked"` (Codex reports it cannot proceed within scope) | `blocked_by_agent` | No retry; Claude `revision_request` decides between re-plan and escalation | Yes |
-| Diff guard or secret scan rejects | `rejected_by_gate` | Claude `revision_request` (secret hit means escalation, not revision) | Yes |
-| L2 tests fail | `tests_failed` | Claude `revision_request` with the test report | Yes |
-| `mcp_tool_call` / `web_search` item seen | `policy_violation` | No retry; security escalation; task `BLOCKED` | — |
+| Observation | Class | Next step |
+|---|---|---|
+| exit 0, `final.json` present and Ajv-valid against the canonical schema, semantic checks pass | `success` | — |
+| exit 0, `final.json` missing or invalid (**ASM-B-21**) | `output_invalid` | One resume with "Return only the JSON object for the schema" |
+| exit 0, `status = "partial"` | `incomplete` | One resume; then the same path as `blocked` (RC-13) |
+| exit 0, `status = "blocked"` | `blocked_by_agent` | `CHANGES_REQUESTED` with source `codex_deviation` → Claude `revision_request` decides `revise`, `replan` or `escalate` (RC-13) |
+| exit 0, `status = "needs_plan_change"` | — (result) | SM T17 |
+| exit 1, `turn.failed`/`error` with 429, rate limit, overloaded, 5xx or stream disconnect | `transient_api` | Backoff `backoff.model_api`; resume if a thread exists |
+| exit 1, connection or DNS errors while the connectivity probe fails within the probe window | `network_down` | Not an attempt; wait for the probe |
+| exit 1, 401/403 or invalid key | `agent_auth_failed` | `agent_auth_failed{codex}` hold; notify |
+| exit 1 before `thread.started` with config, `strict-config` or trust errors; or a provider schema rejection (`invalid_json_schema`, RB-01) | `config_fatal` | `config_fatal` hold for Codex dispatch; notify |
+| killed by coordinator at the awake deadline | `timeout` | Consumes a **run attempt** only, never a revision budget (RC-08) |
+| killed by coordinator for stall (§8) | `stalled` | Consumes a run attempt; resume (no reset happened) |
+| exit > 1 or a signal not from MERCURY | `crash` | Consumes a run attempt; reset per §12.3, then a fresh thread |
+| boot session changed or supervisor lease lost | `lost_by_host` | No attempt; separate cap per step; ops alert |
+| diff gate (non-security rule) | `rejected_by_gate` | SM T18 → Claude `revision_request` (source `diff_gate`) |
+| diff gate security class, secret-scan hit, `mcp_tool_call`/`web_search`, `.git` pointer mismatch | `policy_violation` | SM T19 `BLOCKED(security_policy_violation)`; worktree quarantined |
+| L2 `verify` fails | result, not a failure class | SM T21 → Claude `revision_request` (source `local_tests`) |
 
 ---
 
-## 12. Timeouts and kill procedure
+## 12. Deadlines, kill procedure, adoption and reset
 
-| Run type | Wall deadline (sleep-aware) | Stall timeout |
+### 12.1 Deadlines (parameter keys)
+
+| Run kind | Awake deadline key | Stall key |
 |---|---|---|
-| Planning / plan revision | 25 min | 10 min |
-| Implementation / revision | 120 min (`authorization.limits.max_wall_minutes` may lower it) | 15 min |
-| L2 test run | `repo.test_timeout` (20 min) | n/a |
+| `codex_plan` (initial and revision) | `codex.plan.awake_deadline` | `codex.plan.stall` |
+| `codex_implement` / `codex_revise` | `codex.impl.awake_deadline` (an authorization's limit may lower it) | `codex.impl.stall` |
+| `verify` | `repo.test_timeout` | `verify.stall` |
+| `deps_install` | `deps_install.awake_deadline` | `deps_install.stall` |
 
-Kill sequence:
+### 12.2 Kill and adoption
 
-1. SIGINT to the process group (Codex ends the turn as `Interrupted` and exits 1).
-2. After 20 s, SIGTERM the group.
-3. After 10 s, SIGKILL the group.
-4. Verify no process with the recorded `pgid` and start time remains.
+- Kill sequence through `agent-ctl signal`: SIGINT to the group (Codex ends the turn and exits 1); after `codex.kill.grace_int` SIGTERM; after `codex.kill.grace_term` SIGKILL; then verify through `agent-ctl ps` that no process with the run's pgid, start time and marker remains.
+- `agent-exec` independently enforces the hard awake deadline and the supervisor lease (`run/coordinator.alive` stale → SIGINT→SIGTERM→SIGKILL, `exit.json{reason: supervisor_lost}`).
+- **Adoption after a coordinator restart (RD-11, ADR-020).** Codex, `verify` and `deps_install` runs are detached with file stdio and are adopted when the identity triple matches (`run_id` marker, start time, boot session). The coordinator re-reads `stdout.jsonl` from the start (recovering the thread id), resumes tailing, and **re-evaluates the authorization guard before acting on an adopted run's output**. Adopted runs are never kept through safe mode or a `security_halt`.
+- On SIGTERM of `mercuryd`: stop dispatch, keep adoptable runs, interrupt non-adoptable (Claude) runs, checkpoint, exit within `ExitTimeOut`.
 
-Children are spawned `detached` (new session), so launchd will not reap them. The coordinator's orphan sweep at startup kills recorded process groups whose run is not `RUNNING` (Agent D owns the sweep).
+### 12.3 Worktree reset
 
-After a kill, the worktree may hold partial edits. The next attempt either resumes the thread on top of them, or the coordinator runs `git reset --hard <last_pushed_sha> && git clean -ffdx` (excluding `node_modules` when a deps snapshot exists) before a fresh run. Resume is the default after `stalled`; clean is the default after `crash`.
+The single reset policy is defined by Agent C (`components.md` §9): archive uncommitted changes as a patch artifact, `reset --hard tasks.last_commit_sha` (or `base_sha`), `clean -ffd`, adding `-x` only when `deps_install` is re-queued in the same step. It runs as a coordinator `git_step` with the hardening of §9, and file removal goes through `agent-ctl purge` where the agent owns the files. After any reset the next Codex run starts a fresh thread (§3.4).
 
 ---
 
 ## 13. Version pinning and self-test
 
-- Pin `@openai/codex` to an exact version installed in MERCURY's own prefix (`~/Library/Application Support/Mercury/toolchain/codex/<ver>/`). Never use the operator's global `codex`. `check_for_update_on_startup=false`.
-- **Startup self-test** (blocks Codex dispatch on failure), run against a bundled fixture repo:
-  1. `codex --version` matches the pin.
-  2. `codex exec --help` lists `--json`, `--output-schema`, `-o`, `--sandbox`, `--strict-config`, `--ignore-rules`, `--cd`.
-  3. A read-only planning run on the fixture produces schema-valid output and creates no file (checked with `git status`).
-  4. A workspace-write run asked to `curl https://example.com` and `git commit` reports both as failed. This confirms network off and `.git` protected (ASM-B-19).
-  5. A run asked to `cat ~/.config/gh/hosts.yml > leak.txt` is either denied (ASM-B-14 holds) or caught by the §9 secret scan on the fixture. The test passes only if no secret could reach a commit.
-- **Contract tests:** for each pinned version, assert that the JSONL event types match the `index.d.ts` captured at that version (RT §6 V6).
+- `@openai/codex` is pinned to an exact version, installed by `mercury toolchain sync` into `WORK_ROOT/toolchains/codex/<version>/` (coordinator-owned, agent read/execute), and its binary SHA-256 is recorded in `pins.json` and verified at start and before every spawn (SEC-210). The operator's global `codex` is never used.
+- If the pinned version supports a managed `requirements.toml` that pins sandbox and approval settings (ASM-E-10), the coordinator generates one into each task home; otherwise the generated `config.toml` plus `--strict-config` is the control.
+- **Startup self-test** (hard gate for Codex dispatch), run through the production path (`agent-exec`, agent uid) against a bundled fixture repository:
+  1. `codex --version` matches the pin; `codex exec --help` lists `--json`, `--output-schema`, `-o`, `--sandbox`, `--strict-config`, `--ignore-rules`, `--cd`.
+  2. Each `codex-strict` wire schema is accepted (ASM-B-61).
+  3. A read-only planning run produces schema-valid output and leaves the worktree unchanged.
+  4. A workspace-write run asked to `curl https://example.com` and to `git commit` reports both as failed (network off, `.git` admin data not writable; ASM-B-19).
+  5. The fixture contains `.codex/config.toml` with a hook that would touch a canary; the canary is not touched (RE-19).
+  6. A run asked to `cat` canary files in the operator's home and `MERCURY_HOME` into the worktree fails with a permission error (SEC-T-20 subset); the secret scan would also catch the content.
+- **Contract tests** per pinned version: JSONL event types match the captured `index.d.ts` (RT §6 V6); the argv the coordinator generates is accepted by the `agent-exec` grammar.

@@ -1,14 +1,30 @@
 # MERCURY — macOS Runtime and Service Management
 
-Owner: Agent D (DevOps / Platform Architect). Phase 2 design. Status: **proposal for reconciliation**. Feeds TDD §18 (macOS Runtime), §20 (Reliability, with `recovery.md`), §21 (Logging and Monitoring), §23 (Performance and Resources) and §24 (Deployment and Upgrade).
+Owner: Agent D (DevOps / Platform Architect). Phase 4 revision. Status: **revised to the binding reconciliation decisions** in `reviews/30-reconciliation.md` (RD-1…RD-20). Feeds TDD §18 (macOS Runtime), §20 (Reliability, with `recovery.md`), §21 (Logging and Monitoring), §23 (Performance and Resources) and §24 (Deployment and Upgrade).
 
-Companion document: [`recovery.md`](recovery.md), which holds the failure catalogue, startup recovery and the operations runbook.
+Companion document: [`recovery.md`](recovery.md) holds the failure catalogue, the startup recovery order and the operations runbooks.
+
+**What this document is the single source of truth for:**
+
+| Topic | Section | Referenced by |
+|---|---|---|
+| Operational parameter values (timings, thresholds, caps) | §2 | TDD §18/§20, every other document. Requirement IDs for these targets are registered by Agent F in `planning/traceability.md` |
+| Agent-uid isolation: `_mercuryagent`, group, sudoers drop-in, `agent-exec` / `agent-ctl` grammar, secret hand-off on fd 3, ACLs, toolchains | §3.3–§3.9 | ADR-013 (A), components §4.7/§8 (C), SEC-201 (E), claude.md / codex.md (B) |
+| Filesystem layout, ownership and modes | §7.1 | ADR-016 (A) and all documents |
+| Process exit-code and startup contract | §5.2 | components §10.6 (C), `recovery.md` §4 |
+| Credential inventory (Keychain prefix, read-once semantics) | §9.1 | github.md §3/§16, linear.md §2, claude.md §7, codex.md §7 |
+| Sleep helper, dark-wake rule, watchdog | §8, §11.6 | state-machine §5, components §10.10 |
+| Durability of git objects, refs and run control files | §14.2 | components §9/§10, `recovery.md` |
+| Phase 0 Mac verification register (`P0-nnn`, Mac items) | §16 | traceability.md (closure tracking, F) |
+
+**What this document does not restate** (single source elsewhere): SQL DDL (components §6.3), task states, holds and block reasons (state-machine §5, §6.1), run failure classes and per-kind attempts (state-machine §7.1), the credited-time algorithm (components §10.10), the integration retry matrix (github.md §15), dedup keys (github.md §14), CLI verbs (components §5.5), notification channel matrix (components §4.15), SEC statements (threat-model §5), requirement IDs (traceability.md).
 
 Conventions:
-- **ASM-D-nn** marks an assumption about Mac or tool behaviour that has not been verified. Each one maps to a Phase 0 check in §16.
-- **REL-nn** marks a measurable reliability requirement (§2). Agent F owns the final requirement IDs and may renumber them.
-- Evidence tags reuse `02-discovery-platform.md`: `[S16]`, `[S18m]` and so on. New sources are listed in §18.
-- Paths are written with `~`, but the installer expands them to absolute paths, because launchd does not expand `~` or `$HOME` in plists (ASM-D-01).
+- **ASM-D-nn** is an unverified assumption about Mac or tool behaviour. Each one links to a Phase 0 check `P0-nnn` (§16, §17).
+- The Phase 2 `REL-nn` IDs are retired. Their targets are now parameters in §2 and requirement IDs in traceability.md (alias table there).
+- Evidence tags reuse `02-discovery-platform.md` (`[S16]`, `[S18m]`, …). New sources are in §18.
+- Paths written with `~` are expanded by the installer to absolute paths, because launchd does not expand `~` or `$HOME` in plists (ASM-D-01). All paths come from one constant module (`core/paths.ts`) generated from §7.1.
+- **Root-level steps.** Every step marked **[ROOT — operator consent]** modifies the host as root. It is performed only by the operator, explicitly, with the command shown to them first. The design phase and MERCURY itself never perform it. `mercury-install --system` prints the full plan and asks for confirmation before calling `sudo`.
 
 ---
 
@@ -16,130 +32,362 @@ Conventions:
 
 | Decision | Choice | Why (short) |
 |---|---|---|
-| Supervisor | Per-user **LaunchAgent** `com.usjbro.mercury` in `gui/<uid>` | Gets the login Keychain and the user's git, Claude and Codex configuration. A LaunchDaemon cannot read the login Keychain [S22]. |
-| Process model | `launchd → mercuryd (Node, pinned) → agent runs in their own process groups` | Each agent tree can be killed as a group (`kill(-pgid)`), and runs survive a daemon crash so they can be re-attached (§3.3). |
-| Restart policy | `KeepAlive = {SuccessfulExit = false}`, `ThrottleInterval = 30` | Restart after a crash. A clean stop (logout, `bootout`, fatal-config halt) stays stopped. |
-| Shutdown budget | Internal budget **20 s**; `ExitTimeOut = 45` | Leaves headroom for logout/shutdown paths that may cut time short (ASM-D-04). |
-| Sleep | Hold `caffeinate -i -w <mercuryd pid>` **only while ≥ 1 agent run is active**. Never fight lid close or user sleep. | Power assertions stop idle sleep only [S20a]. Correctness never depends on them. |
-| Sleep detection | **Timer-gap detection**: the event-loop tick stops while suspended, but Node's monotonic clock keeps counting through sleep. Confirm with `sysctl kern.waketime`. | Node/libuv uses `mach_continuous_time()` on macOS, which **counts during sleep** [N1]. **This corrects discovery §4.4** (see §8.2). |
-| State | `~/Library/Application Support/Mercury/` (DB, artifacts, runs, backups) | Outside the TCC-protected folders [S23]. |
-| Work trees | `~/Library/Mercury/{mirrors,worktrees}` (space-free path) | Many build and test scripts break on paths with spaces (ASM-D-12). Excluded from Time Machine. |
-| Secrets | Login Keychain generic-password items, read once at start via `/usr/bin/security` on a pipe. Never in plist, env files, argv or logs. | [S22], discovery M5. |
-| Durability | SQLite WAL, `synchronous=FULL`, `fullfsync=ON`, single writer | Discovery P1. A lost commit could cause a duplicate side effect. |
-| Upgrades | Versioned release dirs + `current` symlink, drain, pre-migration backup, expand/contract migrations | Allows rollback without a restore (§13). |
-| Liveness alerting | **GitHub Actions scheduled watchdog** in the MERCURY repo reads a heartbeat issue that mercuryd updates; optional Healthchecks-style external ping | Needs no inbound access. Alerts arrive through GitHub Mobile, which the operator already uses (§11.6). |
-| CI | GitHub-hosted runners only, including one `macos` job. **No self-hosted runner.** | Discovery E2 [S21]. |
+| Supervisor | Per-user **LaunchAgent** `com.usjbro.mercury` in `gui/<uid>` (ADR-010) | Gets the login Keychain. A LaunchDaemon cannot read it [S22]. |
+| Trust zones | Three: operator uid (coordinator `mercuryd`, Keychain, `MERCURY_HOME`), agent uid `_mercuryagent` (every process that executes model-directed or repository-derived code), root (two fixed-grammar wrappers and the sudoers drop-in) | RD-1 / ADR-013. Protects both the human's and MERCURY's own credentials from agents (§3.3). |
+| Agent launch | `mercuryd` → `sudo -n -C 4 -u _mercuryagent -g mercury agent-exec --run-dir …` (detached). Control through `agent-ctl` (signal, probe, list, stats, reap, purge, fix-acl) | Cross-uid `kill`, identity and file ownership all work, and there is no long-lived agent-uid daemon (§3.3–§3.6). |
+| Secrets to agents | One model key per run, on **fd 3**, length-prefixed, read once by `agent-exec` and closed. Never in env passed by sudo, argv or files | `sudo`'s `env_reset` and `closefrom` are configured so only fd 3 passes (§3.6). |
+| Restart policy | `KeepAlive = {SuccessfulExit = false}`; exit-code contract in §5.2 | Crash → restart; deliberate halt, lock held, corruption → never a crash loop. |
+| Single instance | `flock` on `run/mercuryd.lock` (components §11 L1). No `instance_lease` row. | The kernel releases the lock on crash. |
+| Run survival | Codex, `verify`, `deps_install` are **adopted** after a coordinator restart (identity triple: run marker, start time, boot session). Claude runs are killed and re-run without consuming an attempt (ADR-020). | Coordinator restarts lose no Codex work. |
+| Unsupervised runs | `agent-exec` enforces the hard awake-time deadline and the **supervisor lease** (`supervisor.lease_stale_min`, §2) | A run never outlives its coordinator by more than the lease. |
+| Sleep | `caffeinate -i -w <mercuryd pid>` only while runs are active. Sleep gaps are never credited to run budgets (components §10.10). A signed **power helper** reports will-sleep, wake and full-wake. No dispatch during dark wake. | §8. |
+| State | `MERCURY_HOME` = `~/Library/Application Support/Mercury` (operator, 0700) | §7.1, RD-2 |
+| Work | `WORK_ROOT` = `/Users/Shared/MercuryWork` (operator:`mercury`, 0750 + inherited group ACLs where agents write) | Space-free, outside the operator's 0700 home, traversable by the agent uid. §7.1 |
+| Secrets | Login Keychain items with prefix `com.usjbro.mercury.*`, read **once** at start and on `mercury reload-credentials` by a signed `mercury-keychain` helper; held in memory | §9, RD-18 |
+| Durability | SQLite WAL `synchronous=FULL`, `fullfsync=ON`; mirror `core.fsync=committed,reference`; git commit → fsync → DB transaction; `proc.json`/`exit.json` with fsync + rename + directory fsync | §14.2, RD-11 |
+| Liveness alerting | GitHub Actions watchdog in `project-mercury` reading a heartbeat issue written by **`mercury-ops`**; thresholds differ for awake and sleeping | §11.6, RD-6, RD-16 |
+| Human presence | Signed `mercury-presence` helper (LocalAuthentication: Touch ID or password) gates every `operator-presence` command | §9.5, RD-12 / ADR-019 |
+| CI | GitHub-hosted runners only. No self-hosted runner. Power-loss tests in a macOS guest VM on an Apple Silicon host, never on the operator's Mac | §15, RD-24 |
 
 ---
 
-## 2. Reliability requirements (measurable)
+## 2. Operational parameter table (normative)
 
-All targets apply **while the Mac is awake, the operator is logged in, and the network is up**, unless a row says otherwise. Time spent asleep, logged out or offline is excluded and reported separately.
+This is the **only** place parameter values are defined (RD-10). Other documents cite the parameter **name**. Agent F registers each name with an ID in traceability.md and links the requirement it measures. Configurable values have the same name as their `mercury.toml` key; the loader clamps them to the hard caps shown. "Awake" means credited awake time (components §10.10); "wall" means UTC wall clock.
 
-| ID | Requirement | Target | How it is measured / verified |
+Workflow policy is **out of scope** of this table and stays with its owner: per-kind attempt counts and backoff (state-machine §7.1), revision budgets and authorization expiry (OD-08), state-level reminder timers (state-machine §7.3), notification cadence (components §4.15), retry matrix (github.md §15).
+
+### 2.1 Service, restart and recovery
+
+| Parameter | Value | Clock | Rationale |
 |---|---|---|---|
-| REL-01 | Daemon restart after a crash (RTO, process) | ≤ 45 s from exit to `ready` (`ThrottleInterval` 30 s + start ≤ 15 s) | Fault test: `kill -SEGV`, then measure the gap between the `daemon.exit` and `daemon.ready` log lines |
-| REL-02 | Full reconciliation after start or wake (RTO, workflow) | Every non-terminal task reconciled against GitHub and Linear within **≤ 3 min** of `ready` (≤ 50 open tasks) | `recovery.completed` log event carries `duration_ms` |
-| REL-03 | Committed state lost on crash or power loss | **0** committed transitions (WAL + `synchronous=FULL` + `fullfsync`) | Power-cut simulation (kill -9 + VM hard reset in CI where possible) followed by `integrity_check` and a ledger comparison |
-| REL-04 | Agent work lost on daemon crash | ≤ **0** Codex runs (re-attach, §3.3); ≤ 1 Claude run per task (re-run) | Fault-injection test |
-| REL-05 | Agent work lost on reboot or power loss | ≤ **1 agent run per active task**. The worktree is rolled back to the last coordinator checkpoint commit. | Fault-injection test |
-| REL-06 | Duplicate external side effects (PRs, pushes, comments, reviews, Linear writes) | **0**, enforced through the side-effect journal plus reconcile-before-retry (`recovery.md` §3) | Chaos test: crash injected before and after every outbound call; count remote objects |
-| REL-07 | Time to detect a dead agent run (process gone) | ≤ **60 s** (supervisor liveness poll every 15 s) | Test: `kill -9` the agent pgid |
-| REL-08 | Time to detect a stalled agent run (alive, no output) | ≤ `stall_timeout` (default **15 min** of awake time) + 60 s | Test with a fake agent that hangs |
-| REL-09 | Time for the operator to learn MERCURY is down while work is pending | ≤ **75 min** (heartbeat every 5 min; watchdog every 30 min; threshold 45 min) | Stop the daemon with an active task; time until the GitHub notification arrives |
-| REL-10 | Orphan agent processes after startup recovery | **0** processes with cwd under the worktree root that lack a live `runs` row | `mercury doctor` orphan check |
-| REL-11 | Database backup RPO | ≤ 24 h of awake time, plus a backup before every upgrade or migration | `backups/` listing; `mercury doctor` warns if the newest backup is older than 26 h |
-| REL-12 | Restore time from backup | ≤ 15 min of operator time with the runbook | Game-day drill each quarter |
-| REL-13 | Re-poll after wake | First GitHub and Linear poll ≤ **60 s** after the network is reachable | `wake.detected` → `poll.completed` latency |
-| REL-14 | Shutdown on SIGTERM | Exits by **20 s**, with all runs marked `interrupted` and the WAL checkpointed | Test: `launchctl kill TERM` and measure |
-| REL-15 | Crash loop containment | > 5 starts in 10 min → **safe mode** (no dispatch, heartbeat says `degraded`) | Test with a forced crash on start |
+| `svc.throttle_interval_s` | 30 | wall | launchd minimum gap between respawns. Halves crash-loop churn vs the default 10. |
+| `svc.exit_timeout_s` | 45 | wall | launchd SIGTERM → SIGKILL gap. Headroom above the internal budget (ASM-D-04). |
+| `svc.shutdown_budget_s` | 20 | wall | Internal shutdown budget (§12). Never relies on the extra launchd time. |
+| `svc.start_to_ready_max_s` | 15 | wall | Process start → `daemon.ready` (local steps only). |
+| `svc.restart_to_ready_max_s` | 45 | wall | Crash → `ready` = throttle + start. A process that ran > 30 s restarts immediately. |
+| `svc.crash_loop_starts` / `svc.crash_loop_window_min` | 5 / 10 | wall | More starts than this in the window → safe mode (§5.2). |
+| `recovery.reconcile_max_s` | 120 (≤ 50 non-terminal tasks) | wall, from first awake-and-online instant | Full GitHub + Linear reconcile after `ready` or after wake + network. One number for start and wake. |
+| `recovery.first_poll_max_s` | 60 | wall, from network reachable | First GitHub and Linear poll after start or wake. |
+| `recovery.downtime_notice_min` | 60 | wall | Downtime with non-terminal tasks above this → one "resumed after N h" ops notice. |
+| `db.lease_persist_s` | 60 (minimum) | wall | Lease rows are persisted no more often than this; `flock` is the real guard (RD-17). |
+| `db.progress_flush_s` | 60 | wall | In-memory run progress (`awake_ms`, `idle_awake_ms`, byte offsets) flushed at this interval, on phase change and at exit. |
+| `run.liveness_poll_s` | 15 | wall | `agent-ctl probe` / `stats` sampling of active runs. |
+| `run.lost_by_host_cap` | 5 per run step | — | `lost_by_host` outcomes never consume attempts; above the cap → ops alert (not BLOCKED). |
+
+### 2.2 Supervisor lease and wrapper deadlines
+
+| Parameter | Value | Clock | Rationale |
+|---|---|---|---|
+| `supervisor.alive_touch_s` | 10 | wall | `mercuryd` touches `WORK_ROOT/ctl/coordinator.alive`. |
+| `supervisor.lease_stale_min` | 10 | awake (computed by `agent-exec`) | Stale alive file → `agent-exec` ends the run (`exit.json{reason: supervisor_lost}`). Default of OD-D-08. |
+| `supervisor.kill_ladder_s` | SIGINT → 15 → SIGTERM → 10 → SIGKILL | wall | Same ladder for lease expiry, deadline and `agent-ctl signal` sequences driven by the coordinator. |
+| `run.hard_deadline_margin_pct` | 10 | awake | `agent-exec` enforces `deadline_awake_ms × 1.10`; the coordinator normally cancels at 100 %. |
+| `wrapper.tick_s` | 5 | — | `agent-exec` internal tick for credited time, deadline and lease. |
+
+### 2.3 Run deadlines and stall detection
+
+Deadlines are awake time. Liveness = stdout growth **or** process-group CPU-time progress (`agent-ctl stats`, RD-15). `stalled` requires both to be flat for the stall value. While a command is running inside a Codex turn, the effective stall value is `max(stall, repo.test_timeout_min)`.
+
+| Parameter | Deadline (awake) | Stall (awake) |
+|---|---|---|
+| `run.claude_triage.*` | 5 min | 2 min |
+| `run.claude_authorize.*` | 15 min | 5 min |
+| `run.claude_plan_review.*` | 20 min | 5 min |
+| `run.claude_revision_request.*` | 10 min | 5 min |
+| `run.claude_code_review.*` / `run.claude_security_review.*` | 30 min | 5 min |
+| `run.codex_plan.*` | 45 min | 10 min |
+| `run.codex_implement.*` / `run.codex_revise.*` | 120 min (cap 240; authorization may lower) | 15 min |
+| `run.verify.*` | `repo.test_timeout_min` (default 20 min) | 10 min |
+| `run.deps_install.*` | 20 min | 10 min |
+| `run.git_step.*` | 5 min | — |
+
+### 2.4 Clocks, sleep and connectivity
+
+| Parameter | Value | Rationale |
+|---|---|---|
+| `clock.tick_active_ms` / `clock.tick_idle_ms` | 2000 / 5000 | HealthMonitor tick (components §10.10). Credit cap per tick = 3 × tick. |
+| `clock.sleep_gap_s` | 30 | A gap above this not explained by a measured blocking operation is a sleep gap, confirmed by `kern.waketime` (RD-16). |
+| `clock.wall_jump_s` | 2 | `|Δwall − Δmono|` above this is a wall-clock step, not sleep. |
+| `wake.grace_s` | 120 | `host_sleep_grace` hold duration; stall clocks frozen. |
+| `wake.dark_wake_min_awake_s` | 300 | Without a full-wake signal from the power helper, dispatch only after this much continuous credited awake time. |
+| `power.will_sleep_budget_s` | 20 | Time the power helper holds the sleep transition for the final `sleeping` heartbeat and checkpoint. |
+| `net.stability_s` | 30 | Probe must succeed continuously this long before `network_down` clears. |
+| `net.probe_interval_offline_s` | 30 | Authenticated, ETag-conditional probe (never unauthenticated GitHub requests, RB-10). |
+| `net.error_probe_window_s` | 60 | A network-class error is not counted toward any run or outbox attempt if the probe fails within this window of it (RD-18). |
+| `power.prevent_system_sleep_on_ac` | false (laptop) / true (desktop) | Default of OD-D-05. |
+
+### 2.5 Integration cadence (values proposed by B; changed only here)
+
+| Parameter | Value |
+|---|---|
+| `github.poll_pr_s` | 60 while checks run; 120 awaiting human; 300 after 24 h waiting |
+| `github.poll_checks_s` | 30 for the first 10 min after push, then 60 |
+| `github.poll_base_branch_s` | 300 |
+| `github.reconcile_open_prs_min` | 30 (plus at start and wake) |
+| `github.token_refresh_before_expiry_min` | 10 |
+| `github.mutation_spacing_s` | 1 |
+| `linear.poll_s` / `linear.poll_idle_s` | 60 / 300 (no active tasks) |
+| `linear.poll_overlap_s` | 300 steady state; 600 after restart or wake |
+| `linear.relation_refresh_min` | 15 |
+| `circuit.open_after_failures` / `circuit.window_min` / `circuit.half_open_probe_min` | 5 / 10 / 5 |
+| `gov.drift_check_interval_min` | 60 (plus at every wake) |
+| `audit.anchor_overdue_h` | 24 (awake) → ops alert, never a halt |
+
+### 2.6 Concurrency, resources and disk (defaults of OD-07)
+
+| Parameter | Value | Rationale |
+|---|---|---|
+| `limits.max_codex_runs` | 1 | Raise to 2 only after P0-038 (parallel per-task `CODEX_HOME`) and spend review. |
+| `limits.max_claude_runs` | 2 | Read-only, light. |
+| `limits.max_runs` | 3 | Total agent runs. |
+| `limits.max_runs_per_repo` | 1 mutating | Shared mirror, test ports. |
+| `limits.max_active_tasks` | 4 | Tasks in non-terminal, non-waiting states. |
+| `resources.max_loadavg_per_cpu` | 1.5 | Defer new runs (never kill). |
+| `resources.defer_on_memory_pressure` | `warn` | `kern.memorystatus_vm_pressure_level` ≥ 2 → defer. |
+| `resources.max_run_rss_gib` | 8 | Group RSS ceiling, sampled → kill ladder, class `crash` (detail `rss_cap`). |
+| `resources.worktree_notify_gib` / `resources.worktree_max_gib` | 5 / 10 | Notify / fail the run. |
+| `resources.worktrees_total_max_gib` | 40 | Accelerate terminal-task cleanup. |
+| `resources.artifacts_notify_gib` / `resources.runs_dir_max_gib` | 20 / 20 | Notify / prune oldest terminal run dirs. |
+| `disk.dispatch_hold_gib` / `disk.dispatch_hold_pct` | 15 / 10 % | `low_disk` hold: no new runs. |
+| `disk.interrupt_local_gib` | 5 | Interrupt `verify` and `deps_install`. |
+| `disk.interrupt_codex_gib` | 2 | Interrupt Codex runs. |
+| `disk.ballast_mib` | 64 | Released on `ENOSPC`/`SQLITE_FULL`. |
+| `run.stdout_cap_mib` | Codex 256, Claude 64, verify 128; stderr 32 | Above → cancel, class `crash` (`output_cap_exceeded`). |
+| `deferral.notify_after_h` | 2 | Disk or memory deferral longer than this → one notification. |
+
+### 2.7 Observability, backups and holds
+
+| Parameter | Value | Rationale |
+|---|---|---|
+| `heartbeat.local_s` | 30 | `run/heartbeat.json`. |
+| `heartbeat.remote_min` | 5 | Heartbeat issue body via `mercury-ops`. |
+| `watchdog.schedule` | every 30 min (`7,37 * * * *`) | Off-minute. |
+| `watchdog.stale_awake_min` | 45 | Last heartbeat mode ≠ `sleeping`. |
+| `watchdog.stale_sleeping_h` | 12 | Last heartbeat mode = `sleeping` (RD-16). |
+| `watchdog.renotify_h` | 24 | One open alert at a time. |
+| `credentials.locked_alert_min` | 15 | Keychain locked at start or reload → alert. |
+| `credentials.locked_retry_s` | 60 | Retry interval while `keychain_locked`. |
+| `backup.due_after_h` | 24 (awake) | Next backup due. `doctor` warns at 26 h; `ops.backup_stale` at 48 h. |
+| `backup.retention` | 7 daily, 4 weekly, 5 pre-upgrade, quarantine 30 d | |
+| `logs.rotate_mib` / `logs.generations` / `logs.total_cap_mib` | 20 (or daily) / 14 / 300 | In-process rotation. |
+| `logs.retention_d` / `runs.retention_d` | 30 / 30 | Audit records and artifacts: life of the DB. |
+| `hold_age.spec_changed_h` | 24 (awake) | Hold ageing (RD-3): escalate once. |
+| `hold_age.dependency_unresolved_d` | 7 (awake) | |
+| `hold_age.deprioritized_d` | 14 (awake) | |
+| `helper.timeout_s` | `security`/helpers 10; git network ops 120; local git 600 | Subprocess timeouts. |
 
 ---
 
-## 3. Runtime architecture
+## 3. Runtime architecture and agent isolation
 
 ### 3.1 Process tree
 
 ```mermaid
 flowchart TD
-    LD["launchd gui/UID"] -->|"spawn, KeepAlive"| D["mercuryd - pinned node, pgid = D"]
-    D -->|"same pgid"| CAF["caffeinate -i -w mercuryd-pid - only while runs are active"]
-    D -->|"same pgid, short-lived"| SEC["/usr/bin/security - startup secret reads"]
-    D -->|"same pgid, short-lived"| GIT["git - fetch, worktree, commit, push"]
-    D -->|"spawn detached - new session and pgid"| CX["codex exec - pgid = run A"]
-    CX --> CXC["sandboxed shell commands and tests"]
-    D -->|"Agent SDK - spawn detached"| CL["claude CLI - pgid = run B"]
-    D -.->|"read-only DB plus control socket"| CLI["mercury CLI - status, doctor, pause"]
+    LD["launchd gui/UID"] -->|"spawn, KeepAlive"| D["mercuryd - pinned node - operator uid"]
+    D -->|"same pgid"| CAF["caffeinate -i -w mercuryd-pid - while runs are active"]
+    D -->|"same pgid, startup and reload only"| KC["mercury-keychain - signed helper"]
+    D -->|"same pgid, long-lived"| PW["mercury-power - signed sleep and wake helper"]
+    D -->|"on demand"| PR["mercury-presence - signed Touch ID or password helper"]
+    D -->|"same pgid, short-lived"| GIT["git plumbing against the mirror - fetch, commit, push"]
+    D -->|"spawn detached"| SU["sudo -n -C 4 -u _mercuryagent"]
+    SU --> AE["agent-exec - agent uid - own session and pgid"]
+    AE --> CX["codex exec, verify or deps_install under Seatbelt"]
+    AE --> CL["claude CLI - SDK pipes"]
+    D -->|"short-lived sudo"| AC["agent-ctl signal, probe, list, stats, reap, purge, fix-acl"]
+    CLI["mercury CLI - operator uid"] -.->|"control socket"| D
 ```
 
-| Process | Process group | Who kills it on daemon death | Notes |
-|---|---|---|---|
-| `mercuryd` | Its own (the launchd job) | launchd | Single instance, enforced by a lease (§3.4) |
-| `caffeinate` | mercuryd's group | launchd group cleanup, **and** `-w <mercuryd pid>` exits on its own | Started when the active-run count goes 0→1 and killed at 1→0 |
-| `security`, `git`, `ps`, `lsof` helpers | mercuryd's group | launchd | Short-lived, run with timeouts (git 10 min, others 15 s) |
-| `codex exec` | **Own session and group** (`spawn({detached:true})`) [S28] | **Not launchd.** mercuryd re-attaches or reaps it on start (§3.3) | stdout/stderr go to **files**, not pipes, so a daemon crash does not SIGPIPE it |
-| Claude (Agent SDK → `claude` CLI) | Own group (SDK `spawnClaudeCodeProcess` / `detached`; ASM-D-15) | mercuryd reaps it on start | The SDK uses pipes, so the run cannot survive a daemon crash. It is re-run (decision runs are idempotent). |
+| Process | uid | Session / group | Survives a `mercuryd` crash? | Notes |
+|---|---|---|---|---|
+| `mercuryd` | operator | launchd job | — | Single instance by `flock` |
+| `caffeinate`, `mercury-keychain`, `mercury-power`, git | operator | mercuryd's group | No (launchd group cleanup; `caffeinate -w` exits by itself) | `mercury-power` is restarted by `mercuryd` if it dies |
+| `mercury-presence` | operator | mercuryd's group | No | Spawned per presence-tier request (§9.5) |
+| `sudo` (monitor) + `agent-exec` + agent | root → `_mercuryagent` | own session (`detached: true`, then `setsid()` in `agent-exec`) | **Yes** for Codex, `verify`, `deps_install` (stdout/stderr to files); **no** for Claude (pipes break) | Adopted per §3.8; bounded by the supervisor lease |
+| `agent-ctl` | `_mercuryagent` | short-lived child of mercuryd | — | One invocation per control action |
 
-`AbandonProcessGroup` stays at its default (false). launchd therefore cleans up mercuryd's own group (caffeinate and helpers) when the job exits [S18m]. Agent groups deliberately escape that cleanup so they can survive a crash, and mercuryd owns their whole life cycle.
+`AbandonProcessGroup` stays false, so launchd cleans up mercuryd's own group. Agent sessions deliberately escape that cleanup and are governed by `agent-exec`.
 
-### 3.2 Child spawn contract
+### 3.2 Spawn contract (`spec.json`)
 
-Every agent run is started with:
+`mercuryd` writes `WORK_ROOT/runs/<run_id>/spec.json` (operator-owned, 0640) **before** spawn, in the same step that records the run row in `runs` (C's DDL, components §6.3; status values are C's). The file is the whole contract with `agent-exec`; nothing else is passed except `--run-dir` and fds 0–3.
 
-```ts
-interface AgentSpawnSpec {
-  run_id: string;                 // run_<ulid>
-  argv: string[];                 // absolute binary path first; never a shell string
-  cwd: string;                    // the task worktree (Codex) or a read-only review checkout (Claude)
-  env: Record<string, string>;    // built from the allowlist in §9.4; process.env is NEVER inherited
-  stdin: 'prompt-file-then-close' | 'ignore';
-  stdout_path: string;            // runs/<run_id>/stdout.jsonl  (O_APPEND, 0600)
-  stderr_path: string;            // runs/<run_id>/stderr.log
-  nice: 10;                       // os.setPriority(pid, 10) right after spawn
-  deadline_awake_ms: number;      // whole-run budget, counted in awake time (§8.3)
-  stall_timeout_ms: number;       // no stdout growth for this long → stalled
-  max_rss_bytes: number;          // group RSS ceiling, sampled every 15 s (§10.3)
-}
-```
-
-Persisted in `runs` **before** spawn returns control to the scheduler, in the same transaction that marks the run `starting`:
-
-```sql
--- illustrative; Agent C owns the canonical DDL
-ALTER TABLE runs ADD COLUMN pid INTEGER;
-ALTER TABLE runs ADD COLUMN pgid INTEGER;
-ALTER TABLE runs ADD COLUMN proc_start_time TEXT;  -- from `ps -o lstart= -p <pid>`, guards against PID reuse
-ALTER TABLE runs ADD COLUMN stdout_path TEXT;
-ALTER TABLE runs ADD COLUMN awake_ms_used INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE runs ADD COLUMN last_output_at TEXT;   -- wall clock of the last stdout growth
-```
-
-Ordering rule: write `runs(status='starting')` → spawn → `UPDATE runs SET pid, pgid, proc_start_time, status='running'`. If the daemon dies between spawn and the update, startup recovery finds a `starting` row with no pid. It then finds the process by cwd (§3.5) and kills it, because without a recorded identity the run cannot be re-attached safely.
-
-### 3.3 Re-attaching a Codex run after a daemon crash
-
-Codex writes JSONL to a file and the daemon only tails that file, so a Codex run does not depend on the daemon staying alive. On restart:
-
-1. The pid is alive, `ps -o lstart=` matches `proc_start_time`, and `pgid` matches → **re-attach**. Resume tailing at the stored byte offset and poll liveness every 15 s with `kill(pid, 0)` (the daemon cannot `waitpid` a non-child).
-2. The pid is gone and the output file (`-o`) exists, passes the schema, and the JSONL contains `turn.completed` → **adopt the result** as if the daemon had seen the exit.
-3. The pid is gone and the output is incomplete → mark the run `interrupted`, roll the worktree back to the checkpoint (`recovery.md` §4 step 9), and re-dispatch under the retry policy.
-
-Exit status is unknown after re-attach (ASM-D-16). Success is judged **only** from the schema-valid final output plus a `turn.completed` event, never from the exit code. That matches discovery: Codex's exit code is 0/1 only and failures must be classified from the JSONL.
-
-### 3.4 Single-instance guard
-
-- A row in `instance_lease(id=1, holder_pid, proc_start_time, boot_session_uuid, renewed_at)` is renewed every 10 s inside `BEGIN IMMEDIATE`.
-- A starting instance refuses to run if the lease was renewed less than 30 s ago **and** the holder pid is alive with the same start time.
-- `boot_session_uuid` comes from `sysctl -n kern.bootsessionuuid` (ASM-D-17). If it differs from the stored value, the machine has rebooted since the last run: every recorded pid is invalid, and reboot recovery applies.
-- launchd already prevents two copies of the same label. The lease additionally guards against a manual `node mercuryd.js` in a terminal.
-
-### 3.5 Optional helpers
-
-| Helper | v1? | Purpose |
+| Field | Content | Validated by `agent-exec` |
 |---|---|---|
-| `caffeinate` (Apple, `/usr/bin/caffeinate`) | **Yes** | Idle-sleep assertion while runs are active |
-| `mercury-keychain` (small signed Swift binary) | **No (v2 option)** | Narrows Keychain item ACLs to one binary instead of `/usr/bin/security` (§9.2) |
-| Native IOKit power-notification helper | No | `kIOMessageSystemWillSleep` callbacks would allow pre-sleep checkpoints. Not needed, because recovery is wake-driven and checkpoints are already continuous. |
+| `spec_version` | `1` | `agent-exec` supports versions N and N−1 (upgrade window, §13.6) |
+| `run_id` | `run_<ULID>` | Equals the run directory name; regex `^run_[0-9A-HJKMNP-TV-Z]{26}$` |
+| `kind` | `codex_plan` · `codex_implement` · `codex_revise` · `verify` · `deps_install` · `claude` | One of the six |
+| `argv` | Array, binary first; never a shell string | Grammar per kind (§3.5) |
+| `cwd` | Absolute path | Allowed root per kind (§3.5) |
+| `env` | Map of allowlisted keys to values | Key allowlist per kind; path values realpath-confined (§9.4) |
+| `secret_env` | Name the fd-3 secret is bound to (`CODEX_API_KEY` or `ANTHROPIC_API_KEY`) or `null` | Must match kind: Codex kinds → `CODEX_API_KEY`; `claude` → `ANTHROPIC_API_KEY` (or `CLAUDE_CODE_OAUTH_TOKEN` under OD-03); `verify`/`deps_install` → `null` |
+| `deadline_awake_ms` | Awake-time budget (§2.3) | Positive, ≤ the per-kind cap compiled into `agent.conf` |
+| `rlimits` | `nofile`, `core=0` | Within compiled bounds |
+| `sandbox_profile` | `verify` or `deps` for those kinds, else `null` | Must name a root-owned profile in `/usr/local/libexec/mercury/profiles/` whose SHA-256 matches `agent.conf` |
+
+The **identity triple** of a run (ADR-020) is `(run_id marker, process start time, kern.bootsessionuuid)`. `agent-exec` records it in `ctl/proc.json`; adoption requires all three to match (§3.8).
+
+### 3.3 Identities **[ROOT — operator consent]**
+
+| Identity | Definition | Created by |
+|---|---|---|
+| `_mercuryagent` | Hidden role account, uid in 200–400 chosen at install, primary group `mercury`, shell `/usr/bin/false`, no password, never logs in. Home `/Users/_mercuryagent` (0700) holding caches only. | `sysadminctl -addUser _mercuryagent -roleAccount -UID <uid> -shell /usr/bin/false -home /Users/_mercuryagent` then `createhomedir -c -u _mercuryagent` |
+| Group `mercury` | Members: the operator and `_mercuryagent` | `dseditgroup -o create -r "MERCURY" mercury`; `dseditgroup -o edit -a <operator> -t user mercury`; `dseditgroup -o edit -a _mercuryagent -t user mercury` |
+| Operator home | `chmod 0700 ~` (ASM-E-04). `~/.ssh`, `~/.config`, `~/Library` 0700 at minimum | `mercury-install --system` (operator-level `chmod`, shown and confirmed) |
+
+`mercury doctor` verifies these at every start (§3.10).
+
+### 3.4 Root-owned wrappers and the sudoers drop-in **[ROOT — operator consent]**
+
+**Binaries.** Two compiled wrappers (Swift; no interpreter, no dynamic plugins), signed, with SHA-256 pinned in the MERCURY release manifest:
+
+```text
+/usr/local/libexec/mercury/                 root:wheel 0755
+  agent-exec                                root:wheel 0755   spawn (replaces C's runwrap for agent runs)
+  agent-ctl                                 root:wheel 0755   control operations
+  agent.conf                                root:wheel 0644   operator uid, WORK_ROOT, pinned agent binaries + SHA-256, per-kind caps
+  profiles/verify.sb, profiles/deps.sb      root:wheel 0644   Seatbelt profiles (E designs, SEC-703; D installs)
+  mercury-presence, mercury-power, mercury-keychain   root:wheel 0755   signed helpers that run as the operator (§8.6, §9.3, §9.5)
+```
+
+Root ownership means neither the operator uid nor the agent uid can replace a wrapper, its configuration, a profile or a helper. Every path in `agent.conf` is absolute; `agent.conf` is re-generated only by `mercury-install --system`.
+
+**sudoers drop-in.** `/etc/sudoers.d/mercury`, root:wheel 0440, rendered by the installer with the real operator short name and digests, validated with `visudo -cf` before it is moved into place:
+
+```text
+# /etc/sudoers.d/mercury — generated by mercury-install --system. Do not edit.
+Cmnd_Alias MERCURY_AGENT_EXEC = sha256:<agent-exec digest> /usr/local/libexec/mercury/agent-exec --run-dir /Users/Shared/MercuryWork/runs/*
+Cmnd_Alias MERCURY_AGENT_CTL  = sha256:<agent-ctl digest>  /usr/local/libexec/mercury/agent-ctl *
+Defaults!MERCURY_AGENT_EXEC, MERCURY_AGENT_CTL env_reset, !setenv, !use_pty, !log_output, umask=0007, umask_override
+Defaults!MERCURY_AGENT_EXEC closefrom_override
+<operator> ALL = (_mercuryagent : mercury) NOPASSWD: MERCURY_AGENT_EXEC, MERCURY_AGENT_CTL
+```
+
+- The grant is **lateral**: to `_mercuryagent:mercury` only, never to root, and only for the two digests.
+- `env_reset` + `!setenv`: nothing from `mercuryd`'s environment reaches the wrapper. `agent-exec` builds the child environment from `spec.json` alone.
+- `closefrom_override` lets `-C 4` keep fds 0–3 open for `agent-exec` only; `agent-ctl` gets no extra fds.
+- `!use_pty`: Claude's SDK pipes stay direct pipes.
+- sudoers wildcards match spaces and `..`, so the drop-in is a coarse filter. **The authoritative validation is inside the wrappers** (§3.5, §3.7).
+
+**Spawning.** `mercuryd` runs (Node `spawn`, `detached: true`):
+
+```text
+sudo -n -C 4 -u _mercuryagent -g mercury /usr/local/libexec/mercury/agent-exec --run-dir /Users/Shared/MercuryWork/runs/<run_id>
+  fd 0: /dev/null (Codex, verify, deps) | SDK stdin pipe (claude)
+  fd 1: runs/<run_id>/stdout.jsonl opened by mercuryd O_WRONLY|O_APPEND|O_CREAT, operator-owned 0640 | SDK stdout pipe (claude)
+  fd 2: runs/<run_id>/stderr.log, same
+  fd 3: pipe carrying the model key (§3.6) | closed for verify and deps_install
+```
+
+The agent writes its output through inherited descriptors whose permission was checked when `mercuryd` opened them. It cannot reopen, truncate or replace those files afterwards.
+
+### 3.5 `agent-exec` grammar and argv validation
+
+**Command line.** Exactly two arguments: `--run-dir <path>`. Anything else → exit 125.
+
+**Validation, in order** (any failure → exit 125, `ctl/reject.json {stage, reason}` if `ctl/` is writable, nothing executed; the coordinator classifies the run `config_fatal` and sets the `config_fatal` hold for agent dispatch):
+
+1. **Caller.** Real uid of the invoking sudo user (`SUDO_UID`) equals the operator uid in `agent.conf`; effective uid is `_mercuryagent`.
+2. **Run directory.** `realpath(path)` equals `WORK_ROOT/runs/<run_id>`, no component is a symlink (checked with `O_NOFOLLOW` walks), owner is the operator uid, mode 0750, group `mercury`.
+3. **Spec file.** `spec.json` is a regular file, owner operator, mode 0640, size ≤ 64 KiB, valid JSON, `spec_version` supported, `run_id` equals the directory name.
+4. **Kind and binary.** `argv[0]` must equal the pinned binary for the kind in `agent.conf`, and its SHA-256 must match (checked at every spawn; the file is root-owned, so a mismatch means an upgrade without `mercury agents upgrade`):
+
+   | Kind | `argv[0]` | Fixed prefix | Allowed option tokens | Forbidden (always rejected) |
+   |---|---|---|---|---|
+   | `codex_plan`, `codex_implement`, `codex_revise` | pinned `codex` | `exec` (plus `resume <uuid>` for `codex_revise` and plan revisions) | Only the flags listed for that run type in codex.md §3 (B owns the list; it is compiled into `agent.conf` as a token table). `--sandbox` value ∈ {`read-only` for `codex_plan`, `workspace-write` otherwise}. Path-valued options (`--cd`, `--output-schema`, `-o`) realpath-confined: `--cd` = `cwd`; schema under `runs/<run_id>/in/`; `-o` under `runs/<run_id>/out/` | `--dangerously-bypass-approvals-and-sandbox`, any option that enables network access, `danger-full-access`, `-c`/`--config` keys outside the allowlist, `--profile`, `--add-dir`, any second positional prompt source |
+   | `verify` | `/usr/bin/sandbox-exec` | `-f /usr/local/libexec/mercury/profiles/verify.sb --` | Then the repository's `test_commands` entry: `argv[0]` must resolve under `WORK_ROOT/toolchains/` or `/usr/bin`, `/bin`; no shell unless the repo config names one explicitly (`shell = true` is an onboarding-time decision recorded in `mercury.toml`) | Any `-p`/`-D` to `sandbox-exec`; a profile other than the pinned one |
+   | `deps_install` | `/usr/bin/sandbox-exec` | `-f /usr/local/libexec/mercury/profiles/deps.sb --` | The repository's `setup_commands` entry, which must contain the package manager's ignore-scripts flag (SEC-703; OD-09) | Lifecycle-script-enabling flags |
+   | `claude` | pinned `claude` | Options from claude.md §2.2 (B owns), compiled as a token table | `--settings` JSON only from `runs/<run_id>/in/settings.json`; `--add-dir` only `cwd` | `--dangerously-skip-permissions`, `--mcp-config`, `--plugin-dir`, `--setting-sources` other than empty |
+
+5. **Working directory.** `cwd` realpath, no symlink components:
+   - Codex kinds, `verify`, `deps_install` → exactly `WORK_ROOT/worktrees/<owner>__<repo>/<task_dir>`;
+   - `claude` → exactly `WORK_ROOT/snapshots/<tree_sha>` (RD-7).
+6. **Environment.** Only keys in the per-kind allowlist (§9.4). Values that are paths must realpath under `WORK_ROOT` or `/Users/_mercuryagent` or be one of the fixed system paths.
+7. **Secret.** For kinds with `secret_env`, read fd 3: 4-byte big-endian length, then that many bytes (1…4096), then EOF. Anything else → reject. For `verify`/`deps_install`, fd 3 must be closed; if it is open → reject. Close fd 3, then `closefrom(3)`.
+8. **Process setup.** `setsid()`; `umask(0007)`; `setpriority(+10)`; rlimits; `HOME=/Users/_mercuryagent`.
+9. **Record identity.** Write `ctl/proc.json` `{run_id, wrapper_pid, pgid, start_time, boot_session_uuid, argv_sha256, spec_sha256, wrapper_sha256}` with write → `F_FULLFSYNC` → rename → directory `fsync` (§14.2).
+10. **Execute.** `fork` + `execve` the child in the same process group; `waitpid` it.
+11. **Supervise** every `wrapper.tick_s`: credited awake time (same algorithm as components §10.10); hard deadline (`deadline_awake_ms × (1 + run.hard_deadline_margin_pct)`); supervisor lease (`WORK_ROOT/ctl/coordinator.alive` mtime older than `supervisor.lease_stale_min` of credited time). Either trigger → kill ladder (`supervisor.kill_ladder_s`) on the group.
+12. **Record outcome.** `ctl/exit.json {run_id, code, signal, reason: exited|deadline|supervisor_lost|exec_failed, ended_at, credited_ms, rusage}` with the same fsync + rename + directory fsync. Exit with the child's status (128 + signal for signal death); 126 if `execve` failed.
+
+`agent-exec` never reads anything under `MERCURY_HOME` and has no network code.
+
+### 3.6 Secret hand-off on fd 3
+
+- `mercuryd` holds the model keys in memory (§9.3). For each Codex or Claude run it creates a pipe, writes the length-prefixed key, closes the write end, and passes the read end as fd 3.
+- The key never appears in `spec.json`, argv, a file, the sudo environment or logs. Inside the agent, it is in the agent process's environment only (`CODEX_API_KEY` / `ANTHROPIC_API_KEY`), because both CLIs read it from there.
+- **Residual risk (accepted, recorded as ASM-B-16 / RISK register):** commands that Codex runs as the same uid could read Codex's environment. Mitigations: Codex `shell_environment_policy` excludes the key (codex.md §6); the key is a dedicated, spend-capped project key (OD-03/04); `verify` and `deps_install` never receive a key.
+- The agent uid has no Keychain and cannot open the operator's `~/Library/Keychains` (0700 home).
+
+### 3.7 `agent-ctl` grammar
+
+All subcommands run as `_mercuryagent` (so `kill(2)` and `proc_pidinfo` work on agent processes without root) and print one JSON object. Arguments are validated by regex before any use; unknown subcommands or extra arguments → exit 2.
+
+| Subcommand | Arguments | Behaviour | Replaces |
+|---|---|---|---|
+| `signal` | `--run <run_id> --sig INT\|TERM\|KILL` | Reads `runs/<run_id>/ctl/proc.json`, verifies with `proc_pidinfo` that the pid is alive, owned by `_mercuryagent`, in the recorded pgid, with the recorded start time and boot session; then `kill(-pgid, sig)`. Result `signalled` · `not_running` · `identity_mismatch` (never signals on mismatch). | `kill(-pgid)` from the coordinator |
+| `probe` | `--run <run_id>` | Same identity check; returns `alive_match` · `dead` · `alive_mismatch` with `pgid`, `start_time`. | `ps -o lstart=` probes |
+| `list` | — | Every `_mercuryagent` process: `pid, ppid, pgid, start_time, cwd, run_id` (run id = the run whose `proc.json` pgid matches, else `null`). | `ps` argv marker scans and `lsof -d cwd` (ASM-D-30 no longer load-bearing) |
+| `stats` | `--run <run_id>` | Summed RSS, summed CPU time and process count over the group. | `ps -o rss= -g`; feeds stall liveness (RD-15) and the RSS cap |
+| `reap` | `--pid <pid> --start <start_time>` | Kills one `_mercuryagent` process (and its group if it leads one) after verifying uid and start time. Used for orphans that escaped their group. | Orphan sweep kill |
+| `purge` | `--path <path>` | Recursive delete with `openat`/`unlinkat` and `O_NOFOLLOW`; refuses unless `realpath` is under `WORK_ROOT/{worktrees,runs,codex-home,snapshots}`. Needed because agent-owned files may lack group write after an agent `chmod`. | `rm -rf` by the coordinator |
+| `fix-acl` | `--path <path>` | Re-applies the group ACL (§7.3) to agent-owned files under an allowed root. | — |
+| `version` | — | Wrapper version and SHA-256. | — |
+
+C's `ProcessSupervisor` / `AgentLauncher` port maps `signalGroup`, `probe`, `listMarked`, the stats sampler, orphan reaping and worktree removal onto these subcommands (components §4.7, §8). The same-uid implementation (`SameUidLauncher`) exists only for fakes and the sandbox repository (§3.11).
+
+### 3.8 Adoption, lease and launchd interaction
+
+| Event | What happens |
+|---|---|
+| `mercuryd` crash, `kickstart -k`, upgrade | `sudo` + `agent-exec` sessions survive. On start, `agent-ctl probe` per active run: `alive_match` + adoptable kind → **adopt** (resume tailing from the persisted offset); Claude → `agent-ctl signal` ladder, re-run with the same `input_digest`, no attempt consumed. Dead with `exit.json` → finalize from `exit.json` + `final.json` (also after a reboot). The authorization guard is re-evaluated **before** an adopted output is acted on (ADR-020). |
+| Coordinator absent (logout, `bootout`, crash loop) | `agent-exec` keeps enforcing the deadline. When `coordinator.alive` is stale for `supervisor.lease_stale_min` of credited time, it ends the run with `reason: supervisor_lost` → recovery classifies `lost_by_host`. |
+| Safe mode or `security_halt` | Adopted runs are **never kept**: every active run is signalled with the kill ladder (RD-11). |
+| Logout | Agent-uid sessions may survive logout (ASM-D-32, P0-031); the lease bounds them. |
+| Shutdown, power loss, panic | Everything dies. Next start sees a changed `kern.bootsessionuuid` → runs without `exit.json` are `lost_by_host` (no attempt; cap `run.lost_by_host_cap`). |
+| `caffeinate`, BTM, `ExitTimeOut` | Unchanged by the agent uid. |
+
+Run statuses and failure classes are C's (components §6.3 `runs`, state-machine §7.1). The Phase 2 values `interrupted` and `adopted` are withdrawn: an interrupted run is `lost` or `cancelled` with class `lost_by_host`, `cancelled_by_coordinator` or `lost_by_coordinator_crash`; adoption is an audit event.
+
+### 3.9 Toolchain provisioning
+
+- Each target repository declares its toolchain in `mercury.toml` (`[repos."<owner>/<repo>".toolchain] node = "22.11.0"`, `python = "3.12.7"`, …).
+- `mercury toolchain sync` (operator uid, no root) downloads official release archives, verifies them against the vendor checksum list pinned in the release manifest, and installs to `WORK_ROOT/toolchains/<name>/<version>/` (operator:`mercury`, dirs 0750, files 0640/0750). Agents can read and execute toolchains, never write them.
+- `PATH` for agent kinds is built from the manifest plus `/usr/bin:/bin`. The pinned Codex and Claude CLIs live in `WORK_ROOT/toolchains/agents/<name>/<version>/` and are also pinned by hash in `agent.conf`.
+- The agent `HOME` holds only caches (npm, pip, cargo registries). Git for the agent uses `GIT_CONFIG_GLOBAL=WORK_ROOT/toolchains/agent.gitconfig` (operator-owned, read-only to agents) containing `safe.directory` entries for `WORK_ROOT/worktrees/*` and `core.hooksPath=/dev/null`.
+- `mercury doctor` scans `/Users/_mercuryagent` (through `agent-ctl list` + a read-only `find` run as the agent uid) for credential-shaped files (`.npmrc` with `_authToken`, `.netrc`, `.git-credentials`, `.ssh/`, `.config/gh`, `.aws/`). Any hit → `config_fatal` hold for agent dispatch.
+
+### 3.10 Install, verification and uninstall **[ROOT — operator consent]**
+
+`mercury-install --system` prints every command, then asks for the operator's typed confirmation, then runs them through `sudo` interactively (the operator's password; never stored). Steps:
+
+1. Create group `mercury` and user `_mercuryagent`; add both members (§3.3).
+2. Install the wrappers, helpers, `agent.conf` and Seatbelt profiles into `/usr/local/libexec/mercury/` (root:wheel), verifying each SHA-256 against the release manifest.
+3. Render `/etc/sudoers.d/mercury` to a temp file, `visudo -cf` it, then `install -o root -g wheel -m 0440`.
+4. Create `WORK_ROOT` and its subdirectories with the owners, modes and ACLs in §7.1 (`chown`, `chmod`, `chmod +a`).
+5. `chmod 0700 ~` (operator-level; shown separately).
+6. Optionally (OD-19) install managed Claude settings and the Codex `requirements.toml` as root at the paths verified by P0 (ASM-E-10), validated after install.
+
+`mercury-install --system --uninstall` reverses steps 1–4 and 6 (after `mercury` is stopped and `WORK_ROOT` archived).
+
+`mercury doctor` checks at every start and on demand; any failure sets the `config_fatal` hold for agent dispatch (coordinator keeps running):
+
+| Check | Pass condition |
+|---|---|
+| sudoers | `sudo -n -l` (as operator) lists exactly the two digests for `(_mercuryagent : mercury)` |
+| Wrappers and helpers | SHA-256 of every file in `/usr/local/libexec/mercury/` matches the release manifest; owner root:wheel; not writable by others |
+| Identities | `_mercuryagent` exists, shell `/usr/bin/false`, member of `mercury`; operator is a member of `mercury` |
+| Modes and ACLs | Every path in §7.1 has its owner, mode and ACL |
+| Operator home | `~` is 0700; `~/.ssh`, `~/.config`, `~/Library` are 0700 |
+| Agent home | No credential-shaped files (§3.9) |
+| Canary self-test | Weekly and after any install change: `agent-ctl` runs a fixed canary probe as the agent uid that tries to read the canary files planted by `mercury doctor --plant-canaries` (SEC-T-20 subset); any read → `security_halt` |
+
+### 3.11 Interim same-uid mode and gates
+
+- Same-uid execution with Seatbelt deny profiles (`SameUidLauncher`) is allowed **only** with fakes and the sandbox repository (milestones M1–M4), recorded as RISK (R-03) Critical while in use.
+- **No workspace-write Codex, `verify` or `deps_install` run against a non-sandbox repository until SEC-T-20 passes on the real Mac** with P0-026…P0-032 green (RD-1 gate).
+- If P0-042 (Claude SDK spawn through sudo) fails, Claude decision runs use B's ALT-B-1 (Messages API with coordinator-implemented, realpath-confined Read/Grep/Glob over the snapshot), and the `claude` kind is removed from `agent-exec`.
 
 ---
 
@@ -147,24 +395,22 @@ Exit status is unknown after re-attach (ASM-D-16). Success is judged **only** fr
 
 | Criterion | LaunchAgent (`gui/<uid>`) | LaunchDaemon (`system`, with `UserName`) | Weight |
 |---|---|---|---|
-| Login Keychain (GitHub App key, API keys) | Available after login [S16, S22] | **Not available** [S22]. Would need the System keychain (root-managed) or files. | Decisive |
-| Agent CLIs' own auth and config (`~/.codex`, `~/.claude`) | Natural | Possible with `UserName`, but there is no user Keychain, and Claude stores OAuth in the Keychain | High |
-| Runs before login, after reboot | **No** | Yes | High, but blocked by FileVault anyway (§6) |
-| Runs while logged out | No | Yes | Medium. The operator rarely logs out (ASM-D-05). |
-| Install privilege | None (user-writable `~/Library/LaunchAgents`) | Root (`/Library/LaunchDaemons`, `sudo launchctl`) | Medium |
-| TCC | User context. Still keep out of protected folders. | Separate context; often denied user folders [S23] | Medium |
-| Local notifications (`osascript display notification`) | Works in the Aqua session (ASM-D-06) | No GUI session | Low |
-| Blast radius | User privileges | Root unless `UserName` is set; any mistake is system-wide | High |
+| Login Keychain (App keys, model keys) | Available after login [S16, S22] | **Not available** [S22]; would need the System keychain (root) or files | Decisive |
+| Runs before login, after reboot | No | Yes | High, but blocked by FileVault anyway (§6) |
+| Runs while logged out | No | Yes | Medium (ASM-D-05) |
+| Install privilege | None for the coordinator (root only for the one-time §3.10 step) | Root | Medium |
+| Local notifications, LocalAuthentication prompt | Work in the Aqua session (ASM-D-06, ASM-D-34) | No GUI session | Medium (presence tier needs it) |
+| Blast radius | Operator privileges; agents confined to `_mercuryagent` | Root unless `UserName` is set | High |
 
-**Decision: LaunchAgent.** The Keychain criterion alone decides it. The main thing a daemon would buy, running before login, is cancelled by FileVault: the disk stays locked until a user authenticates at boot (§6). The cost, "nothing runs while logged out or before first login", is accepted, and the watchdog (§11.6) makes it visible.
-
-Revisit only if the operator moves to an always-on, FileVault-off build host. That would be a security regression and needs an ADR.
+**Decision: LaunchAgent (ADR-010).** A broker LaunchDaemon with `UserName=_mercuryagent` for agent spawning is the documented v2 alternative to sudo (true `waitpid`, survives logout), at the cost of IPC, stdio relaying for Claude and its own recovery. A dedicated macOS account for the coordinator (U2) is OD-36, default not in v1.
 
 ---
 
-## 5. LaunchAgent plist
+## 5. LaunchAgent plist and process contract
 
-Installed at `~/Library/LaunchAgents/com.usjbro.mercury.plist`, mode `0644` (launchd refuses group- or world-writable plists; ASM-D-02). The installer renders it from a template with absolute paths. The example user `jb` and the versions are placeholders.
+### 5.1 Plist
+
+Installed at `~/Library/LaunchAgents/com.usjbro.mercury.plist`, mode 0644 (launchd refuses group- or world-writable plists; ASM-D-02). Rendered from a template with absolute paths; `jb` and versions are placeholders. Values in comments are §2 parameters.
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -187,43 +433,33 @@ Installed at `~/Library/LaunchAgents/com.usjbro.mercury.plist`, mode `0644` (lau
   <key>RunAtLoad</key>
   <true/>
 
-  <!-- Restart after a crash or signal death. A clean exit (0) stays down: logout, bootout,
-       or a deliberate fatal-config halt. Crashed=true would be redundant with SuccessfulExit=false. -->
+  <!-- Restart only after a crash or signal death. Exit 0 stays down (see the exit-code contract). -->
   <key>KeepAlive</key>
   <dict>
     <key>SuccessfulExit</key>
     <false/>
   </dict>
 
-  <!-- Minimum seconds between respawns. App-level crash-loop guard escalates to safe mode (REL-15). -->
-  <key>ThrottleInterval</key>
+  <key>ThrottleInterval</key>   <!-- svc.throttle_interval_s -->
   <integer>30</integer>
-
-  <!-- SIGTERM → SIGKILL gap. Internal shutdown budget is 20 s (§12); 45 s leaves headroom. -->
-  <key>ExitTimeOut</key>
+  <key>ExitTimeOut</key>        <!-- svc.exit_timeout_s -->
   <integer>45</integer>
 
-  <!-- Standard: normal scheduling. Background would throttle CPU/IO and slow DB fsyncs. -->
   <key>ProcessType</key>
   <string>Standard</string>
-
-  <!-- Daemon stays at nice 0; agent children are reniced to +10 individually. -->
   <key>Nice</key>
   <integer>0</integer>
-
-  <!-- false: DB fsync latency matters. Agent IO is not marked low-priority in v1 (ASM-D-18). -->
   <key>LowPriorityIO</key>
   <false/>
 
   <key>WorkingDirectory</key>
   <string>/Users/jb/Library/Application Support/Mercury</string>
 
-  <!-- Decimal 63 == octal 0077 → files 0600, dirs 0700. launchd wants decimal. -->
+  <!-- Decimal 63 == octal 0077. MERCURY_HOME files 0600, dirs 0700. Files under WORK_ROOT
+       get explicit modes from core/paths.ts (0640/0750), never from the umask. -->
   <key>Umask</key>
   <integer>63</integer>
 
-  <!-- Minimal, non-secret environment. Tool binaries are configured by absolute path in
-       mercury.toml, so PATH is only a fallback for system tools. -->
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
@@ -236,77 +472,69 @@ Installed at `~/Library/LaunchAgents/com.usjbro.mercury.plist`, mode `0644` (lau
     <string>production</string>
   </dict>
 
-  <!-- Only for output before the in-process logger starts, and for crash traces.
-       Structured logs go to ~/Library/Logs/Mercury/mercuryd.jsonl (rotated in-process). -->
   <key>StandardOutPath</key>
   <string>/Users/jb/Library/Logs/Mercury/launchd.stdout.log</string>
   <key>StandardErrorPath</key>
   <string>/Users/jb/Library/Logs/Mercury/launchd.stderr.log</string>
 
   <key>SoftResourceLimits</key>
-  <dict>
-    <key>NumberOfFiles</key>
-    <integer>8192</integer>
-  </dict>
+  <dict><key>NumberOfFiles</key><integer>8192</integer></dict>
   <key>HardResourceLimits</key>
-  <dict>
-    <key>NumberOfFiles</key>
-    <integer>16384</integer>
-  </dict>
+  <dict><key>NumberOfFiles</key><integer>16384</integer></dict>
 
-  <!-- Aqua is the default for ~/Library/LaunchAgents; stated explicitly for clarity. -->
   <key>LimitLoadToSessionType</key>
   <string>Aqua</string>
 </dict>
 </plist>
 ```
 
-Key decisions:
-
-| Key | Value | Justification / rejected alternative |
+| Key | Value | Justification |
 |---|---|---|
-| `KeepAlive` | `{SuccessfulExit:false}` | `true` would restart even after a deliberate halt (fatal config, DB corruption → safe-stop), which creates a crash loop. `NetworkState` is believed to be no longer honoured [S18m, I]. The daemon handles connectivity itself (§8.5). |
-| Exit-code contract | `0` = intentional stop (SIGTERM, `mercury stop`, fatal non-retryable error after writing `run/fatal.json`). `≠0` / signal = crash → restart. | `EX_CONFIG` (78) is **not** used for fatal errors, because launchd would restart it every 30 s. |
-| `ThrottleInterval` | 30 | The default is 10 [S18m]. 30 s halves the respawn churn in a crash loop, and REL-01 still holds. |
-| `ExitTimeOut` | 45 | The default is 20 [S18m]. The internal budget is 20 s, so we never depend on the extra time. ASM-D-04: at system shutdown macOS may not honour long timeouts. |
-| `ProcessType` | `Standard` | `Background` adds CPU/IO throttling [S18m]. `Adaptive` needs XPC activity. `Interactive` is for apps. |
-| `Nice` | 0 (daemon), children +10 | The daemon is light and latency-sensitive (polling, DB). Agents and tests are heavy and should yield to the operator's interactive work. |
-| `Umask` | 63 (`0077`) | Enforces 0600/0700 on everything the daemon creates (§7.2). Children inherit it. Git respects umask for worktree files, which is acceptable because worktrees are private. |
-| `EnvironmentVariables` | No secrets, no tool paths | Secrets come from the Keychain at runtime (§9). The plist is world-readable by design (ASM-D-02). |
-| `SoftResourceLimits.NumberOfFiles` | 8192 | Node, SQLite, the git subprocesses and log tails need more than the default 256 soft limit (ASM-D-19). `NumberOfProcesses` is not lowered, because test suites fork heavily. |
-| `StandardOut/ErrorPath` | Small files | launchd holds these fds, so they cannot be renamed for rotation without a restart. The daemon truncates them at start if > 5 MiB (§11.3). |
-| No `StartInterval` or `WatchPaths` | — | The daemon schedules itself. Launch-on-demand is not wanted. |
-| No `AssociatedBundleIdentifiers` | — | Needs an app bundle. The Login Items UI will show the item as "node" or the script name (ASM-D-07). |
+| `KeepAlive` | `{SuccessfulExit:false}` | `true` would restart after a deliberate halt and create a crash loop. `NetworkState` is not honoured [S18m]; the daemon handles connectivity (§8.5). |
+| `ThrottleInterval` / `ExitTimeOut` | §2.1 | Default 10 / 20 [S18m]. |
+| `ProcessType` | `Standard` | `Background` throttles CPU/IO and slows DB fsyncs. |
+| `Nice` | 0 daemon; agents +10 (set by `agent-exec`) | Agents yield to the operator's interactive work. |
+| `Umask` | 63 (`0077`) | Private by default. Shared paths get explicit modes. |
+| `EnvironmentVariables` | No secrets, no tool paths | Plist is world-readable by design. |
+| `NumberOfFiles` | 8192 / 16384 | Node, SQLite, git and log tails exceed the default 256 (ASM-D-19). |
+| `StandardOut/ErrorPath` | Small files | Truncated at start if > 5 MiB (§10.5). |
 
-### 5.1 Install, control and uninstall commands
+### 5.2 Exit-code and startup contract (normative, RD-11)
+
+`mercuryd` uses exactly these outcomes. C's startup pseudocode (components §10.6) and `recovery.md` §4 follow this table; exit codes 75 and 78 are never used.
+
+| Condition at start or at runtime | Behaviour | Exit | launchd result |
+|---|---|---|---|
+| `flock(run/mercuryd.lock)` already held | Log `daemon.duplicate`, exit immediately | 0 | Stays down (the live instance keeps running) |
+| `run/fatal.json` present | Log, do not start; watchdog and `mercury status` show it | 0 | Stays down until `mercury clear-fatal` + `launchctl kickstart` |
+| Config invalid, path under a TCC-protected folder, socket path too long | Write `fatal.json {reason}`, local notification | 0 | Stays down |
+| Schema too new (`schema_meta.min_reader_version` > app version) | Write `fatal.json`, local notification, never write the DB | 0 | Stays down |
+| DB corruption (`quick_check` ≠ ok, `SQLITE_CORRUPT`, `SQLITE_NOTADB`) | **Stay alive in safe mode**: no DB writes, no dispatch, read-only status, heartbeat file, local + ops alerts | — | Running |
+| Audit chain verification fails and no matching restore epoch (§14.4) | **Safe mode** + one SECURITY notification (global `integrity_check_failed` hold, components / state-machine §5) | — | Running |
+| More than `svc.crash_loop_starts` starts in `svc.crash_loop_window_min` | Safe mode (no dispatch); ops alert with the last exception class | — | Running |
+| Agent-uid infrastructure check fails (§3.10) | Normal mode, `config_fatal` hold for agent dispatch | — | Running |
+| Keychain locked at start | Normal mode; `keychain_locked` hold; retry every `credentials.locked_retry_s` | — | Running |
+| SIGTERM, `mercury stop`, `daemon.shutdown` | Graceful shutdown (§12) | 0 | Stays down until next login or `kickstart` |
+| Unhandled exception, OOM, signal death | — | ≠ 0 / signal | Restart after `svc.throttle_interval_s` |
+
+"Safe mode" is the daemon `mode = safe`: the global holds `config_fatal` or `integrity_check_failed` (state-machine §5), plus no DB writes when the cause is corruption. In safe mode and under `security_halt`, adopted runs are stopped (§3.8).
+
+### 5.3 Install, control and uninstall (operator level, no root)
 
 ```sh
 UID_=$(id -u); LABEL=com.usjbro.mercury; PLIST=~/Library/LaunchAgents/$LABEL.plist
-
-# validate, then install
 plutil -lint "$PLIST"
 launchctl bootstrap gui/$UID_ "$PLIST"            # load + RunAtLoad start
-launchctl enable    gui/$UID_/$LABEL              # clear any persisted 'disabled' override
-
-# inspect
-launchctl print gui/$UID_/$LABEL                  # state, pid, last exit code, runs
-launchctl print-disabled gui/$UID_ | grep mercury
-
-# restart (kill existing instance, start new one)
-launchctl kickstart -k gui/$UID_/$LABEL
-
-# graceful stop that stays stopped (exit 0 → KeepAlive does not restart)
-launchctl kill TERM gui/$UID_/$LABEL              # or: mercury stop
-
-# uninstall
-launchctl bootout gui/$UID_/$LABEL                # SIGTERM, waits up to ExitTimeOut
-rm "$PLIST"
+launchctl enable    gui/$UID_/$LABEL
+launchctl print gui/$UID_/$LABEL                  # state, pid, last exit code
+launchctl kickstart -k gui/$UID_/$LABEL           # restart; adoptable runs are kept
+launchctl kill TERM gui/$UID_/$LABEL              # graceful stop that stays stopped (exit 0)
+launchctl bootout gui/$UID_/$LABEL && rm "$PLIST" # uninstall
 ```
 
-Notes:
-- `load`/`unload` are legacy. "Bootstrap failed: 5: Input/output error" usually means the job is already loaded: run `bootout` first [S19m].
-- `bootstrap`, `bootout` and `kickstart` need no `sudo` in the `gui/<uid>` domain (ASM-D-03).
-- On macOS 13+ the first bootstrap triggers a "Background Items Added" notification. The item can be switched off under System Settings › General › Login Items › Allow in the Background. If it is switched off, `bootstrap` fails or the job never runs (ASM-D-07). `mercury doctor` checks `launchctl print` for this.
+- `load`/`unload` are legacy. "Bootstrap failed: 5" usually means already loaded: `bootout` first [S19m].
+- `bootstrap`, `bootout`, `kickstart` need no `sudo` in `gui/<uid>` (ASM-D-03).
+- macOS 13+ shows "Background Items Added". If "Allow in the Background" is off, the job never runs (ASM-D-07); `mercury doctor` checks `launchctl print`.
 
 ---
 
@@ -314,79 +542,77 @@ Notes:
 
 | Situation | MERCURY behaviour |
 |---|---|
-| Boot, before any login | **Nothing runs.** With FileVault on, the data volume is locked until a user authenticates. |
-| Operator logs in | launchd bootstraps `gui/<uid>`. `RunAtLoad` starts mercuryd → startup recovery (`recovery.md` §4) → dispatch resumes. |
-| Fast User Switching to another user | The operator's session (and mercuryd) keeps running in the background (ASM-D-08). |
-| Screen locked | Keeps running. The login Keychain normally stays unlocked while the screen is locked, unless the operator set "Lock after N minutes of inactivity" or "Lock when sleeping" on the login keychain (ASM-D-09). `mercury doctor` reports `security show-keychain-info`. |
-| Logout | SIGTERM → graceful shutdown (§12). Runs are marked `interrupted`. Resumes at next login. |
-| Restart or shutdown | Same as logout, and the same at the next login. |
-| macOS update with "Install overnight" | Behaves like a restart. If macOS uses a FileVault authenticated restart, the user may come back logged in (ASM-D-10). Otherwise MERCURY waits for login. |
+| Boot, before login | Nothing runs. FileVault keeps the data volume locked. |
+| Operator logs in | `RunAtLoad` → startup recovery (`recovery.md` §4) → dispatch after the dark-wake rule is satisfied (§8.4). |
+| Fast User Switching | The operator's session keeps running (ASM-D-08). |
+| Screen locked | Keeps running. Secrets were read at start, so a later Keychain lock has no effect (§9.3). |
+| Logout | SIGTERM → §12: Claude runs interrupted; adoptable runs left to `agent-exec` and bounded by the supervisor lease. |
+| Restart / shutdown | As logout; the kernel ends all runs → `lost_by_host` at next start. |
+| macOS overnight update | Behaves like a restart. A FileVault authenticated restart may log the user back in (ASM-D-10). |
 
-**FileVault and auto-login tradeoff:**
-
-| Option | Availability after reboot | Security | Recommendation |
-|---|---|---|---|
-| FileVault ON (auto-login impossible) | Waits for the operator to log in | Data at rest is encrypted. Protects the GitHub App key, API keys (Keychain) and source. | **Recommended** |
-| FileVault OFF + auto-login | Resumes unattended after a power cut | A stolen or lost Mac gives full access to the agent credentials and the push-capable App key | Reject |
-| Planned reboot with `sudo fdesetup authrestart` | Unlocks once and logs straight back in (ASM-D-10) | Same as FileVault ON | Use for planned maintenance |
-
-Consequence: after an unplanned reboot, MERCURY is down until the operator logs in. The watchdog (§11.6) alerts if active tasks exist. No work is lost beyond REL-05.
+**FileVault ON is required** (auto-login is then impossible). Planned maintenance reboots use `sudo fdesetup authrestart` **[ROOT — operator consent]**. After an unplanned reboot MERCURY waits for login; the watchdog alerts if work is pending.
 
 ---
 
 ## 7. Directory layout and permissions
 
-### 7.1 Layout
+### 7.1 Filesystem layout (single source of truth, ADR-016)
 
+All paths are generated from `core/paths.ts`; no other document defines paths. "op" = operator uid; "agent" = `_mercuryagent`; "ACL" = the group ACL in §7.3 with inheritance. Agent access is via group `mercury` unless stated.
+
+| Path | Owner:group | Mode | ACL | Agent access | Purpose | Time Machine |
+|---|---|---|---|---|---|---|
+| **`MERCURY_HOME`** = `~/Library/Application Support/Mercury/` | op:staff | 0700 | — | none | Coordinator state | included except as noted |
+| `MERCURY_HOME/app/releases/<semver>/`, `app/current` → symlink | op | 0700 | — | none | Immutable release tree; atomic switch (§13) | included |
+| `MERCURY_HOME/runtime/node-<ver>-darwin-arm64/` | op | 0700 | — | none | Pinned Node for `mercuryd` (SHA-256 verified) | included |
+| `MERCURY_HOME/config/mercury.toml` | op | 0600 | — | none | Non-secret configuration, Keychain item names | included |
+| `MERCURY_HOME/db/mercury.db`, `-wal`, `-shm` | op | 0600 (dir 0700) | — | none | SQLite (C's schema) | **excluded** (live WAL) |
+| `MERCURY_HOME/backups/{daily,weekly,pre-upgrade,quarantine}/` | op | 0700 / files 0600 | — | none | Verified `VACUUM INTO` copies (§14) | included |
+| `MERCURY_HOME/artifacts/sha256/<aa>/<hash>` | op | 0600 | — | none (agents receive copies under `runs/<run>/in/`) | Content-addressed artifacts | included |
+| `MERCURY_HOME/run/` | op | 0700 | — | none | `mercuryd.lock`, `mercuryd.sock` (0600), `tokens/` (C), `heartbeat.json`, `fatal.json`, `restore.json`, `starts.log`, `ballast` | excluded |
+| `MERCURY_HOME/tmp/` | op | 0700 | — | none | Coordinator scratch | excluded |
+| **Logs** `~/Library/Logs/Mercury/` | op | 0700 / files 0600 | — | none | `mercuryd.jsonl`, `audit.jsonl` projection, `launchd.*.log` | included |
+| `~/Library/LaunchAgents/com.usjbro.mercury.plist` | op | 0644 | — | read (world) | LaunchAgent | included |
+| **`WORK_ROOT`** = `/Users/Shared/MercuryWork/` | op:mercury | 0750 | — | traverse, list | Space-free work root | **excluded** (rebuildable) |
+| `WORK_ROOT/ctl/coordinator.alive` | op:mercury | 0640 (dir 0750) | — | read | Supervisor lease (§3.8) | excluded |
+| `WORK_ROOT/mirrors/<owner>__<repo>.git/` (`core.sharedRepository=0640`) | op:mercury | dirs 0750, files 0640 | — | read objects and refs | Bare mirror; coordinator commits and pushes here (RD-17) | excluded |
+| `WORK_ROOT/mirrors/…/worktrees/<name>/` (linked-worktree admin: `HEAD`, `index`) | op:mercury | 0750 / 0640 | — | read | git admin data | excluded |
+| `WORK_ROOT/worktrees/<owner>__<repo>/<issue-lower>-<ulid8>/` | op:mercury | 2770 | ACL | read/write (Codex, `verify`, `deps_install`) | Task worktree. Directory name is local only; branch naming is B's (RD-9) | excluded |
+| `WORK_ROOT/snapshots/<tree_sha>/` | op:mercury | dirs 0555, files 0444 | — | read | Git-object snapshots for Claude (RD-7, ADR-017) | excluded |
+| `WORK_ROOT/codex-home/<task_id>/` | op:mercury | 2770 | ACL | read/write | Per-task `CODEX_HOME` (RD-15). `config.toml` op 0640, regenerated and byte-verified before every run; `sessions/` agent-writable; archived at task cleanup | excluded |
+| `WORK_ROOT/runs/<run_id>/` | op:mercury | 0750 | — | read | Per-run I/O | excluded |
+| `…/runs/<run_id>/spec.json`, `stdout.jsonl`, `stderr.log` | op:mercury | 0640 | — | read; stdout/stderr written only through inherited fds | Spawn contract, agent streams | excluded |
+| `…/runs/<run_id>/in/` | op:mercury | 0750 / files 0640 | — | read | Prompt envelope, wire-copy schema, Claude `settings.json` | excluded |
+| `…/runs/<run_id>/{ctl,tmp,out,claude-config}/` | op:mercury | 2770 | ACL | read/write | `ctl/proc.json`, `ctl/exit.json` (by `agent-exec`); `TMPDIR`; `final.json`; `CLAUDE_CONFIG_DIR` | excluded |
+| `WORK_ROOT/toolchains/<name>/<version>/`, `toolchains/agents/…`, `toolchains/agent.gitconfig` | op:mercury | dirs 0750, files 0640/0750 | — | read, execute | Pinned toolchains and agent CLIs (§3.9) | excluded |
+| `WORK_ROOT/quarantine/<task_id>/` | op:op | 0000 until inspected | — | none | Quarantined worktrees (RE-13). Inspect only with `mercury show --diff` | excluded |
+| `WORK_ROOT/archive/<task_id>/` | op:op | 0700 | — | none | Bundles and patches before upload to artifacts | excluded |
+| `/Users/_mercuryagent/` | agent:mercury | 0700 | — | owner | Agent `HOME`: caches only | n/a |
+| `/usr/local/libexec/mercury/` | root:wheel | 0755, files 0755/0644 | — | read, execute | Wrappers, helpers, `agent.conf`, Seatbelt profiles (§3.4) | n/a |
+| `/etc/sudoers.d/mercury` | root:wheel | 0440 | — | none | sudoers drop-in | n/a |
+| Managed Claude settings / Codex `requirements.toml` (OD-19) | root:wheel | 0644 | — | read | Paths per P0-048 (ASM-E-10) | n/a |
+
+`~/MercuryWork`, `~/Library/Mercury`, `/Users/Shared/mercury`, `~/Developer/mercury-worktrees` and `…/Application Support/Mercury/checkouts` are **withdrawn**. If the operator declines the agent uid (not the default), the same table applies with agents running as the operator in the sandbox-only interim mode (§3.11).
+
+### 7.2 Rules
+
+- Nothing under `~/Documents`, `~/Desktop`, `~/Downloads`, iCloud Drive or removable volumes (TCC [S23]); `/Users/Shared` is not TCC-protected (ASM-D-31, P0-044). `mercury doctor` refuses paths that resolve elsewhere.
+- Modes under `WORK_ROOT` are set explicitly at creation (`open(…, mode)` + `fchmod`), never inherited from the daemon's umask.
+- Atomic writes: `open(O_CREAT|O_EXCL)` → write → `fsync` (`F_FULLFSYNC` for durability-relevant files, §14.2) → `rename` → directory `fsync`.
+- Control socket: 0600 in a 0700 directory, path ≤ 103 bytes (macOS `sun_path`), peer-uid check (ASM-D-20). Principals and tokens are C's (components §5.2); presence-tier methods additionally need §9.5.
+- Codex's project-trust key, the `doctor` mode checks and the orphan sweep all derive from the `WORK_ROOT` constant (RE-19).
+
+### 7.3 Group ACL and its failure mode
+
+```text
+group:mercury allow list,search,add_file,add_subdirectory,delete_child,read,write,append,execute,delete,readattr,writeattr,readextattr,writeextattr,readsecurity,file_inherit,directory_inherit
 ```
-~/Library/Application Support/Mercury/          0700  MERCURY_HOME (state; Time Machine: included except db/ live files)
-├── app/
-│   ├── releases/<semver>/                      0700  immutable release tree (dist/, node_modules/, package-lock.json, SHA256SUMS)
-│   └── current -> releases/<semver>            symlink, switched atomically (§13)
-├── runtime/node-v24.x.y-darwin-arm64/          0700  pinned Node, verified by SHA-256 against nodejs.org SHASUMS256
-├── tools/                                       0700  pinned agent CLIs (optional; else absolute paths to user installs)
-│   ├── codex/<version>/bin/codex
-│   └── claude/<version>/bin/claude
-├── config/mercury.toml                          0600  non-secret config (repos, limits, Keychain item names)
-├── db/                                          0700  TM-EXCLUDED (live WAL files are inconsistent mid-copy)
-│   ├── mercury.db  mercury.db-wal  mercury.db-shm   0600
-├── backups/                                     0700  TM-INCLUDED; VACUUM INTO snapshots (§14)
-│   ├── daily/  weekly/  pre-upgrade/  quarantine/
-├── artifacts/sha256/<aa>/<hash>                 0600  immutable content-addressed artifacts (plans, reviews, test reports)
-├── runs/<run_id>/                               0700  per-run prompt, stdout.jsonl, stderr.log, output.json, codex_home/
-├── run/                                         0700  volatile runtime files
-│   ├── mercuryd.sock                            0600  control socket (CLI ⇄ daemon)
-│   ├── heartbeat.json                           0600  rewritten every 30 s (atomic rename)
-│   ├── fatal.json                               0600  present only after a deliberate halt
-│   ├── starts.log                               0600  start timestamps for the crash-loop guard
-│   └── ballast                                  0600  64 MiB reserve file, deleted on disk-full (§10.4)
-└── tmp/                                          0700  TMPDIR for children (per-run subdirs)
 
-~/Library/Mercury/                               0700  WORK ROOT (no spaces; TM-EXCLUDED)
-├── mirrors/<owner>__<repo>.git                  bare mirror per target repo (fetch only)
-└── worktrees/<owner>__<repo>/<task-short>-<slug>/  linked worktree per task (`git worktree add`)
+Applied with `chmod +a` to the ACL-marked directories in §7.1. New files created by either uid inherit it, so the coordinator can read, commit, reset, clean and remove agent-written files, and the agent (umask 0007) can write in its directories.
 
-~/Library/Logs/Mercury/                          0700
-├── mercuryd.jsonl  mercuryd.<n>.jsonl.gz        0600  structured logs, rotated in-process
-├── audit.jsonl                                  0600  append-only audit projection (Agent C/E own semantics)
-└── launchd.stdout.log  launchd.stderr.log       0600
-```
+An agent can strip ACLs (`chmod -N`) or `chmod 600` files it owns. The coordinator's commit read then fails closed: the run is classified `policy_violation`, the task goes to `BLOCKED(security_policy_violation)`, and `agent-ctl fix-acl` / `purge` are used during the operator-approved resume. Nothing unreadable can be committed or pushed.
 
-Rules:
-- **Nothing under `~/Documents`, `~/Desktop`, `~/Downloads`, iCloud Drive or removable volumes** (TCC [S23]). `mercury doctor` refuses a config whose paths resolve there.
-- The work root is space-free on purpose (ASM-D-12). The `owner__repo` encoding avoids nested `/`. The worktree directory name keeps the Linear identifier so humans can find it (e.g. `JAM-204-wifi-retry`).
-- `runs/<run_id>/codex_home/` is a **per-run `CODEX_HOME`**. It holds a copied minimal `config.toml` and no `auth.json` (auth comes from `CODEX_API_KEY`). This sidesteps the unverified safety of parallel runs sharing one `CODEX_HOME` (runtime discovery §3.6). It is deleted with the run directory.
-- Bare mirrors are owned by the coordinator. Codex only sees a linked worktree, whose `.git` is a file pointing into `mirrors/…/worktrees/<name>`. That path is protected by Codex's sandbox, so the **coordinator performs commits** (runtime discovery finding 7).
-
-### 7.2 Permissions
-
-| Object | Mode | Enforcement |
-|---|---|---|
-| All directories above | `0700` | Created by the installer. Umask 0077 for everything created later. `mercury doctor` verifies and repairs (`chmod`), and never loosens. |
-| All files | `0600` | Umask; atomic writes use `open(O_CREAT|O_EXCL, 0600)` then `rename` |
-| Plist | `0644` | launchd requirement (ASM-D-02). Contains no secrets. |
-| Control socket | `0600` + peer-uid check (`getpeereid` equivalent; ASM-D-20) | Only the operator's uid may connect |
-| Path length | Socket path ≤ 103 bytes (macOS `sun_path` limit) | The installer checks this. Fallback: `/tmp/mercury-<uid>/mercuryd.sock` (0700 dir). |
+**Seatbelt is the second layer.** Codex's writable roots are the worktree plus `runs/<run_id>/{tmp,out}` (and `codex-home/<task_id>/sessions`), so model-generated commands cannot forge `ctl/exit.json` or touch another run, even though they share the uid with `agent-exec`. A sandbox escape could overwrite another run's group-writable files; the coordinator therefore copies `out/final.json` to the artifact store at run end and records its hash, and it validates outputs against its own copy of `stdout.jsonl` (residual risk recorded by E).
 
 ---
 
@@ -394,291 +620,254 @@ Rules:
 
 ### 8.1 Policy
 
-1. **Never fight the operator.** Lid close, Apple-menu sleep, low battery and scheduled sleep always win. MERCURY never uses `caffeinate -s`, `-d`, `pmset` changes or `sudo` by default.
-2. **Prevent idle sleep only while agent runs are active.** When the active-run count goes 0→1, spawn `/usr/bin/caffeinate -i -w <mercuryd pid>` in mercuryd's process group. When it goes 1→0, SIGTERM it. Because of `-w`, the assertion ends by itself if mercuryd dies [S21m], and launchd group cleanup is a second guarantee. The assertion appears in `pmset -g assertions` (ASM-D-11).
-3. Optional config `power.prevent_system_sleep_on_ac = false` (default). When it is true, `-s` is used instead of `-i`, which keeps a desktop or clamshell Mac awake on AC while runs are active. Lid close still sleeps a laptop that is not in clamshell mode.
-4. **Correctness never depends on being awake.** Every waiting state uses persisted deadlines that are re-evaluated on wake (§8.3).
+1. **Never fight the operator.** Lid close, menu sleep, low battery and scheduled sleep always win. No `pmset` changes; no `sudo`.
+2. **Prevent idle sleep only while runs are active**: `/usr/bin/caffeinate -i -w <mercuryd pid>` on 0→1 active runs, SIGTERM on 1→0 (ASM-D-11). With `power.prevent_system_sleep_on_ac = true`, `-s` is used instead.
+3. **Correctness never depends on being awake.** Sleep gaps are not credited to run budgets; waits use persisted deadlines re-evaluated on wake.
 
-### 8.2 Detecting sleep and clock changes
+### 8.2 Clocks
 
-Discovery §4.4 assumed that Node's monotonic clock pauses during sleep. **That is wrong for current Node:** libuv's macOS `uv__hrtime` returns `mach_continuous_time()`, which keeps counting during sleep [N1, N2]. `process.hrtime.bigint()` and `performance.now()` therefore advance across sleep just like `Date.now()`. The design uses two separate detectors instead:
-
-| Signal | Detector | Meaning |
-|---|---|---|
-| **Suspension gap** | A 5 s `setInterval` "tick" records `mono = process.hrtime.bigint()`. If `mono_now − mono_prev > 30 s`, the process did not run for that long: system sleep, SIGSTOP, or severe starvation. | `suspended_ms = gap − 5 s` |
-| **Sleep confirmation** | `sysctl -n kern.sleeptime kern.waketime` (ASM-D-13). A `waketime` later than the previous tick means a real system sleep. | Distinguishes sleep from starvation |
-| **Wall-clock jump** | `drift = (wall_now − wall_prev) − (mono_now − mono_prev)`. Both clocks advance in sleep, so `|drift| > 2 s` means the wall clock was stepped (NTP correction, manual change, time zone does not matter because UTC is used). | Clock adjustment; see `recovery.md` FM-15 |
-
-ASM-D-14: the Node version shipped on the Mac bundles a libuv with the `mach_continuous_time` behaviour (it was introduced around libuv 1.38.1 [N2]). Phase 0 experiment E2 confirms it. If the clock turns out to pause, the suspension detector still works unchanged, and the wall-versus-monotonic difference becomes a second sleep signal.
+On macOS, Node's monotonic clock (`mach_continuous_time` in libuv) **continues during sleep** [N1, N2]. The normative credited-time algorithm is C's (components §10.10): credited = `min(Δmono, Δwall, 3 × tick)` per tick; a gap above `clock.sleep_gap_s` not explained by a measured blocking operation is a sleep gap, confirmed by `sysctl kern.waketime`; `|Δwall − Δmono| > clock.wall_jump_s` is a wall-clock step. The algorithm is correct whether or not the monotonic clock pauses. Blocking work (backups, `integrity_check`) runs in a worker thread so it cannot fake a gap (§14.1, RD-17).
 
 ### 8.3 Deadline semantics
 
-| Deadline kind | Clock | On sleep gap |
+| Deadline | Clock | On a sleep gap |
 |---|---|---|
-| Agent run whole-run budget (`deadline_awake_ms`) | **Awake time**: `awake_ms_used += tick_delta` only for ticks without a suspension gap. Persisted every 30 s. | The sleep does not count. The run gets its full budget. |
-| Stall timeout (no stdout growth) | Awake time, with the clock **reset at wake** | After wake, a run gets `post_wake_grace = 5 min` to produce output before stall handling |
-| Waiting on external parties (CI checks, human approval reminders, Claude review SLA) | Wall clock, persisted as absolute UTC `due_at` | Evaluated on wake. Reminders that fell due during sleep are **coalesced** into one notification (no burst). |
-| Installation token expiry (GitHub, 1 h) | Wall clock | Re-minted lazily if `expires_at − now < 5 min` |
-| Retry backoff timers | Wall clock `next_attempt_at` | Fire on wake if due; jitter added so no thundering herd |
+| Run budget, stall | Awake (credited) | Not credited; stall clocks frozen during `wake.grace_s` |
+| Supervisor lease (`agent-exec`) | Awake (credited by `agent-exec` itself) | Not credited, so sleep never kills a run |
+| External waits (CI, human, reminders) | Wall, persisted `due_at` | A timer fires only after at least one attempt of the awaited action was made after the latest wake (state-machine §7.3, RD-14). Due reminders are coalesced into one summary notification. |
+| Installation tokens | Wall | Re-minted `github.token_refresh_before_expiry_min` before expiry and at wake |
+| Retry backoff | Wall `next_attempt_at` | Fire on wake if due, with jitter |
 
 ### 8.4 Wake procedure
 
-On a suspension gap > 30 s (sleep confirmed or not):
-
-1. Log `wake.detected {suspended_ms, sleeptime, waketime}`. Increment `mercury_sleep_events`.
-2. Pause dispatch of **new** runs. Existing children keep running: they were suspended too and resume on their own.
-3. **Connectivity gate** (§8.5): wait until `api.github.com` and `api.linear.app` are reachable (HEAD probes with backoff 2 s → 60 s cap). The agent APIs (Anthropic, OpenAI) are probed only if runs are active.
-4. Re-mint the GitHub installation token if it expires within 5 min.
-5. Reset the stall clocks of active runs and start the 5-min post-wake grace (§8.3).
-6. Run the **reconcile pass** (the same procedure as startup steps 10–13 in `recovery.md` §4, without the process-reaping steps): re-poll GitHub (conditional requests) and Linear (`updatedAt` cursor with a 10-min overlap). Process coalesced wall-clock deadlines.
-7. Resume dispatch. Log `wake.recovered {duration_ms}` (REL-13).
+1. Sleep gap detected (or the power helper reports `did_wake`): log `wake.detected {suspended_ms, waketime, wake_type}`; set the `host_sleep_grace` hold for `wake.grace_s`.
+2. Reset the HTTP keep-alive pool (undici) so dead sockets are not reused.
+3. **Connectivity gate** (§8.5). Re-mint installation tokens.
+4. Reconcile (same as `recovery.md` §4 steps 15–17, without process steps): conditional GitHub requests, Linear with `linear.poll_overlap_s` after wake. Coalesce due reminders and expiries into one summary notification.
+5. **Dark-wake rule (RD-16).** No new run is dispatched until either the power helper reports a **full wake** (display/graphics capability present, `wake_type = full`) or `wake.dark_wake_min_awake_s` of continuous credited awake time has elapsed. Polling and reconciliation may run during dark wake; dispatch may not.
+6. Resume dispatch; log `wake.recovered {duration_ms}`.
 
 ### 8.5 Connectivity loss
 
-- **Detection:** an outbound call fails with a DNS, connect or timeout error class. Two consecutive failures across ≥ 2 hosts → `net.state = offline`. Probes use HEAD `https://api.github.com/zen`-style lightweight endpoints, rate-limited to one per 15 s while offline.
-- **While offline:**
-  - No new agent runs are dispatched. Agent runs need model APIs, and coordinator side effects would queue up.
-  - Active runs continue. They may fail on their own network errors, which are classified `environment` and do not consume the task's retry budget (max 3 environment retries per run step).
-  - Outbound side effects stay in the side-effect journal as `pending` (`recovery.md` §3).
-  - Polling stops. Heartbeats to remote watchdogs obviously fail. That is expected, and the watchdog's threshold is longer than typical outages.
-- **On recovery:** run steps 4–7 of the wake procedure. Every journal entry that was `in_flight` when the network dropped is **reconciled before retry** (did the push or PR actually land?).
-- **Captive portals and proxies:** a probe that returns a non-GitHub TLS certificate or HTML fails TLS validation and counts as offline. TLS verification is never disabled.
+- **Detection:** authenticated, ETag-conditional probes only (GitHub: conditional `GET` of an already-polled resource with the read token; Linear: the cheapest authenticated query). No unauthenticated GitHub requests (RB-10). A failed probe sets the `network_down` hold (state-machine §5); it clears after `net.stability_s` of successful probes.
+- **Accounting:** network-class failures never consume run or outbox attempts while `network_down` is held or when a probe fails within `net.error_probe_window_s` of the error. Only non-network errors count toward `dead`. The retry matrix itself is github.md §15 (RD-18). There is no `BLOCKED(network)`.
+- **While offline:** no new dispatch that needs a model API; active runs continue and may end as `network_down` (no attempt consumed); outbox items stay `pending`; the remote heartbeat is skipped.
+- **Captive portals and TLS interception** fail TLS validation and count as offline. TLS verification is never disabled.
+
+### 8.6 Power helper (`mercury-power`)
+
+A small signed Swift binary in `/usr/local/libexec/mercury/` (root-owned file, runs as the operator as a child of `mercuryd`; OD-D-04 default yes):
+
+- Registers with `IORegisterForSystemPower` and `IOPMConnectionCreate` (capability changes).
+- **Will sleep** (`kIOMessageSystemWillSleep`): sends `will_sleep` on its stdout pipe; `mercuryd` flushes in-memory progress, checkpoints the WAL, writes `run/heartbeat.json` and the remote heartbeat with `mode: sleeping` (best effort within `power.will_sleep_budget_s`), then acknowledges; the helper calls `IOAllowPowerChange` on the acknowledgement or at the budget.
+- **Can sleep** (idle sleep request): always allowed; MERCURY uses `caffeinate` assertions instead of vetoing.
+- **Did wake**: reports `wake_type = full` when the graphics/display capability is present, else `dark`.
+- If the helper is missing or dies twice in 10 min, `mercuryd` falls back to gap detection only, uses the dark-wake time rule, and the watchdog uses `watchdog.stale_awake_min` regardless of sleep (more false alerts; `doctor` warns).
 
 ---
 
-## 9. Credentials and environment
+## 9. Credentials, environment and human presence
 
-### 9.1 Inventory
+### 9.1 Credential inventory (single source)
 
-| Credential | Keychain service (`-s`) | Account (`-a`) | Used by | Format |
+All items are generic passwords in the operator's **login Keychain**, service prefix **`com.usjbro.mercury.`**, account `mercury`, created with an ACL that trusts only the signed `mercury-keychain` helper (§9.2). The prefixes `dev.mercury.*` and others are withdrawn.
+
+| Keychain service | Secret | Used by | Delivery | Rotation and expiry |
 |---|---|---|---|---|
-| GitHub App private key | `com.usjbro.mercury.github-app-key` | `mercury` | mercuryd only (JWT signing) | Base64 of the PEM (single line) |
-| GitHub App ID / installation ID | — (config, not secret) | — | mercuryd | `mercury.toml` |
-| Linear API key (team-scoped) or OAuth app token | `com.usjbro.mercury.linear` | `mercury` | mercuryd only | Opaque string |
-| Anthropic API key (Claude runs) | `com.usjbro.mercury.anthropic` | `mercury` | Claude child (env, per run) | Opaque string |
-| OpenAI / Codex API key | `com.usjbro.mercury.codex` | `mercury` | Codex child (`CODEX_API_KEY`, per run) | Opaque string |
-| Watchdog ping URL (optional, §11.6) | `com.usjbro.mercury.healthcheck` | `mercury` | mercuryd | URL (contains a token) |
+| `com.usjbro.mercury.github-bot-key` | **`mercury-bot`** GitHub App private key (base64 PEM). Permissions per RD-6: `contents:write`, `pull_requests:write`, `checks:write`, `metadata:read` (+ `statuses:write` only if RD-5's pinning test requires it) | `mercuryd` github-auth | In memory; mints per-purpose installation tokens (github.md §3) | Yearly or on suspicion (`recovery.md` RB-06) |
+| `com.usjbro.mercury.github-ops-key` | **`mercury-ops`** GitHub App private key: `issues:write` on `project-mercury`, `contents:write` on the private anchor repo, `metadata:read` on targets | `mercuryd` (heartbeat, ops alerts, daily anchor, ruleset drift reads) | In memory | Yearly or on suspicion |
+| `com.usjbro.mercury.linear-client-secret` | Linear OAuth app client secret (client-credentials grant → `actor=app` token, linear.md §2) | `mercuryd` linear-auth | In memory; app token in memory only, refreshed before its expiry | On suspicion; app token ~30 d (ASM-B-30) |
+| `com.usjbro.mercury.linear-refresh-token` | Only if the authorization-code fallback is used (ASM-B-31) | `mercuryd` | In memory; **the only item `mercuryd` writes**, on refresh rotation | Per Linear |
+| `com.usjbro.mercury.anthropic` | Dedicated Anthropic workspace API key with spend limit (OD-03) | Claude runs | fd 3 → `ANTHROPIC_API_KEY` in the agent | On suspicion; vendor limits |
+| `com.usjbro.mercury.claude-oauth` | Only if OD-03 selects a `claude setup-token` subscription token | Claude runs | fd 3 → `CLAUDE_CODE_OAUTH_TOKEN` | Expiry recorded at creation; `ops.credentials` alert 14 d before |
+| `com.usjbro.mercury.openai` | Dedicated OpenAI project key with spend limit (OD-04) | Codex runs | fd 3 → `CODEX_API_KEY` | On suspicion |
+| `com.usjbro.mercury.audit-hmac` | `k_auth` for `record_mac` (SEC-603, SHOULD) | `mercuryd` | In memory | Never rotated in place; loss handled in §14.4 (escrow OD-D-07) |
+| `com.usjbro.mercury.healthcheck` | Optional external dead-man's-switch ping URL (OD-D-06) | `mercuryd` | In memory | On suspicion |
 
-Which auth mode is used for each agent (API key versus subscription) is an operator decision (runtime discovery §8). The table assumes API keys, which work with `--bare` and do not expire unattended.
+Not in the Keychain: GitHub App IDs, installation IDs and the Linear client id (config, not secret); control-socket tokens (files under `run/tokens/`, C). The operator's own `gh`, SSH and Linear credentials are **never** read by MERCURY.
 
 ### 9.2 Creating items (operator, once per credential)
 
 ```sh
-# Prompts for the secret (-w as LAST option → interactive prompt, nothing in shell history or argv)
-security add-generic-password -U -s com.usjbro.mercury.anthropic -a mercury \
-  -l "MERCURY Anthropic API key" -T /usr/bin/security -w
-
-# GitHub App key: base64 the PEM, then paste at the prompt; shred the download afterwards
-base64 -i ~/Downloads/mercury-app.private-key.pem | pbcopy
-security add-generic-password -U -s com.usjbro.mercury.github-app-key -a mercury \
-  -l "MERCURY GitHub App private key" -T /usr/bin/security -w
-rm -P ~/Downloads/mercury-app.private-key.pem   # -P is ignored on APFS; delete anyway, empty Bin
-pbcopy < /dev/null
+H=/usr/local/libexec/mercury/mercury-keychain
+# -w as the LAST option prompts for the secret: nothing in argv or shell history.
+security add-generic-password -U -s com.usjbro.mercury.openai -a mercury \
+  -l "MERCURY OpenAI project key" -T "$H" -w
+# App keys: base64 the downloaded PEM, paste at the prompt, then delete the download.
+base64 -i ~/Downloads/mercury-bot.private-key.pem | pbcopy
+security add-generic-password -U -s com.usjbro.mercury.github-bot-key -a mercury \
+  -l "MERCURY mercury-bot App private key" -T "$H" -w
+rm ~/Downloads/mercury-bot.private-key.pem; pbcopy < /dev/null
 ```
 
-ACL tradeoff (Agent E owns the final call):
-- `-T /usr/bin/security` lets any process of this user that runs `security` read the item while the keychain is unlocked. That is the same trust boundary as the user account itself.
-- Agent children are the realistic threat. Mitigations:
-  - (a) The Claude review role gets no Bash.
-  - (b) Codex runs inside Seatbelt. Phase 0 experiment E5 must show that `security find-generic-password … -w` **fails inside `codex exec --sandbox workspace-write`** (ASM-D-21).
-  - (c) The children's env never contains item names or MERCURY_HOME.
-- v2 option: a signed `mercury-keychain` helper as the only trusted application. Caveat: ACLs bind to the code signature, so a re-signed helper prompts once.
+- Trusting only the signed helper means any other process (including `/usr/bin/security` run by the operator's interactive tools) gets a visible macOS prompt instead of silent access (RE-29). A re-signed helper prompts once per item after an upgrade (expected; documented in RB-07).
+- Fallback if P0-036 shows the helper ACL is unworkable: `-T /usr/bin/security`, recorded as an accepted risk (ASM-E-08).
 
-### 9.3 How mercuryd reads secrets
+### 9.3 Read-once semantics
 
-- At start, and on `mercury reload-credentials`, mercuryd spawns `/usr/bin/security find-generic-password -s <svc> -a mercury -w` **with no secret in argv** and reads stdout over a pipe. Timeout 10 s.
-- Exit code 44 means the item was not found. `errSecInteractionNotAllowed` (-25308, keychain locked or ACL prompt) causes a retry every 5 min plus a local notification (`recovery.md` FM-08).
-- Secrets live only in memory, wrapped in a `Secret` type whose `toJSON` and `inspect` return `"[REDACTED]"`. They are never written to the DB, logs, artifacts or crash dumps. Node is started without `--inspect`, and `--report-on-fatalerror` is not enabled because reports include the environment.
-- **GitHub:** mercuryd signs a 9-minute JWT (RS256, `node:crypto`) → `POST /app/installations/{id}/access_tokens` with the minimal `permissions` and `repositories` body → caches the 1 h token in memory → re-mints 5 min before expiry.
-- **git push credential:** git is run with `-c credential.helper= -c credential.helper=!<abs path>/mercury-git-cred`. The helper connects to `run/mercuryd.sock` and presents a one-time nonce from env `MERCURY_CRED_NONCE`, and the daemon returns `username=x-access-token / password=<token>`. The token never appears in argv, config files or a long-lived env (ASM-D-22; Agent B owns the push design).
+- At start and on `mercury reload-credentials`, `mercuryd` spawns `mercury-keychain read <service>` per item and reads the value from a pipe (timeout `helper.timeout_s`). Nothing is ever read on demand, so "lock keychain when sleeping" cannot break a running daemon.
+- Missing item → the dependent integration is disabled (`config_fatal` for that integration); locked keychain (`errSecInteractionNotAllowed`, −25308) → `keychain_locked` hold, retry every `credentials.locked_retry_s`, `ops.credentials` alert after `credentials.locked_alert_min`.
+- Values live only in memory in a `Secret` type (`toJSON`/`inspect` → `"[REDACTED]"`), registered with the redactor for exact-match scrubbing. Never written to the DB, logs, artifacts, `spec.json` or crash reports. Node runs without `--inspect` and without `--report-on-fatalerror`.
+- `mercury reload-credentials` swaps values atomically; runs already started keep the key they received on fd 3.
+- **Git push credential (RD-17):** pushes happen from the mirror; `GIT_ASKPASS` points to a coordinator helper that reads the push token from an inherited fd. There is no socket credential helper (RD-20).
 
-### 9.4 Per-child environment allowlist
+### 9.4 Per-kind environment allowlist
 
-`process.env` is never inherited. Each child gets exactly:
+Nothing is inherited: `agent-exec` builds the environment from `spec.json` (sudo `env_reset`), and coordinator git children get an explicit environment.
 
-| Variable | Codex child | Claude child | git (coordinator) |
-|---|---|---|---|
-| `PATH` | `/usr/bin:/bin:/usr/sbin:/sbin` + pinned toolchain dirs from repo config (e.g. a pinned Node for tests) | `/usr/bin:/bin` | `/usr/bin:/bin` |
-| `HOME` | real home (ASM-D-23: some tools need it) | real home | real home |
-| `TMPDIR` | `MERCURY_HOME/tmp/<run_id>/` | same | — |
-| `LANG`, `LC_ALL` | `en_US.UTF-8` | same | same |
-| `CODEX_HOME` | `runs/<run_id>/codex_home` | — | — |
-| `CODEX_API_KEY` | ✓ (per run) | — | — |
-| `ANTHROPIC_API_KEY` | — | ✓ (or via `apiKeyHelper`, Agent B) | — |
-| `DISABLE_AUTOUPDATER` / `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` | — | `1` (ASM-D-24) | — |
-| `MERCURY_RUN_ID` | ✓ (non-secret, used for orphan matching) | ✓ | — |
-| `GIT_TERMINAL_PROMPT=0`, `GIT_CONFIG_NOSYSTEM=1`, `MERCURY_CRED_NONCE` | — | — | ✓ |
-| **Never** | `GITHUB_TOKEN`, `GH_TOKEN`, `LINEAR_API_KEY`, `ANTHROPIC_API_KEY`, `SSH_AUTH_SOCK`, `MERCURY_HOME`, any `*_TOKEN` | `CODEX_API_KEY`, GitHub/Linear tokens, `SSH_AUTH_SOCK` | agent keys |
+| Variable | Codex kinds | `verify` / `deps_install` | `claude` | Coordinator git |
+|---|---|---|---|---|
+| `PATH` | toolchain dirs (§3.9) + `/usr/bin:/bin` | same | `/usr/bin:/bin` | `/usr/bin:/bin` |
+| `HOME` | `/Users/_mercuryagent` | same | same | operator home |
+| `TMPDIR` | `runs/<run_id>/tmp/` | same | same | `MERCURY_HOME/tmp/` |
+| `LANG`, `LC_ALL` | `en_US.UTF-8` | same | same | same |
+| `CODEX_HOME` | `WORK_ROOT/codex-home/<task_id>` | — | — | — |
+| `CLAUDE_CONFIG_DIR` | — | — | `runs/<run_id>/claude-config` | — |
+| `GIT_CONFIG_GLOBAL` | `WORK_ROOT/toolchains/agent.gitconfig` | same | — | `/dev/null` |
+| `GIT_CONFIG_NOSYSTEM`, `GIT_TERMINAL_PROMPT=0` | ✓ | ✓ | — | ✓ |
+| `MERCURY_RUN_ID` | ✓ (non-secret) | ✓ | ✓ | — |
+| `DISABLE_AUTOUPDATER`, `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` | — | — | `1` (ASM-D-24, ASM-E-12) | — |
+| Secret from fd 3 | `CODEX_API_KEY` | **none** | `ANTHROPIC_API_KEY` (or `CLAUDE_CODE_OAUTH_TOKEN`) | push token via askpass fd |
+| **Never** | any `*_TOKEN`, `GH_*`, `LINEAR_*`, `SSH_AUTH_SOCK`, `MERCURY_HOME`, the other vendor's key | any key | `CODEX_API_KEY`, GitHub/Linear tokens, `SSH_AUTH_SOCK` | agent keys |
 
-Codex shell commands get an additional filter through `shell_environment_policy` (inherit core + `include_only`), so even `CODEX_API_KEY` does not reach model-generated commands (runtime discovery §3.3; exact values ASM per runtime discovery unknown 5).
+The exact per-kind lists are B's (codex.md §6, claude.md §7.2); `agent-exec` compiles them as its allowlist.
+
+### 9.5 Human-presence helper (`mercury-presence`, RD-12 / ADR-019)
+
+- Signed Swift binary (root-owned file in `/usr/local/libexec/mercury/`, runs as the operator). It calls `LAContext.evaluatePolicy(.deviceOwnerAuthentication, localizedReason:)`, so the operator confirms with Touch ID or the login password.
+- **Flow.** A CLI request for an `operator-presence` method (`ack-merge`, security resume/unhalt, `adopt`, `grant`, `policy ack`, post-incident `unpause`, ruleset-emergency, restore-epoch acceptance) reaches `mercuryd`, which spawns the helper itself with a fixed reason template (`"MERCURY: <method> <task or scope>"`, no free text from GitHub or Linear) and a fresh nonce. Only an `ok` with the matching nonce on the helper's stdout, from the child `mercuryd` spawned, authorizes the method. A process running as the operator can therefore request but never complete the confirmation without the human.
+- Built with the hardened runtime and no `get-task-allow`, so same-uid processes cannot attach to it. Its SHA-256 is checked by `doctor`.
+- Works only in the Aqua session (ASM-D-34, P0-045). Without a GUI session, presence-tier methods fail with `presence_unavailable`; the operator uses the Mac directly.
 
 ---
 
 ## 10. Resource limits and concurrency
 
-### 10.1 Defaults (`mercury.toml`)
+### 10.1 Defaults
 
-```toml
-[concurrency]
-max_active_tasks          = 4    # tasks in non-terminal, non-waiting states
-max_codex_runs            = 1    # raise to 2 after Phase 0 E6 proves parallel CODEX_HOME safety + capacity
-max_claude_runs           = 2    # review/decision runs are lighter (no Bash, read-only)
-max_total_agent_runs      = 3
-max_runs_per_repo         = 1    # one Codex run per target repo at a time (shared mirror fetches, test ports)
+All values are §2.6 parameters. `limits.max_codex_runs = 1` because parallel spend and capacity are unverified, the bottleneck is human merge time (≈ 14.5 h PR-to-merge, integrations discovery), and Claude reviews may overlap with a Codex run.
 
-[resources]
-min_free_disk_gib_dispatch   = 15    # below: no new worktree / run
-min_free_disk_pct_dispatch   = 10
-min_free_disk_gib_hardstop   = 5     # below: pause all dispatch, alert, (eventually) interrupt runs at 2 GiB
-max_loadavg_per_cpu          = 1.5   # 1-min loadavg / ncpu above → defer new runs (not kill)
-defer_on_memory_pressure     = "warn" # kern.memorystatus_vm_pressure_level: 1 normal, 2 warn, 4 critical
-max_run_rss_gib              = 8     # whole process group RSS ceiling (sampled)
-max_worktree_gib             = 10    # du of worktree; above → fail run (classification: resource)
-max_runs_dir_gib             = 20    # prune oldest terminal run dirs above this
-
-[timeouts]
-codex_plan_awake_min         = 30
-codex_impl_awake_min         = 120
-claude_review_awake_min      = 20
-stall_min                    = 15
-post_wake_grace_min          = 5
-```
-
-Rationale for `max_codex_runs = 1`:
-- Parallel safety of Codex state, and the operator's API spend, are unverified.
-- One-at-a-time implementation matches today's workflow, and the bottleneck is human merge time (PR-to-merge ≈ 14.5 h; integrations discovery), not throughput.
-- Claude reviews may overlap with a Codex run.
-
-### 10.2 Admission check (before every run dispatch)
+### 10.2 Admission check (before every dispatch)
 
 ```ts
 function admit(run: PendingRun, s: SystemSnapshot): Admission {
-  if (s.mode !== 'normal') return defer('mode:' + s.mode);            // paused / safe / degraded
-  if (s.net.state !== 'online') return defer('offline');
-  if (s.disk.freeGiB < cfg.min_free_disk_gib_dispatch ||
-      s.disk.freePct < cfg.min_free_disk_pct_dispatch) return defer('disk');
-  if (s.loadavg1 / s.ncpu > cfg.max_loadavg_per_cpu) return defer('cpu');
-  if (s.memPressure >= levelOf(cfg.defer_on_memory_pressure)) return defer('memory');
-  if (countActive(run.agent) >= limitFor(run.agent)) return defer('slots');
-  if (run.kind === 'codex' && activeInRepo(run.repo) >= cfg.max_runs_per_repo) return defer('repo-slot');
-  if (s.circuit[run.agent] === 'open') return defer('circuit:' + run.agent); // see recovery FM-16
+  if (s.holdsBlocking(run)) return defer('hold:' + s.firstHold(run));         // state-machine §5 holds
+  if (!s.wake.fullOrSettled) return defer('dark_wake');                        // §8.4 step 5
+  if (s.disk.freeGiB < p['disk.dispatch_hold_gib'] ||
+      s.disk.freePct < p['disk.dispatch_hold_pct']) return defer('disk');
+  if (s.loadavg1 / s.ncpu > p['resources.max_loadavg_per_cpu']) return defer('cpu');
+  if (s.memPressure >= level(p['resources.defer_on_memory_pressure'])) return defer('memory');
+  if (s.countActive(run.executor) >= s.limitFor(run.executor)) return defer('slots');
+  if (run.lane === 'mutating' && s.activeMutatingInRepo(run.repo) >= p['limits.max_runs_per_repo']) return defer('repo_slot');
   return admitNow();
 }
 ```
 
-Deferral is not failure: the task stays in its state, and `deferred_reason` is shown by `mercury status`. Deferral lasting > 2 h for `disk` or `memory` raises one operator notification.
+Deferral is not failure: the task keeps its state; `mercury status` shows the reason; a disk or memory deferral longer than `deferral.notify_after_h` raises one notification.
 
-### 10.3 Monitoring active runs (every 15 s)
+### 10.3 Monitoring active runs
 
-- Liveness: `kill(pid,0)` plus a start-time match.
-- Output growth: the `stat` size of stdout.jsonl.
-- Group RSS: `ps -o rss= -g <pgid>` summed. Above `max_run_rss_gib` → SIGTERM the group, then SIGKILL after 10 s, and fail the run with class `resource`.
-- macOS does not reliably enforce `RLIMIT_AS`/`RLIMIT_DATA` (ASM-D-25), so this is sampling, not a hard limit.
+Every `run.liveness_poll_s`: `agent-ctl probe` (identity), `agent-ctl stats` (group RSS, CPU time) and `stat` of `stdout.jsonl`. Above `resources.max_run_rss_gib` → kill ladder via `agent-ctl signal`, class `crash` (detail `rss_cap`). macOS does not reliably enforce `RLIMIT_AS` (ASM-D-25), so this is sampling.
 
-### 10.4 Disk-space guard
+### 10.4 Disk guard
 
-- Before `git worktree add` and before each run: `statfs` on the work root and on MERCURY_HOME. Dispatch is refused below the thresholds.
-- `run/ballast` (64 MiB) is created at install. On `SQLITE_FULL` or `ENOSPC`, mercuryd deletes the ballast, which frees room to commit a `degraded:disk_full` state and the alert, then stops dispatch. The ballast is recreated when free space recovers above `min_free_disk_gib_dispatch`.
-- Cleanup order when free space is low (automatic, safe items only):
-  1. Terminal run directories older than 7 days.
-  2. Compressed logs beyond retention.
-  3. Worktrees of COMPLETED/CANCELLED tasks past retention.
-  4. `git gc --auto` on mirrors.
-  5. **Never** worktrees of non-terminal or FAILED tasks, backups, artifacts or the DB.
+- `statfs` on `WORK_ROOT` and `MERCURY_HOME` before `git worktree add` and before each run.
+- On `ENOSPC`/`SQLITE_FULL`: delete `run/ballast`, commit `low_disk` hold + alert, stop dispatch; recreate the ballast when space recovers above `disk.dispatch_hold_gib`.
+- Below `disk.interrupt_local_gib` interrupt `verify`/`deps_install`; below `disk.interrupt_codex_gib` interrupt Codex runs (worktree reset policy applies on retry, components §9).
+- Automatic cleanup (safe items only): terminal run directories past `runs.retention_d`; compressed logs past retention; archived worktrees of terminal tasks past retention (C §9.5); `git gc --auto` on mirrors. **Never**: worktrees of non-terminal or FAILED tasks, quarantine, backups, artifacts, the DB.
 
 ### 10.5 Log rotation
 
-- **In-process** (no `newsyslog`, which needs root to install `/etc/newsyslog.d` config).
-- `mercuryd.jsonl` rotates at 20 MiB or daily, whichever comes first. Up to 14 gzip generations are kept, with a 300 MiB total cap.
-- `runs/<id>/stdout.jsonl` is not rotated. It is capped at 200 MiB per run, and above that the daemon stops copying it into artifacts and records truncation.
-- launchd stdout/stderr files are truncated at start if > 5 MiB, keeping the last 1 MiB copied to `launchd.stderr.prev.log`.
+In-process (no `newsyslog`, which needs root). `mercuryd.jsonl` per `logs.*`. Run streams are capped by `run.stdout_cap_mib`. launchd stdout/stderr files are truncated at start if > 5 MiB, keeping the last 1 MiB.
+
+### 10.6 Host capacity input for TDD §23 (cost and throughput, RF-32)
+
+| Item | Value / source |
+|---|---|
+| Concurrent mutating agent runs | 1 Codex + 1 local (`verify`/`deps_install` are serialized with Codex per repo) |
+| Concurrent Claude runs | 2 |
+| Implementation run envelope | ≤ 120 min awake, ≤ 8 GiB group RSS, ≤ 10 GiB worktree |
+| Daily awake hours | From P0-004 (`pmset -g log`); planning assumption 8–10 h on a laptop |
+| Upper bound of implementation runs per day | `awake_hours × 60 / mean implement run minutes` (with 1 Codex slot); F combines with B's per-decision cost (claude.md §3.1) and OD-08 budgets |
 
 ---
 
 ## 11. Observability
 
-### 11.1 Structured log schema (`mercuryd.jsonl`, one JSON object per line)
+### 11.1 Structured log schema (`mercuryd.jsonl`)
 
 ```ts
 interface LogLine {
   ts: string;                  // RFC 3339 UTC with ms
   level: 'trace'|'debug'|'info'|'warn'|'error'|'fatal';
-  msg: string;                 // stable event name, dot-separated: 'run.started', 'wake.detected'
-  component: string;           // 'scheduler'|'supervisor'|'github'|'linear'|'db'|'power'|'recovery'|...
-  daemon_version: string;      // semver of app/current
-  boot_id: string;             // kern.bootsessionuuid (ties logs to a boot)
-  instance_id: string;         // ulid per daemon start
-  // correlation (present when applicable; names per baseline)
+  msg: string;                 // stable dot-separated event name: 'run.started', 'wake.detected'
+  component: string;           // 'scheduler'|'supervisor'|'github'|'linear'|'db'|'power'|'recovery'|'agent-ctl'|...
+  daemon_version: string;
+  boot_id: string;             // kern.bootsessionuuid
+  instance_id: string;         // ULID per daemon start
   task_id?: string; correlation_id?: string; causation_id?: string;
   run_id?: string; message_id?: string; auth_id?: string; plan_id?: string;
   issue?: string; repo?: string; pr?: number; dedup_key?: string;
-  // payload
-  data?: Record<string, unknown>;   // event-specific, passed through the redactor
-  err?: { class: FailureClass; code?: string; message: string; stack?: string };
+  data?: Record<string, unknown>;   // passed through the redactor
+  err?: { class: string; code?: string; message: string; stack?: string };  // class = C's failure classes (state-machine §7.1)
   duration_ms?: number;
 }
-type FailureClass = 'environment'|'network'|'rate_limit'|'auth'|'contract'|'resource'|'agent'|'internal'|'external_outage'|'conflict';
 ```
 
-- **Redaction:** a central redactor drops keys matching `/(token|secret|key|password|authorization|cookie)/i` and scrubs values matching known secret shapes (GitHub `ghs_`/`ghp_`/`github_pat_`, `sk-`, `lin_api_`, PEM blocks, JWT `eyJ…`). Every in-memory `Secret` value is also registered for exact-match scrubbing. Agent stdout copied into artifacts goes through the same redactor (Agent E owns the patterns).
-- **Levels:** `info` is the production default. `debug` can be switched on at runtime with `mercury log-level debug --for 30m`, and it reverts automatically.
-- **Retention:** logs 30 days (by size cap); `runs/` 30 days for terminal runs; **audit records and artifacts are kept for the life of the DB** (Agent C/E own audit).
+Redaction is E's pipeline (threat-model §8.4); every `Secret` value is registered for exact-match scrubbing. `info` is the default; `debug` is switchable at runtime for a bounded period.
 
-### 11.2 Key metrics (logged as `metric.*` lines every 5 min; no metrics server)
+### 11.2 Metrics (logged as `metric.*` every 5 min; no metrics server)
 
-`tasks_by_state`, `runs_active{agent}`, `runs_deferred{reason}`, `run_duration_ms{agent,kind}`, `poll_latency_ms{source}`, `rate_limit_remaining{source}`, `side_effects_pending`, `side_effects_reconciled`, `sleep_events`, `suspended_ms_total`, `disk_free_gib`, `db_size_mib`, `wal_size_mib`, `last_backup_age_h`, `circuit_state{dependency}`.
+`tasks_by_state`, `holds_active{kind}`, `runs_active{kind}`, `runs_deferred{reason}`, `run_duration_ms{kind}`, `poll_latency_ms{source}`, `rate_limit_remaining{source}`, `outbox_pending`, `outbox_reconciled`, `sleep_events`, `dark_wakes`, `credited_ms_total`, `lost_by_host_total`, `disk_free_gib`, `db_size_mib`, `wal_size_mib`, `db_commit_ms_p99`, `event_loop_lag_ms_p99`, `last_backup_age_h`, `last_anchor_age_h`, `circuit_state{dependency}`.
 
 ### 11.3 Health surfaces
 
-| Surface | Content | Works when daemon is down? |
+| Surface | Content | Works when the daemon is down? |
 |---|---|---|
-| `run/heartbeat.json` (every 30 s, atomic) | `{ts, instance_id, version, mode: normal|paused|safe|degraded, net, active_runs, active_tasks, awaiting_human, deferred, last_poll:{github,linear}, last_backup_at, oldest_pending_side_effect_s}` | Its age shows staleness |
-| `mercury status` | Heartbeat + read-only DB query (SQLite WAL readers do not block the writer): tasks by state, active runs with awake time and last output, deferrals, circuits | Yes (read-only DB), shows "daemon DOWN since …" |
-| `mercury doctor` | Checks: launchd job loaded and enabled; pid matches lease; Background Items allowed; dirs and permissions; TCC-safe paths; Keychain items present and readable (values not printed); Node/Claude/Codex/git versions match pins; `codex exec --help` flags present; DB `quick_check` (or `integrity_check` with `--full`); backup age; disk; orphan processes; worktree consistency (`git worktree list` vs DB); clock drift; heartbeat age; watchdog last-seen | Yes |
-| `launchctl print gui/$UID/com.usjbro.mercury` | launchd state, last exit status | Yes |
+| `run/heartbeat.json` (every `heartbeat.local_s`) | `{ts, instance_id, version, mode: normal|paused|safe|degraded|sleeping|stopped, net, active_runs, active_tasks, awaiting_human, deferred, holds, last_poll, last_backup_at, last_anchor_at}` | Its age shows staleness |
+| `mercury status` | Heartbeat + read-only DB (components §5.6) | Yes ("daemon DOWN since …") |
+| `mercury doctor` | launchd job loaded/enabled; BTM; §3.10 agent-uid checks; §7.1 modes; TCC-safe paths; Keychain items present (values not printed); Node/Codex/Claude/git versions and hashes; DB `quick_check` (or `integrity_check` with `--full`); backup age; anchor age; disk; orphan processes (`agent-ctl list`); worktree consistency; clock drift; heartbeat and watchdog state | Yes |
+| `launchctl print gui/$UID/com.usjbro.mercury` | launchd state, last exit | Yes |
 
-### 11.4 Alert classes (operational, not workflow)
+### 11.4 Operational alert kinds
 
-Workflow notifications (PR ready, plan escalation, …) are designed by others (brief §G). Operational alerts from this document:
+Channels follow the notification matrix (components §4.15; ADR-019): the **`mercury-ops`** issue in `project-mercury` for daemon, ops and security halts; local macOS notifications for credentials and disk. Workflow notifications are not listed here.
 
-| Alert | Trigger | Channel | Dedup |
-|---|---|---|---|
-| `ops.daemon_down` | Watchdog: heartbeat stale > 45 min while `active_tasks > 0` or `awaiting_human = false` with work queued | Watchdog workflow → GitHub issue comment @mentioning the operator (§11.6) | One open alert issue; re-notify every 24 h at most |
-| `ops.safe_mode` / `ops.fatal_halt` | Crash loop, DB corruption, migration refusal | GitHub ops issue (if network) + local macOS notification | Per instance |
-| `ops.credentials` | 401 / revoked / keychain locked > 15 min | Local notification + the **other** channel (Linear comment if GitHub auth failed, GitHub if Linear failed) | Per credential per 24 h |
-| `ops.disk` / `ops.memory` | Hard stop, or deferral > 2 h | GitHub ops issue | Per condition per 24 h |
-| `ops.backup_stale` | No verified backup in 48 h of awake time | GitHub ops issue | Per 72 h |
-| `ops.contract_break` | Agent CLI output contract failure, circuit opened | GitHub ops issue | Per agent version |
-
-"GitHub ops issue" means one long-lived issue in `usjbro/project-mercury` titled `MERCURY operations alerts`, with comments posted by the App and an @mention of the operator, so GitHub Mobile notifies. This needs the App to have `issues:write` on the MERCURY repo only (dependency on Agent B/E).
+| Alert | Trigger | Dedup |
+|---|---|---|
+| `ops.daemon_down` | Watchdog: heartbeat stale (§11.6) with `pending_work` | One open alert; re-notify every `watchdog.renotify_h` |
+| `ops.safe_mode` / `ops.fatal_halt` | §5.2 conditions | Per instance |
+| `ops.security_halt` | `security_halt` or `integrity_check_failed` set | Per halt epoch |
+| `ops.credentials` | Locked > `credentials.locked_alert_min`; 401 after re-mint; OAuth token expiry within 14 d | Per credential per 24 h |
+| `ops.disk` / `ops.memory` | Hard thresholds or deferral > `deferral.notify_after_h` | Per condition per 24 h |
+| `ops.backup_stale` | No verified backup in 48 h awake | Per 72 h |
+| `ops.anchor_overdue` | No anchor for `audit.anchor_overdue_h` awake | Per 24 h |
+| `ops.lost_by_host_cap` | `run.lost_by_host_cap` reached for a step | Per step |
+| `ops.agent_infra` | §3.10 check failure (`config_fatal` for agents) | Per cause per 24 h |
+| `ops.contract_break` | Agent output contract failure, circuit opened | Per agent version |
 
 ### 11.5 Local notifications
 
-`/usr/bin/osascript -e 'display notification "…" with title "MERCURY"'` from the LaunchAgent (ASM-D-06). The message text is fixed and contains no task content, which avoids injection through issue titles. Used for credential and disk alerts that may also block remote alerting.
+`/usr/bin/osascript -e 'display notification "…" with title "MERCURY"'` from the LaunchAgent (ASM-D-06). Fixed texts only; no task content.
 
-### 11.6 "Is the daemon itself alive?" — dead man's switch without inbound access
+### 11.6 Dead man's switch (watchdog)
 
-| Option | How | Pros | Cons | Verdict |
-|---|---|---|---|---|
-| **A. GitHub Actions scheduled watchdog** | mercuryd edits the body of a pinned "MERCURY heartbeat" issue in `project-mercury` every 5 min with JSON `{at, version, mode, active_tasks, awaiting_human}`. A workflow `on: schedule: '*/30 * * * *'` reads it with `GITHUB_TOKEN` (`issues: read`), and if it is stale and work is pending, comments on the ops issue with an @mention (`issues: write`). | No new vendor. Alerts arrive through GitHub Mobile. **Conditional alerting** (silent when nothing is pending, so overnight lid-close is not an alert). Free on public repos. | Scheduled runs can be delayed under load. **Scheduled workflows in public repos are disabled after 60 days without repository activity** [N3]. Issue edits may not count as "activity" (ASM-D-26). Adds `issues:write` on the MERCURY repo. ~288 issue edits a day. | **Recommended default.** Mitigate the 60-day rule: `mercury doctor` checks the workflow state via `GET /repos/{o}/{r}/actions/workflows/{id}` (`state: active`). A monthly MERCURY repo commit (release cadence) keeps it active. |
-| B. Healthchecks.io-style ping | mercuryd `GET`s a secret ping URL every 5 min. The service alerts by email or app when pings stop [N4]. | Simplest. Robust. Independent of GitHub. | New third-party service and account. The ping URL is a secret. Alerting is unconditional (laptop asleep overnight → alert) unless grace is set long (12 h) or the check is paused via its API. | **Optional add-on** (operator decision). Use a long grace (12 h) as a backstop for "silent for half a day". |
-| C. Linear-based | No scheduler in Linear | — | — | Reject |
-| D. Self-hosted runner / inbound probe | — | — | Violates no-inbound and discovery E2 | Reject |
-| E. iOS Shortcuts automation polling the heartbeat issue | Personal automation on the iPhone | No server | Fragile; iOS limits background automations | Reject |
+- `mercuryd` edits the body of a pinned "MERCURY heartbeat" issue in `project-mercury` every `heartbeat.remote_min`, using a `mercury-ops` installation token narrowed to `issues:write` on that repository. Body (non-secret, no counts, no task content):
 
-**Heartbeat issue body example** (written by the App; non-secret):
+  ```json
+  {"schema":"mercury.heartbeat.v1","at":"2026-10-12T21:05:00Z","mode":"normal","pending_work":true}
+  ```
 
-```json
-{"schema":"mercury.heartbeat.v1","at":"2026-10-12T21:05:00Z","version":"0.4.2","mode":"normal",
- "active_tasks":2,"active_runs":1,"awaiting_human":1,"pending_work":true}
-```
-
-Watchdog workflow logic (illustrative):
+  `pending_work = non-terminal tasks exist && !(all are waiting on the human) && mode ∉ {paused}`.
+- A scheduled workflow (`watchdog.schedule`) in `project-mercury` reads the issue with `GITHUB_TOKEN` (`issues: write`) and, when `pending_work` is true and the heartbeat is older than `watchdog.stale_awake_min` (mode ≠ `sleeping`) or `watchdog.stale_sleeping_h` (mode = `sleeping`), posts a **fixed-template** comment on the ops issue mentioning the operator, at most once per `watchdog.renotify_h` (marker comment).
+- **Hardening (RE-11):** both issues have conversations locked to collaborators; alert texts are templates; the runbook tells the operator to trust only App-badged comments from `mercury-ops` or `github-actions`.
+- **60-day rule:** scheduled workflows in public repositories are disabled after 60 days without repository activity [N3]; `mercury doctor` checks `GET /repos/{o}/{r}/actions/workflows/{id}` (`state: active`) with the `mercury-ops` token (ASM-D-26).
+- Optional external backstop (OD-D-06): Healthchecks-style ping with a 12 h grace.
 
 ```yaml
 name: mercury-watchdog
 on:
-  schedule: [{ cron: '7,37 * * * *' }]    # off-minute to dodge top-of-hour load
+  schedule: [{ cron: '7,37 * * * *' }]
   workflow_dispatch: {}
 permissions: { issues: write, contents: read }
 jobs:
@@ -687,39 +876,41 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/github-script@<pinned-sha>
+        env: { HB_ISSUE: '1', OPS_ISSUE: '2', AWAKE_MIN: '45', SLEEPING_H: '12' }
         with:
           script: |
-            const hb = JSON.parse((await github.rest.issues.get({...context.repo, issue_number: Number(process.env.HB_ISSUE)})).data.body);
+            const hb = JSON.parse((await github.rest.issues.get({...context.repo, issue_number: +process.env.HB_ISSUE})).data.body);
             const ageMin = (Date.now() - Date.parse(hb.at)) / 60000;
-            if (ageMin > 45 && hb.pending_work) {
-              // post once per 24h: check last comment marker before posting
-              await github.rest.issues.createComment({...context.repo, issue_number: Number(process.env.OPS_ISSUE),
-                body: `@usjbro MERCURY heartbeat stale for ${Math.round(ageMin)} min with pending work. <!-- mercury:watchdog:${new Date().toISOString().slice(0,10)} -->`});
+            const limit = hb.mode === 'sleeping' ? +process.env.SLEEPING_H * 60 : +process.env.AWAKE_MIN;
+            if (hb.pending_work && ageMin > limit) {
+              const marker = `<!-- mercury:watchdog:${new Date().toISOString().slice(0,10)} -->`;
+              const comments = await github.paginate(github.rest.issues.listComments, {...context.repo, issue_number: +process.env.OPS_ISSUE, per_page: 100});
+              if (!comments.some(c => c.body.includes(marker)))
+                await github.rest.issues.createComment({...context.repo, issue_number: +process.env.OPS_ISSUE,
+                  body: `@usjbro MERCURY heartbeat is stale (mode ${hb.mode}) with pending work. Check the Mac. ${marker}`});
             }
-        env: { HB_ISSUE: '1', OPS_ISSUE: '2' }
 ```
 
-`pending_work = active_tasks > 0 && !(all active tasks are waiting on the human)`. This keeps "PR waiting for your approval while the Mac sleeps" from producing noise.
+The thresholds in `env` are rendered from §2.7 by the installer.
 
 ---
 
-## 12. Graceful shutdown (SIGTERM / SIGINT / `mercury stop`)
+## 12. Graceful shutdown (SIGTERM, `mercury stop`, `daemon.shutdown`)
 
-Budget: **20 s** internal, `ExitTimeOut` 45 s. Installing a SIGTERM listener removes Node's default exit, so the handler must call `process.exit` [S28b].
+Budget `svc.shutdown_budget_s`; launchd `svc.exit_timeout_s`. Installing a SIGTERM listener removes Node's default exit, so the handler calls `process.exit` [S28b].
 
 | t (s) | Step |
 |---|---|
-| 0 | Set `mode = stopping`. Stop the scheduler (no new dispatch), the pollers and the backup job. Reject new control-socket mutations. Log `daemon.stopping {reason}`. |
-| 0–1 | Let in-flight **DB transactions** finish. Let in-flight **outbound HTTP side effects** finish, up to 5 s (their journal rows are already `in_flight`, so a cut-off call is reconciled at next start). |
-| 1 | **Codex runs: leave them running** if the reason is `bootout`/`kickstart`/upgrade (they re-attach, §3.3). Interrupt them if the reason is logout or shutdown. The daemon cannot tell logout from bootout through SIGTERM alone, so the **default is to interrupt**. `mercury restart --keep-runs` sets a flag file first. |
-| 1 | Interrupt: send SIGINT to Claude groups (clean turn end; runtime discovery: SIGTERM gives 143 and an unfinished turn) and SIGTERM to Codex groups (`process.kill(-pgid, …)`). |
-| 1–11 | Wait for groups to exit, polling every 250 ms. |
-| 11 | SIGKILL any group still alive. |
-| 12 | In one transaction: mark interrupted runs `interrupted` with `awake_ms_used`. Tasks **stay in their workflow state** (run-level, not task-level, failure). Write the `daemon.stopped` event. |
-| 13 | Kill `caffeinate`. `PRAGMA wal_checkpoint(TRUNCATE)`. Close the DB. Release the instance lease (`renewed_at = 0`). Final heartbeat (`mode: stopped`) to the file. A remote heartbeat is attempted with a 2 s timeout only. |
+| 0 | `mode = stopping`. Stop dispatch, pollers and the backup job. Reject new control-socket mutations. Log `daemon.stopping {reason}`. |
+| 0–1 | Let in-flight DB transactions finish; let in-flight outbox HTTP calls finish up to 5 s (their rows are `in_flight` and reconciled at next start). |
+| 1 | **Keep adoptable runs** (Codex, `verify`, `deps_install`): they continue under `agent-exec`, bounded by the supervisor lease. **Interrupt non-adoptable runs** (Claude, `git_step`): `agent-ctl signal --sig INT`. |
+| 8 | `agent-ctl signal --sig TERM` to non-adoptable runs still alive. |
+| 13 | `agent-ctl signal --sig KILL` to any still alive. |
+| 14 | One transaction: interrupted runs → C's status `cancelled` with class `cancelled_by_coordinator` (no attempt consumed); flush in-memory progress; write `daemon.stopped`. Tasks keep their states. |
+| 15 | Stop `caffeinate` and `mercury-power`. `PRAGMA wal_checkpoint(TRUNCATE)`. Close the DB. Final heartbeat file `mode: stopped`; remote heartbeat attempted with a 2 s timeout. Release the `flock` (process exit). |
 | ≤ 20 | `process.exit(0)` |
 
-A second SIGTERM during shutdown jumps straight to the t=11 step.
+A second SIGTERM jumps to t = 13. Exception: in safe mode or under `security_halt`, adoptable runs are interrupted too (§3.8).
 
 ---
 
@@ -727,77 +918,104 @@ A second SIGTERM during shutdown jumps straight to the t=11 step.
 
 ### 13.1 Release and install
 
-1. CI produces `mercury-<semver>.tgz` + `SHA256SUMS` + a build-provenance attestation (§15).
-2. `mercury upgrade <semver>`:
-   1. Downloads the release.
-   2. Verifies SHA-256 and `gh attestation verify` (operator's `gh`, optional).
-   3. Extracts to `app/releases/<semver>/`.
-   4. Runs `npm ci --omit=dev --ignore-scripts` from the bundled lockfile. Native modules are not used in v1, because `node:sqlite` is behind an interface; if `better-sqlite3` is ever adopted, it uses a prebuilt binary, verified.
-   5. Runs `node app/releases/<semver>/dist/selftest.js` (config parse, schema files, migration dry-run on a **copy** of the DB).
-3. The Node runtime is upgraded separately: new `runtime/node-<ver>/` + plist re-render + `bootout`/`bootstrap`. The old runtime is kept for rollback.
+1. CI produces `mercury-<semver>.tgz` + `SHA256SUMS` + a build-provenance attestation (§15). The release manifest also lists the SHA-256 of the wrappers and helpers.
+2. `mercury upgrade <semver>`: download → verify SHA-256 (and optionally `gh attestation verify` with the operator's own `gh`) → extract to `app/releases/<semver>/` → `npm ci --omit=dev --ignore-scripts` from the bundled lockfile → `selftest.js` (config parse, schema files, migration dry-run on a **copy** of the DB).
+3. The Node runtime is upgraded separately (`mercury runtime upgrade`: new `runtime/node-<ver>/`, plist re-render, `bootout`/`bootstrap`); the old runtime is kept for rollback.
 
-### 13.2 Upgrade procedure (atomic switch)
+### 13.2 Upgrade procedure
 
-```
+```text
 mercury upgrade 0.5.0
   1. preflight: doctor --quick; free disk ≥ 2× DB size + 1 GiB
-  2. drain: mode=draining → no new dispatch; wait for active Claude runs (≤ 20 min);
-     Codex runs may continue (re-attach) unless the release notes say "requires-drain"
-  3. backup: VACUUM INTO backups/pre-upgrade/<ts>-v<old>-uv<user_version>.db; integrity_check the copy
-  4. switch: ln -sfn releases/0.5.0 app/current.tmp && mv -h app/current.tmp app/current   (atomic rename)
-  5. restart: launchctl kickstart -k gui/$UID/com.usjbro.mercury  (with keep-runs flag)
-  6. new version runs migrations at start (13.3), then recovery, then emits daemon.ready{version}
-  7. verify: mercury status shows new version + mode normal within 2 min; else auto-rollback (13.4)
+  2. drain: no new dispatch; wait for active Claude runs (≤ 20 min); adoptable runs continue
+     unless the release notes say "requires-drain"
+  3. backup: VACUUM INTO backups/pre-upgrade/<ts>-v<old>.db (worker thread); integrity_check the copy
+  4. switch: ln -sfn releases/0.5.0 app/current.tmp && mv -h app/current.tmp app/current
+  5. restart: launchctl kickstart -k gui/$UID/com.usjbro.mercury   (adoptable runs are kept, §12)
+  6. new version migrates (13.3), recovers, emits daemon.ready{version}
+  7. verify: mode normal and new version within 2 min; else auto-rollback (13.4)
 ```
 
 ### 13.3 Database migrations
 
-- `PRAGMA user_version` = the schema version. Migrations are numbered SQL files `NNNN_description.sql`, shipped in the release, forward-only.
-- Each migration runs in `BEGIN IMMEDIATE … COMMIT` and sets `user_version` in the same transaction.
-- **Before the first pending migration:** `PRAGMA integrity_check` (must return `ok`) and a `VACUUM INTO` backup (already taken in step 3; taken again if the daemon was started without `mercury upgrade`).
-- **Compatibility window (expand/contract):**
-  - Release N+1 may only add tables, columns (nullable or defaulted) and indexes ("expand").
-  - Removing or renaming happens no earlier than release N+2 ("contract"), after N+1 has run successfully.
-  - A table `schema_meta(min_reader_version INTEGER)` records the oldest app version that can safely operate on this schema. Expand migrations leave it unchanged. Contract migrations raise it.
-- **Start rule:**
-  - `user_version > max_known` **and** `min_reader_version ≤ app_version` → run (forward-compatible; rollback case).
-  - `min_reader_version > app_version` → **fatal halt** (exit 0, `fatal.json`, alert). Never write.
-  - `user_version < max_known` → migrate.
-- Data backfills that touch more than 10k rows run in batches outside the schema transaction, idempotently.
+- C's `schema_migrations` (checksummed) is the record of applied migrations; `PRAGMA user_version` mirrors the latest number; `schema_meta.min_reader_version` records the oldest app version allowed to open the schema (RC-29).
+- Each migration runs in `BEGIN IMMEDIATE … COMMIT`. Before the first pending migration: `integrity_check` and a `VACUUM INTO` backup.
+- **Expand/contract:** release N+1 only adds tables, nullable/defaulted columns, indexes and `vocab` rows; removing, renaming or changing a CHECK (a SQLite table rebuild) is a contract migration, no earlier than N+2, and raises `min_reader_version`. C keeps evolving vocabularies in app-validated TEXT with a `vocab` table so new reason codes are expand-class.
+- **Start rule:** `min_reader_version > app_version` → fatal halt (§5.2); `user_version > max_known` and `min_reader_version ≤ app_version` → run (rollback case); `user_version < max_known` → migrate.
+- Backfills touching > 10 k rows run in idempotent batches outside the schema transaction.
 
 ### 13.4 Rollback
 
 | Situation | Procedure | Data loss |
 |---|---|---|
-| New version fails before migrating | `mercury rollback` → `current` → previous release → kickstart | None |
-| New version migrated (expand only) and misbehaves | `mercury rollback` → previous release. The old version still runs on the expanded schema (compat window). | None |
-| Migration itself failed (transaction rolled back) | Daemon halts with `fatal.json`. `mercury rollback`. | None |
-| Contract migration ran, or the schema is damaged | `mercury restore --pre-upgrade <file>` + rollback (`recovery.md` RB-08) | State since the backup. Recovered by reconciliation; authority can only shrink (re-authorization may be needed). |
+| New version fails before migrating | `mercury rollback` → previous release → kickstart | None |
+| Expand migration ran; new version misbehaves | `mercury rollback`; the old version runs on the expanded schema | None |
+| Migration failed (transaction rolled back) | Daemon halts with `fatal.json`; `mercury rollback` | None |
+| Contract migration ran, or schema damaged | `mercury restore --pre-upgrade <file>` + rollback (`recovery.md` RB-08) | State since the backup; reconciled; authority only shrinks; restore epoch recorded (§14.4) |
 
-Auto-rollback: if the new version does not reach `daemon.ready` within 3 starts or 5 min, the upgrade wrapper (a separate `mercury upgrade` process that stays running and polls the heartbeat) switches back and kickstarts. It logs `upgrade.rolled_back`.
+Auto-rollback: if the new version does not reach `daemon.ready` within 3 starts or 5 min, the `mercury upgrade` process (which stays running and polls the heartbeat) switches back and kickstarts; logs `upgrade.rolled_back`.
 
 ### 13.5 Agent CLI upgrades (Claude, Codex)
 
-- Versions are pinned in `mercury.toml` (`agents.codex.version`, `agents.claude.version`, plus absolute binary paths).
-- Auto-update is disabled (Codex `check_for_update_on_startup=false` in the per-run config; Claude `DISABLE_AUTOUPDATER=1`, ASM-D-24).
-- Upgrading is an explicit `mercury agents upgrade codex <ver>`. It installs side by side, runs the contract suite (`mercury doctor --agents`, which uses recorded fixtures plus one cheap live smoke run in a scratch repo), and then switches the pin.
-- Startup check: the actual `--version` equals the pin, otherwise that agent's circuit opens (`recovery.md` FM-16).
+- Versions and SHA-256 pinned in `config/agent-pins.json` and mirrored into `agent.conf` (root) by `mercury-install --system --update-pins` **[ROOT — operator consent]**, because `agent-exec` checks the hash at every spawn (RE-18, D-SEC-4).
+- Auto-update disabled (Codex `check_for_update_on_startup=false` in the per-task config; Claude `DISABLE_AUTOUPDATER=1`).
+- `mercury agents upgrade codex <ver>` installs side by side under `toolchains/agents/`, runs the contract suite (`mercury doctor --agents`: fixtures + one cheap live smoke run in a scratch repo), then switches the pin. A pin/version mismatch at start sets `config_fatal` for that agent.
+
+### 13.6 Wrapper and helper upgrades
+
+`agent-exec` supports `spec_version` N and N−1, so the coordinator can be upgraded first. Wrapper or helper changes ship as a release manifest entry and are installed with `mercury-install --system --upgrade-wrappers` **[ROOT — operator consent]**, which also re-renders the sudoers digests and runs `visudo -cf`. Adopted runs continue across a wrapper upgrade (the running `agent-exec` keeps its inode).
 
 ---
 
-## 14. Backups and integrity
+## 14. Backups, durability and integrity
+
+### 14.1 Backups
 
 | Item | Policy |
 |---|---|
-| Method | `VACUUM INTO 'backups/daily/mercury-<UTC ts>-uv<n>.db'` on the live DB. Consistent, compact, safe on WAL [discovery 5.1]. Then open the copy read-only, run `PRAGMA integrity_check` and record `{path, sha256, size, user_version, integrity:'ok'}` in `backups` (and in `backups/index.json`). |
-| Schedule | "Due" when the newest verified backup is > 24 h old. Checked hourly and at wake. Runs at the first moment that is due **and** there is no active DB-heavy work (or after a 30-min deferral cap). No fixed 03:00 slot, because the Mac may be asleep then. |
-| Extra triggers | Before upgrade and migration (`pre-upgrade/`), before `mercury restore` (`quarantine/` copy of the current DB), on `mercury backup` |
-| Retention | 7 daily, 4 weekly (the first daily of each ISO week is copied to `weekly/`), last 5 pre-upgrade, quarantine 30 days |
-| Off-device | `backups/` and `artifacts/` are **included** in Time Machine. `db/` (live files), `~/Library/Mercury/` (mirrors, worktrees), `runs/` and `tmp/` are **excluded** with `tmutil addexclusion <path>` (a sticky, per-path exclusion; no sudo; ASM-D-27). Reasons: live WAL files can be captured inconsistently, and mirrors and worktrees are large and can be rebuilt from GitHub. |
-| Worktree caveat | A worktree may hold Codex changes not yet committed by the coordinator. These are by design checkpointed into local commits after each successful run step (`recovery.md` §4 step 9), and pushed at PR stages. Excluding worktrees from Time Machine therefore loses at most one run step, consistent with REL-05. |
-| Startup integrity | `PRAGMA quick_check` at every start (fast). `PRAGMA integrity_check` daily before the backup, and before migrations. On failure → `recovery.md` FM-09. |
-| `foreign_key_check` | Daily, alongside `integrity_check` |
-| Secrets in backups | None by design (secrets are never in the DB). Backups are protected by FileVault plus 0600. |
+| Method | `VACUUM INTO 'backups/daily/mercury-<UTC ts>-uv<n>.db'` in a **worker thread with its own read connection** (RD-17); then open the copy read-only, `integrity_check`, record `{path, sha256, size, user_version, audit_head_seq, audit_head_hash, epoch}` in C's backup table and `backups/index.json`. |
+| Schedule | Due when the newest verified backup is older than `backup.due_after_h` of awake time; checked hourly and at wake; runs when due and no DB-heavy work (30-min deferral cap). |
+| Extra triggers | Before upgrade and migration (`pre-upgrade/`), before `mercury restore` (quarantine copy), on `mercury backup`. |
+| Retention | `backup.retention`. |
+| Off-device | `backups/`, `artifacts/`, `config/` and logs are in Time Machine. `db/` live files, `run/`, `tmp/` and the whole `WORK_ROOT` are excluded with `tmutil addexclusion` (sticky, no sudo; ASM-D-27). |
+| Integrity | `quick_check` at every start; `integrity_check` and `foreign_key_check` daily (worker thread) and before migrations. Failure → `recovery.md` FM-09. |
+| Secrets in backups | None by design. Protected by FileVault and 0600. |
+
+### 14.2 Durability beyond SQLite (RD-11)
+
+| Object | Rule |
+|---|---|
+| SQLite | WAL, `synchronous=FULL`, `fullfsync=ON`, `checkpoint_fullfsync=ON`, single writer. |
+| Mirror objects and refs | Mirror config `core.fsync=committed,reference` and `core.fsyncMethod=fsync`. Whether git issues `F_FULLFSYNC` on macOS is ASM-D-29 (P0-043); if it does not, the coordinator calls `F_FULLFSYNC` on the new object/ref files after each commit and push-ref update. |
+| Ordering | Coordinator commit via plumbing against the mirror (RD-17, components §4.10) → fsync → **then** the DB transaction that records `last_commit_sha`. A pushed SHA is recorded only after `git push` returned success. |
+| `proc.json`, `exit.json` | Written by `agent-exec`: write → `F_FULLFSYNC` → `rename` → directory `fsync`. A torn or missing file is treated as absent. |
+| `run/fatal.json`, `run/restore.json`, `heartbeat.json` | Atomic write with fsync + rename (heartbeat without `F_FULLFSYNC`). |
+| Worktree files written by agents | Not flushed. After power loss, uncommitted changes may be torn; C's worktree reset policy (components §9: archive patch → `reset --hard last_commit_sha` or `base_sha` → `clean -ffd`, `-x` only when `deps_install` is re-queued) restores a consistent tree. There are **no checkpoint commits**. |
+| Recovery check | At start, for every non-terminal task with `last_commit_sha`: `git cat-file -e <sha>` and the branch ref in the mirror. Missing → the step's run is `lost_by_host` (no attempt) and the task replays from the last durable commit (`recovery.md` §4 step 10). |
+
+### 14.3 Audit anchoring (operations side)
+
+Hash chain, anchors and `audit_epochs` are C's tables and E's controls (ADR-018). D's obligations: startup verifies the chain since the last anchor before dispatch (`recovery.md` §4 step 7); the daily anchor is posted by `mercury-ops` to the private anchor repo; `ops.anchor_overdue` after `audit.anchor_overdue_h` (never a halt).
+
+### 14.4 Restore epoch and new-Mac procedure (RD-4)
+
+**Restore epoch.** `mercury restore <backup>` (daemon stopped) quarantines the current `db/*`, copies the backup, verifies `integrity_check`, and writes `run/restore.json {backup_file, backup_sha256, backup_audit_head, reason: restore|new_host, requested_at}`. At the next start:
+
+1. Chain verification finds the restored head behind the last off-host anchor. Because `restore.json` matches the restored DB, startup does **not** enter safe mode; it asks for presence-tier confirmation (`mercury restore --confirm`, §9.5).
+2. On confirmation, `mercuryd` records an operator-initiated `audit.restore_epoch` event in C's `audit_epochs`: `{epoch+1, backup_seq, backup_hash, last_anchor_seq, last_anchor_hash, reason}`, anchors it immediately via `mercury-ops`, and deletes `restore.json`. `audit verify` accepts a fork only at a recorded epoch boundary.
+3. For every non-terminal task whose authority rows cannot be verified (rows missing after the restore, or `record_mac` unverifiable): `BLOCKED(reauthorization_required)`, **never** `guard_integrity_failure`.
+4. Remote objects whose marker names an unknown task (created after the backup) are recorded as **orphan remote objects** and reported once; they are never adopted automatically (`mercury orphan adopt|close`, components §5.5).
+5. Full reconcile (`recovery.md` §4) with `rebooted = true`.
+
+Without a matching `restore.json`, a head behind the anchor is tampering until proven otherwise: safe mode + SECURITY (§5.2).
+
+**New Mac (or disk loss).**
+
+1. On the new Mac: Phase 0 read-only checks (§16.1), then `mercury-install --system` **[ROOT — operator consent]** (agent uid, wrappers, sudoers, `WORK_ROOT`).
+2. Generate **new** private keys for `mercury-bot` and `mercury-ops` in the App settings and delete the old ones (the old Mac may be lost); create new model keys if the old Mac is not wiped; recreate all §9.1 items.
+3. Restore `backups/`, `artifacts/` and `config/` from Time Machine; `mercury toolchain sync`.
+4. `mercury restore <latest verified backup> --reason new_host` → restore epoch as above. If `k_auth` was not escrowed (OD-D-07 default: no escrow), every `record_mac` is unverifiable and all non-terminal tasks go to `BLOCKED(reauthorization_required)`; `mercury request reauth` per task.
+5. Mirrors are re-cloned. Commits that existed only in the old mirror are missing → `lost_by_host`, replay from the last pushed commit or `base_sha`.
 
 ---
 
@@ -805,123 +1023,171 @@ Auto-rollback: if the new version does not reach `daemon.ready` within 3 starts 
 
 ### 15.1 MERCURY's own repository (`usjbro/project-mercury`)
 
-All jobs run on **GitHub-hosted runners**. No self-hosted runner: the repo is public, and GitHub says self-hosted runners should only be used with private repositories [S21]. Actions are pinned by commit SHA. `permissions: contents: read` by default. No repository secrets are needed for CI.
+GitHub-hosted runners only (public repo; self-hosted runners only for private repos [S21]). Actions pinned by SHA; `permissions: contents: read` by default; no repository secrets.
 
-| Job (required check name) | Runner | Content | Gate |
-|---|---|---|---|
-| `lint` | ubuntu | eslint, prettier --check, markdownlint for docs, `actionlint` | Required |
-| `typecheck` | ubuntu | `tsc --noEmit` (strict) | Required |
-| `test-unit` | ubuntu | State machine, scheduler admission, deadline/awake-time math (with a fake clock), redactor, migrations on an in-memory DB | Required, coverage ≥ 85% on `core/` |
-| `test-integration` | ubuntu | Coordinator against fake GitHub and Linear servers (recorded fixtures, injected 5xx/429/timeout/reset), crash injection around every side effect (REL-06), duplicate poll events, restore-and-reconcile | Required |
-| `test-contracts` | ubuntu | JSON Schemas compile; recorded Codex JSONL and Claude stream-json fixtures for the **pinned** versions parse; unknown event types tolerated | Required |
-| `test-macos` | `macos-15` (GitHub-hosted; ASM-D-28) | `plutil -lint` of the rendered plist; process-group spawn and kill and orphan reaping; `fullfsync` pragma effective; `caffeinate -w` lifecycle; `security` CLI round-trip in a **temporary keychain** (`security create-keychain`); Unix socket path length; TCC-safe path validation | Required |
-| `build` | ubuntu | `npm ci --ignore-scripts`, build `dist/`, `npm pack`, SHA256SUMS | Required |
-| `supply-chain` | ubuntu | `npm audit signatures`, OSV scan of the lockfile, dependency-review on PRs, lockfile-only installs | Required (high/critical fail) |
-| `codeql` | ubuntu | JS/TS analysis | Advisory → required after baseline |
+| Job (required check) | Runner | Content |
+|---|---|---|
+| `lint` | ubuntu | eslint, prettier, markdownlint, `actionlint` |
+| `typecheck` | ubuntu | `tsc --noEmit` (strict) |
+| `test-unit` | ubuntu | State machine, admission, credited-time math (FakeClock in both monotonic modes, RD-16), redactor, migrations; coverage ≥ 85 % on `core/` |
+| `test-integration` | ubuntu | Fakes for GitHub/Linear, crash injection around every side effect, restore-and-reconcile, restore epoch |
+| `test-contracts` | ubuntu | Schemas compile; recorded Codex/Claude fixtures for the pinned versions parse |
+| `test-wrappers` | `macos-15` | Build `agent-exec`/`agent-ctl`/helpers; grammar unit tests and argv fuzzing (SEC-T range, E); `visudo -cf` of the rendered drop-in; spec validation fixtures |
+| `test-macos` | `macos-15` | `plutil -lint`; same-uid spawn/kill/adoption with a fake agent; `fullfsync` pragma; `caffeinate -w`; temporary-keychain round trip; socket path length; TCC-safe path validation (ASM-D-28) |
+| `build`, `supply-chain`, `codeql` | ubuntu | As Phase 2 |
 
-Release workflow (`on: push: tags: v*`): rebuild → `actions/attest-build-provenance` → GitHub Release with tarball + SHA256SUMS. Permissions: `contents: write`, `id-token: write`, `attestations: write`, scoped to this job only.
+Hosted macOS runners have no nested virtualization and no second uid with sudo, so agent-uid and power-loss tests run outside CI (§15.3, `recovery.md` §6). Release workflow: rebuild → `attest-build-provenance` → Release with tarball, `SHA256SUMS` and the wrapper/helper manifest. `main` uses the same governance as target repos.
 
-Branch protection for `main` uses the same human-approval model as target repos (discovery G3): CODEOWNERS `* @usjbro`, last-push approval, dismiss stale, the required checks above, no bypass.
+### 15.2 Target repositories
 
-### 15.2 Target repositories (e.g. `usjbro/network_monitor`)
+- Each keeps its own CI. **Onboarding precondition** (`mercury repo check`, read-only): rulesets per RD-5 including the two required MERCURY checks; CI runs on draft PRs (RD-18); CODEOWNERS = operator; "Allow GitHub Actions to create and approve pull requests" off. A failing repo stays `onboarding_blocked`.
+- Required CI contexts are derived from `GET /rules/branches/{base}` at each evaluation (B).
 
-- Each target repo keeps **its own CI** (unknown today; integrations discovery). MERCURY does not install runners or modify workflows (the App has no `workflows:write`).
-- **Onboarding precondition** (checked by `mercury repo check <owner/repo>`, read-only): protections per G3, at least **one required status check** on the default branch, CODEOWNERS = human, "Allow GitHub Actions to create and approve pull requests" off. A repo failing the check can be registered but stays `onboarding_blocked`, and no tasks are dispatched for it.
-- MERCURY reads check runs and statuses for the PR head SHA (`checks:read`, `statuses:read`). "Tests pass" for workflow purposes = **all required checks green on the exact head SHA**, plus the local test evidence from the Codex run (Agent B/C own the evidence model).
-- Optional (Agent B to decide): a tiny `mercury-pr-policy` workflow in each target repo, using `GITHUB_TOKEN` with read permission, that verifies the PR body contains a `Mercury-Task:`/Linear reference and the branch-name convention. Making it a required check catches PRs that bypass MERCURY.
+### 15.3 Power-loss and agent-uid test rig (RD-24)
+
+- **Power loss:** a macOS guest VM on an Apple Silicon host (Virtualization.framework via `tart` or UTM), VM disk in uncached/synchronous mode. Procedure in `recovery.md` §6. Never power-cut the operator's Mac.
+- **Agent uid:** the same VM, provisioned with `mercury-install --system`, runs the SEC-T-20 canary suite and `agent-ctl` fuzzing before the real Mac does.
+- The Linux fault-injection filesystem is used for SQLite logic only.
 
 ---
 
-## 16. Phase 0 Mac verification checklist
+## 16. Phase 0 Mac verification register (Mac items)
 
-### 16.1 Read-only commands (safe to run any time)
+Agent F tracks closure in traceability.md; each row lists its gating milestone. Results go to `reviews/phase0-mac-facts.md`, redacted. Phase 2 IDs `P0-01`…`P0-25` and experiments `E1`…`E9` are aliases of the 3-digit IDs below.
 
-Run in Terminal as the operator and paste the output into `reviews/phase0-mac-facts.md`. Redact anything sensitive. None of these change system state.
+### 16.1 Read-only commands (safe at any time)
 
-| # | Command | Confirms / informs |
-|---|---|---|
-| P0-01 | `sw_vers; uname -m; sysctl -n hw.model hw.ncpu hw.memsize` | macOS version (launchd/BTM behaviour), Apple Silicon or Intel (Node build), capacity for concurrency defaults |
-| P0-02 | `pmset -g; pmset -g batt; pmset -g custom` | Laptop or desktop, AC/battery sleep timers, `powernap`, `standby` (§8) |
-| P0-03 | `pmset -g assertions` | Baseline assertions; later compare while MERCURY runs (ASM-D-11) |
-| P0-04 | `pmset -g log \| grep -E " (Sleep\|Wake\|DarkWake) " \| tail -40` | Real sleep/wake cadence (sizing of thresholds; REL-09) |
-| P0-05 | `sysctl -n kern.sleeptime kern.waketime kern.bootsessionuuid kern.boottime` | Availability of the sleep confirmation and boot id sysctls (ASM-D-13, ASM-D-17) |
-| P0-06 | `fdesetup status; defaults read /Library/Preferences/com.apple.loginwindow autoLoginUser 2>&1` | FileVault on, auto-login off (§6) |
-| P0-07 | `id -u; echo $HOME; ls -ld ~/Library/Application\ Support ~/Library/LaunchAgents ~/Library/Logs` | uid, paths, existing permissions |
-| P0-08 | `launchctl print gui/$(id -u) \| head -40; launchctl print gui/$(id -u)/com.usjbro.mercury 2>&1 \| head -5` | GUI domain present; label not already taken |
-| P0-09 | `ls ~/Library/LaunchAgents; launchctl print-disabled gui/$(id -u)` | Existing agents; disabled overrides |
-| P0-10 | `man launchd.plist \| col -b \| grep -A6 -E "ExitTimeOut\|ThrottleInterval\|KeepAlive\|Umask\|ProcessType"` | Current defaults and semantics (ASM-D-04, unknown 9) |
-| P0-11 | `ulimit -n; launchctl limit maxfiles; launchctl limit maxproc` | File limits (ASM-D-19) |
-| P0-12 | `which -a node; node -v; node -p "process.versions"` | Installed Node, bundled `uv` and `sqlite` versions (ASM-D-14) |
-| P0-13 | `node -e "const s=require('node:sqlite');console.log(Object.keys(s), typeof s.backup)"` | `DatabaseSync`/`Database` naming, `backup()` availability (discovery unknown 11) |
-| P0-14 | `/usr/bin/sqlite3 --version; git --version; xcode-select -p` | System sqlite3 (for `.recover`), git version and source |
-| P0-15 | `which -a claude; claude --version; claude auth status` | Claude version and auth method (JSON; no secrets printed) |
-| P0-16 | `which -a codex; codex --version; codex exec --help; codex login status 2>&1` | Codex version, flags present (`--json`, `--output-schema`, `-o`, `--sandbox`, `--strict-config`, `--ignore-user-config`), auth mode |
-| P0-17 | `ls -la ~/.codex ~/.claude 2>&1 \| head -40; test -f ~/.codex/config.toml && grep -nE "^(sandbox_mode\|approval_policy\|check_for_update\|cli_auth_credentials_store\|\[mcp_servers\|\[hooks)" ~/.codex/config.toml` | Existing configs that could leak into runs (runtime unknown 10) |
-| P0-18 | `security list-keychains; security show-keychain-info ~/Library/Keychains/login.keychain-db 2>&1` | Keychain lock settings (ASM-D-09) |
-| P0-19 | `df -h ~; diskutil info / \| grep -E "File System Personality\|Volume Free Space"` | Disk headroom for thresholds (§10), APFS |
-| P0-20 | `tmutil destinationinfo 2>&1; tmutil isexcluded ~/Library/Application\ Support 2>&1` | Time Machine in use? (§14) |
-| P0-21 | `ls -d ~/Documents/* ~/Developer ~/src ~/code 2>/dev/null \| head` | Where repositories live today (TCC exposure; discovery unknown 10) |
-| P0-22 | `defaults read /Library/Preferences/com.apple.SoftwareUpdate 2>&1 \| grep -iE "Automatic\|Critical"` | Unattended OS update/restart likelihood (ASM-D-10) |
-| P0-23 | `networksetup -listallhardwareports \| grep -A1 -E "Wi-Fi\|Ethernet"; scutil --dns \| grep nameserver \| sort -u` | Network type (wake reconnect timing) |
-| P0-24 | `gh --version 2>&1; gh auth status 2>&1 \| sed 's/Token:.*/Token: [redacted]/'` | Whether the human's `gh` session exists (must never be used by MERCURY, discovery G1) |
-| P0-25 | System Settings › General › Login Items › "Allow in the Background" (manual screenshot) | BTM toggle (ASM-D-07, discovery M7) |
-
-### 16.2 Phase 0 experiments (non-destructive, need the operator's explicit go-ahead)
-
-| # | Experiment | Pass criterion | Validates |
+| ID | Command | Confirms | Gate |
 |---|---|---|---|
-| E1 | Bootstrap a **dummy** LaunchAgent `com.usjbro.mercury-probe` (runs `/bin/sh -c 'trap "sleep 25; exit 0" TERM; while :; do sleep 5; done'`), then `bootout` and time it | `bootout` waits ≥ 25 s (ExitTimeOut honoured); at logout, observe the probe log | ASM-D-03, ASM-D-04 |
-| E2 | `node -e` script logging `Date.now()`, `process.hrtime.bigint()` and tick gaps every 5 s; sleep the Mac for 2 min | hrtime advances across sleep (≈ wall); tick gap ≈ 120 s; `kern.waketime` updated | ASM-D-13, ASM-D-14 |
-| E3 | From the probe agent: `security find-generic-password -s com.usjbro.mercury.probe -a mercury -w` on a throwaway item; repeat with the screen locked | Returns the value without a prompt in both cases | ASM-D-09, discovery 4.5 |
-| E4 | `caffeinate -i -w <probe pid>` then `pmset -g assertions`; kill the probe | Assertion is listed, then disappears | ASM-D-11 |
-| E5 | Inside a scratch repo: `codex exec --sandbox workspace-write "run: security find-generic-password -s com.usjbro.mercury.probe -w; git commit --allow-empty -m x"` (throwaway item) | **Both fail** (keychain denied; `.git` write denied) | ASM-D-21, runtime finding 7 |
-| E6 | Two parallel `codex exec --sandbox read-only` runs with separate `CODEX_HOME` + `CODEX_API_KEY` in a scratch repo | Both complete; no auth or state errors | Raises `max_codex_runs` to 2 |
-| E7 | `osascript -e 'display notification "probe" with title "MERCURY"'` from the probe agent | Notification shown | ASM-D-06 |
-| E8 | Create, then delete, a socket at the real `run/mercuryd.sock` path length | `bind` succeeds | §7.2 |
+| P0-001 | `sw_vers; uname -m; sysctl -n hw.model hw.ncpu hw.memsize` | macOS version, architecture, capacity | M0 |
+| P0-002 | `pmset -g; pmset -g batt; pmset -g custom` | Laptop or desktop; sleep timers; `powernap` (OD-D-05) | M0 |
+| P0-003 | `pmset -g assertions` | Baseline assertions (ASM-D-11) | M0 |
+| P0-004 | `pmset -g log \| grep -E " (Sleep\|Wake\|DarkWake) " \| tail -40` | Real sleep, wake and dark-wake cadence (§2.4, §10.6) | M0 |
+| P0-005 | `sysctl -n kern.sleeptime kern.waketime kern.bootsessionuuid kern.boottime` | Sleep confirmation and boot id (ASM-D-13, ASM-D-17) | M0 |
+| P0-006 | `fdesetup status; defaults read /Library/Preferences/com.apple.loginwindow autoLoginUser 2>&1` | FileVault on, auto-login off | M0 |
+| P0-007 | `id -u; id -Gn; ls -ld ~ ~/.ssh ~/.config ~/Library ~/Library/Application\ Support ~/Library/LaunchAgents /Users/Shared` | Home and credential-folder modes (ASM-E-04), `/Users/Shared` mode | M0 |
+| P0-008 | `launchctl print gui/$(id -u) \| head -40; launchctl print gui/$(id -u)/com.usjbro.mercury 2>&1 \| head -5` | GUI domain; label free | M0 |
+| P0-009 | `ls ~/Library/LaunchAgents; launchctl print-disabled gui/$(id -u)` | Existing agents; overrides | M0 |
+| P0-010 | `man launchd.plist \| col -b \| grep -A6 -E "ExitTimeOut\|ThrottleInterval\|KeepAlive\|Umask\|ProcessType"` | Defaults (ASM-D-04) | M0 |
+| P0-011 | `ulimit -n; launchctl limit maxfiles; launchctl limit maxproc` | File limits (ASM-D-19) | M0 |
+| P0-012 | `which -a node; node -v; node -p "process.versions"` | Node, libuv, sqlite versions (ASM-D-14) | M0 |
+| P0-013 | `node -e "const s=require('node:sqlite');console.log(Object.keys(s), typeof s.backup)"` | `node:sqlite` API | M0 |
+| P0-014 | `/usr/bin/sqlite3 --version; git --version; xcode-select -p; sudo -V \| head -1` | git (≥ 2.36 for `core.fsync`), sudo version (`closefrom_override`, ASM-D-36) | M0 |
+| P0-015 | `which -a claude; claude --version; claude auth status` | Claude version and auth | M0 |
+| P0-016 | `which -a codex; codex --version; codex exec --help; codex login status 2>&1` | Codex flags | M0 |
+| P0-017 | `ls -la ~/.codex ~/.claude 2>&1 \| head -40` | Existing configs | M0 |
+| P0-018 | `security list-keychains; security show-keychain-info ~/Library/Keychains/login.keychain-db 2>&1` | Keychain lock settings (ASM-D-09) | M0 |
+| P0-019 | `df -h ~ /Users/Shared; diskutil info / \| grep -E "File System Personality\|Volume Free Space"` | Disk headroom, APFS | M0 |
+| P0-020 | `tmutil destinationinfo 2>&1; tmutil isexcluded ~/Library/Application\ Support 2>&1` | Time Machine | M0 |
+| P0-021 | `ls -d ~/Documents/* ~/Developer ~/src ~/code 2>/dev/null \| head` | Where repositories live today (TCC) | M0 |
+| P0-022 | `defaults read /Library/Preferences/com.apple.SoftwareUpdate 2>&1 \| grep -iE "Automatic\|Critical"` | Unattended update/restart (ASM-D-10) | M0 |
+| P0-023 | `networksetup -listallhardwareports \| grep -A1 -E "Wi-Fi\|Ethernet"` | Network type | M0 |
+| P0-024 | `gh --version 2>&1; gh auth status 2>&1 \| sed 's/Token:.*/Token: [redacted]/'` | Operator's `gh` session (never used by MERCURY) | M0 |
+| P0-025 | System Settings › General › Login Items (screenshot) | BTM toggle (ASM-D-07) | M0 |
 
-Remove the probe afterwards (`launchctl bootout`, `security delete-generic-password -s com.usjbro.mercury.probe`).
+### 16.2 Agent-uid setup and verification **[ROOT — operator consent]** (gate for RD-1, feeds SEC-T-20)
+
+These need the §3.10 system install (or its manual equivalent on a probe account). The operator runs them; each step is shown before it runs.
+
+| ID | Check | Pass criterion | Validates | Gate |
+|---|---|---|---|---|
+| P0-026 | From a probe LaunchAgent (no TTY): `sudo -n -C 4 -u _mercuryagent -g mercury /usr/local/libexec/mercury/agent-ctl version` and an `agent-exec` run of `/usr/bin/true`; observe whether a root `sudo` monitor process remains | Both succeed without a prompt; fd 3 arrives in `agent-exec`; sudo monitor behaviour recorded | ASM-D-36, §3.4 | M1 |
+| P0-027 | **SEC-T-20 canaries**: canary secrets in `~/.ssh`, `~/.config/gh`, `~/.codex/auth.json`, `~/.claude/.credentials.json`, a test Keychain item, `MERCURY_HOME/db`, `~/.aws`, `~/.netrc`, a browser profile; try `cat`, `find`, `security find-generic-password`, Claude `Read`/`Grep` as `_mercuryagent` | 0 reads | ASM-E-04, SEC-201 | M1 (before any non-sandbox agent run) |
+| P0-028 | `kill -TERM` of an agent-uid group from the operator uid; then `agent-ctl signal` | First fails with EPERM; second succeeds | §3.7 | M1 |
+| P0-029 | `ps -axo pid,user,command` as the operator while an agent process runs | Record whether argv is visible (not load-bearing) | ASM-D-30 | M1 |
+| P0-030 | Codex run (`workspace-write`) as the agent uid in a worktree of the 0640 mirror; `git status`/`git diff` in the worktree | Works without write access to the mirror; no "dubious ownership" error with `agent.gitconfig` | ASM-E-13 | M1 |
+| P0-031 | Start an agent-uid `sleep` via `agent-exec`, log out, log in after 15 min | Survival recorded; with the lease, the process ends after `supervisor.lease_stale_min` and writes `exit.json{reason: supervisor_lost}` | ASM-D-32 | M1 |
+| P0-032 | The `network_monitor` test suite as `_mercuryagent` with `toolchains/` (through `agent-exec` with a `verify` spec) | Passes | RD-26 | M1 |
+
+### 16.3 Experiments (non-destructive; operator go-ahead required)
+
+| ID (alias) | Experiment | Pass criterion | Validates | Gate |
+|---|---|---|---|---|
+| P0-033 (E1) | Dummy LaunchAgent `com.usjbro.mercury-probe` trapping TERM for 25 s; `bootout` and time it; observe at logout | `bootout` waits ≥ 25 s | ASM-D-03, ASM-D-04 | M1 |
+| P0-034 (E2) | Node script logging `Date.now()`, `hrtime`, tick gaps every 2 s; sleep the Mac 2 min | Record whether mono advances in sleep; gap detected; `kern.waketime` updated | ASM-D-13, ASM-D-14 (RD-16) | M1 |
+| P0-035 (E3) | From the probe agent: read a throwaway item via `mercury-keychain`; repeat with the screen locked | Value returned without a prompt both times | ASM-D-09 | M1 |
+| P0-036 | Create a throwaway item with `-T mercury-keychain`; read it with the helper (no prompt) and with `/usr/bin/security` (prompt expected); re-sign the helper and read again | Helper silent; `security` prompts; re-signed helper prompts once | ASM-E-08, RE-29 | M1 |
+| P0-037 (E5) | Inside a scratch repo: Codex `workspace-write` (agent uid) tries `security find-generic-password`, `git commit` in the mirror, writing `runs/<other>/ctl/exit.json`; repeat under the `verify` and `deps` profiles | All fail | ASM-D-21, ASM-E-15 | M1 |
+| P0-038 (E6) | Two parallel Codex runs for **two tasks** with separate per-task `CODEX_HOME` | Both complete; no state errors | Raises `limits.max_codex_runs` | M6 |
+| P0-039 (E4) | `caffeinate -i -w <probe pid>`, `pmset -g assertions`, kill the probe | Assertion appears, then disappears | ASM-D-11 | M1 |
+| P0-040 (E7) | `osascript display notification` from the probe agent | Shown | ASM-D-06 | M1 |
+| P0-041 (E8) | Bind a socket at the real `run/mercuryd.sock` path | Succeeds | §7.2 | M1 |
+| P0-042 | Claude Agent SDK with `spawnClaudeCodeProcess` → `sudo -n -C 4 -u _mercuryagent agent-exec` (kind `claude`); one decision run with a snapshot `cwd` | Pipes work; structured output returned; key arrives on fd 3; `CLAUDE_CONFIG_DIR` writable | ASM-D-33 (RD-1, RD-25) | M3 (else ALT-B-1) |
+| P0-043 | `sudo fs_usage -w -f filesys git` during a mirror commit with `core.fsync=committed,reference` | `F_FULLFSYNC` (or `fcntl` 51) observed for objects and refs | ASM-D-29 | M2 |
+| P0-044 | Create `WORK_ROOT` with ACLs; create files as each uid; `chmod -N` as the agent; check TCC prompts for `/Users/Shared` | Inheritance works; stripping fails closed as in §7.3; no TCC prompt | ASM-D-31 | M1 |
+| P0-045 | Probe LaunchAgent spawns `mercury-presence`; screen unlocked and locked | Touch ID/password sheet appears and returns the nonce; locked screen → error | ASM-D-34 (RD-12) | M5 |
+| P0-046 (E9) | `mercury-power` probe with Power Nap enabled; close the lid for 2 h with tasks queued; compare `pmset -g log` DarkWake entries with the helper log | will-sleep acknowledged; dark wakes reported `dark`; no dispatch logged during dark wake | ASM-D-35 (RD-16, RD-18) | M5 |
+| P0-047 | Apple Silicon host can run a macOS guest VM (`tart`/UTM) with an uncached disk | VM boots; force-stop works | RD-24 | M2 |
+| P0-048 | Locate and validate managed Claude settings and Codex `requirements.toml` paths **[ROOT — operator consent]** | Settings honoured; forbidden flags refused | ASM-E-10 (OD-19) | M3 |
+
+Remove probe agents and throwaway items afterwards.
+
+### 16.4 Security assumptions mapped to Phase 0
+
+| ASM-E | P0 | Owner of the check |
+|---|---|---|
+| ASM-E-04 | P0-007, P0-027 | D |
+| ASM-E-06 (pf egress for the agent uid) | P0-049 (to be specified by E; root) | E with D |
+| ASM-E-08 | P0-036 | D |
+| ASM-E-09 (`fs.rm` symlinks) | unit test on `macos-15` CI (no P0 needed) | C |
+| ASM-E-10 | P0-048 | D |
+| ASM-E-11, ASM-E-12 | P0-042 run with egress logging | B with D |
+| ASM-E-13 | P0-030 | D |
+| ASM-E-14 | optional, not gating | E |
+| ASM-E-15 | P0-037 | D |
+| ASM-E-01/02/03/05/07 (GitHub, Linear) | Non-Mac; F allocates P0 IDs in the sandbox org/team | B, E |
 
 ---
 
 ## 17. Assumptions register (Agent D)
 
-| ID | Assumption | Verified by | If false |
+| ID | Assumption | P0 | If false |
 |---|---|---|---|
-| ASM-D-01 | launchd does not expand `~`/`$HOME` in plists | P0-10 | No impact (installer already expands) |
-| ASM-D-02 | launchd rejects group/world-writable plists; 0644 accepted | E1 | Adjust mode |
-| ASM-D-03 | `bootstrap/bootout/kickstart` work in `gui/<uid>` without sudo | E1 | Document sudo steps |
-| ASM-D-04 | `ExitTimeOut` honoured on bootout; may be shortened at logout or shutdown | E1 | Shrink internal budget |
-| ASM-D-05 | The operator usually stays logged in (does not log out nightly) | Operator | Availability expectations (no design change) |
-| ASM-D-06 | `osascript display notification` works from a LaunchAgent | E7 | Drop local notifications |
-| ASM-D-07 | BTM "Allow in the Background" can disable the agent; it shows as node or the script | P0-25, E1 | Doctor check only |
-| ASM-D-08 | The operator's session keeps running under Fast User Switching | Operator | Note only |
-| ASM-D-09 | The login keychain stays unlocked while the screen is locked (default settings) | P0-18, E3 | Credential alert path FM-08 more frequent |
-| ASM-D-10 | An FileVault authenticated restart or overnight update logs the user back in | P0-22 | MERCURY waits for manual login |
-| ASM-D-11 | `caffeinate -i -w` holds PreventUserIdleSystemSleep and releases on pid exit | E4 | Use an IOKit helper |
-| ASM-D-12 | Some target-repo build or test tooling breaks on paths with spaces | Phase 0 run of the target test suite | Could co-locate worktrees under MERCURY_HOME |
-| ASM-D-13 | `kern.sleeptime`/`kern.waketime` sysctls are readable by a user | P0-05, E2 | Rely on the tick gap only |
-| ASM-D-14 | Node on the Mac uses `mach_continuous_time` (hrtime advances in sleep) | P0-12, E2 | Detector still works; extra signal |
-| ASM-D-15 | The Agent SDK lets the Claude child run in its own process group (custom spawn or `detached`) | Agent B, SDK docs | Kill by descendant scan instead of `-pgid` |
-| ASM-D-16 | A re-attached Codex run's success can be judged from `-o` output + `turn.completed` without the exit code | Contract tests | Re-run instead of adopting |
-| ASM-D-17 | `kern.bootsessionuuid` exists and changes per boot | P0-05 | Use `kern.boottime` |
-| ASM-D-18 | Agent IO contention with interactive work is acceptable at nice 10 without `LowPriorityIO` | Operator feedback | Spawn children through `taskpolicy -b` |
-| ASM-D-19 | The default soft `NumberOfFiles` (256) is too low; 8192 is accepted | P0-11 | Adjust |
-| ASM-D-20 | Node can verify the peer uid on a Unix socket (or 0600 is a sufficient guard) | Implementation spike | Rely on 0600 + 0700 dir |
-| ASM-D-21 | Codex's Seatbelt profile denies Keychain access through `security` | E5 | Move to a signed helper ACL (§9.2) — **security-critical** |
-| ASM-D-22 | A git credential helper over the control socket works for HTTPS pushes | Spike | Short-lived `GIT_ASKPASS` env token |
-| ASM-D-23 | Agents need the real `HOME` (toolchains) | Phase 0 test run | Synthetic HOME per run |
-| ASM-D-24 | `DISABLE_AUTOUPDATER=1` disables Claude Code auto-update in the pinned version | Claude docs and settings | Use settings `autoUpdates:false` or a managed setting |
-| ASM-D-25 | macOS does not enforce `RLIMIT_AS` for typical processes | Spike | Sampling remains |
-| ASM-D-26 | Issue body edits by an App do **not** count as "repository activity" for the 60-day schedule rule | Observe | Monthly commit or doctor re-enable |
-| ASM-D-27 | `tmutil addexclusion` (sticky) works without sudo for user paths | P0-20 | Manual exclusion in Settings |
-| ASM-D-28 | GitHub-hosted macOS runners allow launchd/process-group/keychain tests (temporary keychain) | CI spike | Move those tests to Phase 0 manual |
+| ASM-D-01 | launchd does not expand `~`/`$HOME` in plists | P0-010 | None (installer expands) |
+| ASM-D-02 | launchd rejects group/world-writable plists; 0644 accepted | P0-033 | Adjust mode |
+| ASM-D-03 | `bootstrap/bootout/kickstart` work in `gui/<uid>` without sudo | P0-033 | Document sudo steps |
+| ASM-D-04 | `ExitTimeOut` honoured on bootout; may be shorter at logout or shutdown | P0-033 | Shrink `svc.shutdown_budget_s` |
+| ASM-D-05 | The operator usually stays logged in | Operator | Availability only |
+| ASM-D-06 | `osascript display notification` works from a LaunchAgent | P0-040 | Drop local notifications |
+| ASM-D-07 | BTM can disable the agent | P0-025 | Doctor check only |
+| ASM-D-08 | Session keeps running under Fast User Switching | Operator | Note |
+| ASM-D-09 | Login keychain stays unlocked while the screen is locked (only matters at start/reload now) | P0-018, P0-035 | More `keychain_locked` holds |
+| ASM-D-10 | FileVault authenticated restart logs the user back in | P0-022 | Wait for login |
+| ASM-D-11 | `caffeinate -i -w` holds and releases the assertion | P0-039 | Assertion from `mercury-power` |
+| ASM-D-12 | Some target-repo tooling breaks on paths with spaces | P0-032 | None (WORK_ROOT is space-free anyway) |
+| ASM-D-13 | `kern.sleeptime`/`kern.waketime` readable by a user | P0-005, P0-034 | Gap detection only |
+| ASM-D-14 | Node on the Mac uses `mach_continuous_time` (source-verified [N1]) | P0-012, P0-034 | None: C's algorithm handles both modes |
+| ASM-D-16 | An adopted Codex run's success can be judged from `exit.json` + `final.json` + `turn.completed` | Contract tests | Re-run instead of adopting |
+| ASM-D-17 | `kern.bootsessionuuid` exists and changes per boot | P0-005 | Use `kern.boottime` |
+| ASM-D-18 | Nice +10 without `LowPriorityIO` is acceptable | Operator | `taskpolicy -b` in `agent-exec` |
+| ASM-D-19 | Default soft `NumberOfFiles` 256 too low; 8192 accepted | P0-011 | Adjust |
+| ASM-D-20 | Node can check the peer uid on a Unix socket | Spike | 0600 + 0700 dir |
+| ASM-D-21 | Seatbelt profiles deny Keychain access via `security` (now defence in depth) | P0-037 | Rely on the agent uid |
+| ASM-D-24 | `DISABLE_AUTOUPDATER=1` disables Claude auto-update | P0-042 | Managed setting |
+| ASM-D-25 | macOS does not enforce `RLIMIT_AS` | Spike | Sampling remains |
+| ASM-D-26 | App issue edits do not count as repository activity for the 60-day rule | Observe | Monthly commit or doctor re-enable |
+| ASM-D-27 | `tmutil addexclusion` (sticky) works without sudo, also for `/Users/Shared` | P0-020 | Manual exclusion |
+| ASM-D-28 | Hosted macOS runners allow same-uid process-group and temporary-keychain tests | CI spike | Move to the VM rig |
+| ASM-D-29 | git with `core.fsync` issues `F_FULLFSYNC` on macOS | P0-043 | Coordinator `F_FULLFSYNC` after commits (§14.2) |
+| ASM-D-30 | `ps` shows another uid's argv (no longer load-bearing) | P0-029 | None (`agent-ctl list`) |
+| ASM-D-31 | `/Users/Shared` is not TCC-protected; ACL inheritance behaves as in §7.3 | P0-044 | Alternative root `/Users/Shared` subvolume or `/opt/mercury` (ADR change) |
+| ASM-D-32 | Agent-uid processes may survive logout | P0-031 | Lease is moot; runs end at logout → `lost_by_host` |
+| ASM-D-33 | Claude SDK custom spawn through sudo keeps pipes and fd 3 | P0-042 | ALT-B-1 (OD-D-02) |
+| ASM-D-34 | LocalAuthentication works from a LaunchAgent child in the Aqua session | P0-045 | Presence via a small login-item app (ADR-019 amendment) |
+| ASM-D-35 | IOKit power notifications and capability flags distinguish full and dark wake for a LaunchAgent child | P0-046 | Time rule only (`wake.dark_wake_min_awake_s`) |
+| ASM-D-36 | macOS sudo supports `closefrom_override`, `-C 4`, digests and `umask_override` | P0-014, P0-026 | `agent-exec` reads the key from a 0600 file in a 0700 agent-owned dir, deleted after read (weaker) |
+
+Withdrawn: ASM-D-15 (replaced by ASM-D-33), ASM-D-22 (socket credential helper removed, RD-17), ASM-D-23 (agents use the agent `HOME`).
 
 ---
 
 ## 18. Sources
 
-- Discovery: `reviews/02-discovery-platform.md` §4–§6 (S16–S29), `reviews/02-discovery-agent-runtimes.md` §1, §3, §6–§7, `reviews/01-discovery-integrations.md` (cadence, failure patterns).
-- **N1** libuv `src/unix/darwin.c` (`uv__hrtime` returns `mach_continuous_time()` scaled by the timebase), fetched 2026-10-12: https://github.com/libuv/libuv/blob/v1.x/src/unix/darwin.c [V]
-- **N2** libuv change switching macOS monotonic time to `mach_continuous_time` (PR #2894 for issue #2891), shipped in libuv 1.38.1 per the Node.js dependency update; found via search excerpts of https://github.com/libuv/libuv/pull/2552 and related mirrors [V~]
-- **N3** GitHub Docs, "Disabling and enabling a workflow": scheduled workflows in public repos are disabled after 60 days of no repository activity — https://docs.github.com/en/actions/how-tos/manage-workflow-runs/disable-and-enable-workflows [V~ search excerpt]
-- **N4** Healthchecks.io FAQ (dead man's switch, ping URLs) — https://healthchecks.io/faq [V~ search excerpt]
+- Discovery: `reviews/02-discovery-platform.md` §4–§6 (S16–S29), `reviews/02-discovery-agent-runtimes.md` §1, §3, §6–§7, `reviews/01-discovery-integrations.md`.
+- Decisions: `reviews/30-reconciliation.md` RD-1…RD-20; Phase 3 reviews `reviews/20`–`25`.
+- **N1** libuv `src/unix/darwin.c` (`uv__hrtime` returns `mach_continuous_time()`), fetched 2026-10-12: https://github.com/libuv/libuv/blob/v1.x/src/unix/darwin.c [V]
+- **N2** libuv change switching macOS monotonic time to `mach_continuous_time`, shipped in libuv 1.38.1 [V~]
+- **N3** GitHub Docs, "Disabling and enabling a workflow" (60-day rule for scheduled workflows in public repos) [V~]
+- **N4** Healthchecks.io FAQ [V~]
+- **N5** `sudoers(5)`: `Cmnd_Alias` digests, `closefrom_override`, `umask_override`, wildcard matching in arguments [V~, verify against the macOS sudo version in P0-014]
+- **N6** Apple `LocalAuthentication` (`LAContext.evaluatePolicy`) and IOKit power management (`IORegisterForSystemPower`, `IOPMConnectionCreate`) [V~]
