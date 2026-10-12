@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.mercury.local/v1/triage.result.schema.json",
+  "title": "Claude triage proposal (no authority)",
+  "description": "Recorded from a claude_triage run; tasks created only for the top-k by free capacity (T01).",
+  "allOf": [
+    {
+      "$ref": "envelope.schema.json"
+    }
+  ],
+  "properties": {
+    "schema": {
+      "const": "mercury.triage.result.v1"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "proposal": {
+          "$ref": "common.schema.json#/$defs/artifact_ref"
+        },
+        "evaluated_issues": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "shortlist": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "issue": {
+                "$ref": "common.schema.json#/$defs/issue"
+              },
+              "rank": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "rationale_display": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000
+              },
+              "task_id": {
+                "oneOf": [
+                  {
+                    "$ref": "common.schema.json#/$defs/task_id"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "issue",
+              "rank",
+              "rationale_display",
+              "task_id"
+            ]
+          },
+          "minItems": 0,
+          "maxItems": 50
+        },
+        "free_capacity": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "body": {
+          "$ref": "output.triage_proposal.schema.json"
+        }
+      },
+      "required": [
+        "proposal",
+        "evaluated_issues",
+        "shortlist",
+        "free_capacity",
+        "body"
+      ]
+    }
+  },
+  "unevaluatedProperties": false
+}

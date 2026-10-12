@@ -1,0 +1,155 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.mercury.local/v1/task.completed.schema.json",
+  "title": "Task completed after verified merge",
+  "description": "T34/T40.",
+  "allOf": [
+    {
+      "$ref": "envelope.schema.json"
+    }
+  ],
+  "properties": {
+    "schema": {
+      "const": "mercury.task.completed.v1"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "final_state": {
+          "const": "COMPLETED"
+        },
+        "pr": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "number": {
+              "type": "integer"
+            },
+            "merge_commit_sha": {
+              "$ref": "common.schema.json#/$defs/git_sha"
+            },
+            "head_sha_at_merge": {
+              "$ref": "common.schema.json#/$defs/git_sha"
+            },
+            "merged_by": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "merged_at": {
+              "$ref": "common.schema.json#/$defs/timestamp"
+            }
+          },
+          "required": [
+            "number",
+            "merge_commit_sha",
+            "head_sha_at_merge",
+            "merged_by",
+            "merged_at"
+          ]
+        },
+        "verification": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "verification_id": {
+              "$ref": "common.schema.json#/$defs/verification_id"
+            },
+            "merged_by_is_operator": {
+              "type": "boolean"
+            },
+            "operator_approval_on_head": {
+              "type": "boolean"
+            },
+            "merge_commit_on_base": {
+              "type": "boolean"
+            },
+            "required_checks_passed": {
+              "type": "boolean"
+            },
+            "claude_reviews_valid_for_head": {
+              "type": "boolean"
+            },
+            "waived_by_operator": {
+              "type": "boolean"
+            },
+            "artifact": {
+              "$ref": "common.schema.json#/$defs/artifact_ref"
+            }
+          },
+          "required": [
+            "verification_id",
+            "merged_by_is_operator",
+            "operator_approval_on_head",
+            "merge_commit_on_base",
+            "required_checks_passed",
+            "claude_reviews_valid_for_head",
+            "waived_by_operator",
+            "artifact"
+          ]
+        },
+        "authorization": {
+          "$ref": "common.schema.json#/$defs/authorization_ref"
+        },
+        "plan": {
+          "$ref": "common.schema.json#/$defs/plan_ref"
+        },
+        "counters": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "plan_revisions": {
+              "type": "integer"
+            },
+            "pr_review_cycles": {
+              "type": "integer"
+            },
+            "verify_fix_cycles": {
+              "type": "integer"
+            },
+            "human_change_cycles": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "plan_revisions",
+            "pr_review_cycles",
+            "verify_fix_cycles",
+            "human_change_cycles"
+          ]
+        },
+        "durations_ms": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "total_wall": {
+              "type": "integer"
+            },
+            "codex_awake": {
+              "type": "integer"
+            },
+            "human_wait": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "total_wall",
+            "codex_awake",
+            "human_wait"
+          ]
+        }
+      },
+      "required": [
+        "final_state",
+        "pr",
+        "verification",
+        "authorization",
+        "plan",
+        "counters",
+        "durations_ms"
+      ]
+    }
+  },
+  "unevaluatedProperties": false
+}

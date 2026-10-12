@@ -1,0 +1,163 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.mercury.local/v1/envelope.schema.json",
+  "title": "MERCURY message envelope",
+  "description": "Every protocol message. Written only by mercuryd; agents never produce envelopes. Message schemas extend this via allOf and close the object with unevaluatedProperties:false.",
+  "type": "object",
+  "required": [
+    "schema",
+    "schema_version",
+    "message_id",
+    "correlation_id",
+    "causation_id",
+    "dedup_key",
+    "occurred_at",
+    "recorded_at",
+    "issue",
+    "repo",
+    "task_id",
+    "run_id",
+    "producer",
+    "actor",
+    "recorded_by",
+    "payload_sha256",
+    "payload"
+  ],
+  "properties": {
+    "schema": {
+      "type": "string",
+      "pattern": "^mercury\\.[a-z_]+(\\.[a-z_]+)*\\.v[0-9]+$"
+    },
+    "schema_version": {
+      "$ref": "common.schema.json#/$defs/semver"
+    },
+    "message_id": {
+      "$ref": "common.schema.json#/$defs/message_id"
+    },
+    "correlation_id": {
+      "type": "string",
+      "pattern": "^(tsk|run)_[0-9A-HJKMNP-TV-Z]{26}$",
+      "description": "task_id; run_id for task-less triage messages"
+    },
+    "causation_id": {
+      "oneOf": [
+        {
+          "$ref": "common.schema.json#/$defs/message_id"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "dedup_key": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 300,
+      "pattern": "^[a-z_.]+:[^\\s]+$"
+    },
+    "occurred_at": {
+      "$ref": "common.schema.json#/$defs/timestamp"
+    },
+    "recorded_at": {
+      "$ref": "common.schema.json#/$defs/timestamp"
+    },
+    "issue": {
+      "oneOf": [
+        {
+          "$ref": "common.schema.json#/$defs/issue"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "repo": {
+      "oneOf": [
+        {
+          "$ref": "common.schema.json#/$defs/repo"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "task_id": {
+      "oneOf": [
+        {
+          "$ref": "common.schema.json#/$defs/task_id"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "run_id": {
+      "oneOf": [
+        {
+          "$ref": "common.schema.json#/$defs/run_id"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "name",
+        "version"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "coordinator",
+            "claude",
+            "codex",
+            "operator",
+            "github",
+            "linear"
+          ]
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 50
+        }
+      },
+      "description": "Originating authority of the content (e.g. claude for a plan review). The writer is always recorded_by."
+    },
+    "actor": {
+      "$ref": "common.schema.json#/$defs/actor"
+    },
+    "recorded_by": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "instance_id",
+        "app_version"
+      ],
+      "properties": {
+        "instance_id": {
+          "$ref": "common.schema.json#/$defs/instance_id"
+        },
+        "app_version": {
+          "$ref": "common.schema.json#/$defs/semver"
+        }
+      }
+    },
+    "payload_sha256": {
+      "$ref": "common.schema.json#/$defs/sha256",
+      "description": "sha256(JCS(payload))"
+    },
+    "payload": {
+      "type": "object"
+    }
+  }
+}

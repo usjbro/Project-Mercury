@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.mercury.local/v1/revision.request.schema.json",
+  "title": "Code revision request to Codex",
+  "description": "T18, T21, T23, T25, T32.",
+  "allOf": [
+    {
+      "$ref": "envelope.schema.json"
+    }
+  ],
+  "properties": {
+    "schema": {
+      "const": "mercury.revision.request.v1"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "revision_request_id": {
+          "$ref": "common.schema.json#/$defs/revision_request_id"
+        },
+        "cycle": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_cycles": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "counter": {
+          "enum": [
+            "plan_revision_count",
+            "pr_review_cycle_count",
+            "verify_fix_count",
+            "human_change_count"
+          ]
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "$ref": "common.schema.json#/$defs/finding"
+          },
+          "minItems": 0,
+          "maxItems": 200
+        },
+        "instructions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 20
+              },
+              "text": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4000
+              },
+              "refs": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 40
+                },
+                "minItems": 0,
+                "maxItems": 20
+              }
+            },
+            "required": [
+              "id",
+              "text",
+              "refs"
+            ]
+          },
+          "minItems": 1,
+          "maxItems": 50
+        },
+        "out_of_scope": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "minItems": 0,
+          "maxItems": 20
+        },
+        "authored_by": {
+          "$ref": "common.schema.json#/$defs/agent_info"
+        },
+        "artifact": {
+          "$ref": "common.schema.json#/$defs/artifact_ref"
+        },
+        "source": {
+          "enum": [
+            "claude_code_review",
+            "claude_security_review",
+            "local_tests",
+            "ci",
+            "diff_gate",
+            "merge_conflict",
+            "human_review"
+          ]
+        },
+        "plan": {
+          "$ref": "common.schema.json#/$defs/plan_ref"
+        },
+        "head_sha": {
+          "oneOf": [
+            {
+              "$ref": "common.schema.json#/$defs/git_sha"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "approval_id": {
+          "$ref": "common.schema.json#/$defs/approval_id"
+        }
+      },
+      "required": [
+        "revision_request_id",
+        "cycle",
+        "max_cycles",
+        "counter",
+        "findings",
+        "instructions",
+        "out_of_scope",
+        "authored_by",
+        "artifact",
+        "source",
+        "plan",
+        "head_sha",
+        "approval_id"
+      ]
+    }
+  },
+  "unevaluatedProperties": false
+}

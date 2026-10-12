@@ -1,0 +1,93 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://schemas.mercury.local/v1/output.triage_proposal.schema.json",
+  "title": "Claude triage proposal",
+  "description": "Output of a claude_triage run. A ranking, never an authorization.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "type": "string",
+      "enum": [
+        "mercury.output.triage_proposal.v1"
+      ]
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "pattern": "^run_[0-9A-HJKMNP-TV-Z]{26}$"
+        },
+        "input_digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "request_id",
+        "input_digest"
+      ]
+    },
+    "ranking": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "issue_id": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9]{0,9}-[0-9]{1,7}$"
+          },
+          "spec_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "rank": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200
+          },
+          "recommendation": {
+            "enum": [
+              "propose",
+              "defer",
+              "skip",
+              "needs_spec"
+            ]
+          },
+          "rationale": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          }
+        },
+        "required": [
+          "issue_id",
+          "spec_sha256",
+          "rank",
+          "recommendation",
+          "rationale"
+        ]
+      },
+      "minItems": 0,
+      "maxItems": 100
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000
+    },
+    "injection_suspected": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "schema",
+    "binding",
+    "ranking",
+    "summary",
+    "injection_suspected"
+  ]
+}

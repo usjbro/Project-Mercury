@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.mercury.local/v1/plan.approval.schema.json",
+  "title": "Plan approval binding",
+  "description": "T09. Binds (task_id, authorization_id, scope_version, plan_id, plan_sha256). Never inherited by a later plan version.",
+  "allOf": [
+    {
+      "$ref": "envelope.schema.json"
+    }
+  ],
+  "properties": {
+    "schema": {
+      "const": "mercury.plan.approval.v1"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "approval_id": {
+          "$ref": "common.schema.json#/$defs/approval_id"
+        },
+        "plan": {
+          "$ref": "common.schema.json#/$defs/plan_ref"
+        },
+        "review_id": {
+          "$ref": "common.schema.json#/$defs/review_id"
+        },
+        "authorization": {
+          "$ref": "common.schema.json#/$defs/authorization_ref"
+        },
+        "approval_conditions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "minItems": 0,
+          "maxItems": 30
+        },
+        "approved_by": {
+          "$ref": "common.schema.json#/$defs/agent_info"
+        }
+      },
+      "required": [
+        "approval_id",
+        "plan",
+        "review_id",
+        "authorization",
+        "approval_conditions",
+        "approved_by"
+      ]
+    }
+  },
+  "unevaluatedProperties": false
+}

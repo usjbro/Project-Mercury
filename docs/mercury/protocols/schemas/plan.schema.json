@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.mercury.local/v1/plan.schema.json",
+  "title": "Implementation plan version",
+  "description": "T06. artifact.sha256 is the hash approvals bind to (JCS of body).",
+  "allOf": [
+    {
+      "$ref": "envelope.schema.json"
+    }
+  ],
+  "properties": {
+    "schema": {
+      "const": "mercury.plan.v1"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "plan_id": {
+          "$ref": "common.schema.json#/$defs/plan_id"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "supersedes_plan_id": {
+          "oneOf": [
+            {
+              "$ref": "common.schema.json#/$defs/plan_id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revision_request_id": {
+          "oneOf": [
+            {
+              "$ref": "common.schema.json#/$defs/revision_request_id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "authorization": {
+          "$ref": "common.schema.json#/$defs/authorization_ref"
+        },
+        "base_sha": {
+          "$ref": "common.schema.json#/$defs/git_sha"
+        },
+        "produced_by": {
+          "$ref": "common.schema.json#/$defs/agent_info"
+        },
+        "artifact": {
+          "$ref": "common.schema.json#/$defs/artifact_ref"
+        },
+        "body": {
+          "$ref": "output.codex_plan.schema.json"
+        }
+      },
+      "required": [
+        "plan_id",
+        "version",
+        "supersedes_plan_id",
+        "revision_request_id",
+        "authorization",
+        "base_sha",
+        "produced_by",
+        "artifact",
+        "body"
+      ]
+    }
+  },
+  "unevaluatedProperties": false
+}

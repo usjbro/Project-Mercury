@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.mercury.local/v1/pr.created.schema.json",
+  "title": "Pull request created or updated",
+  "description": "Emitted once per (repo, number, head_sha).",
+  "allOf": [
+    {
+      "$ref": "envelope.schema.json"
+    }
+  ],
+  "properties": {
+    "schema": {
+      "const": "mercury.pr.created.v1"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "pr_id": {
+          "$ref": "common.schema.json#/$defs/pr_id"
+        },
+        "number": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "url": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "head_branch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "base_branch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "head_sha": {
+          "$ref": "common.schema.json#/$defs/git_sha"
+        },
+        "base_sha": {
+          "$ref": "common.schema.json#/$defs/git_sha"
+        },
+        "draft": {
+          "type": "boolean"
+        },
+        "operation": {
+          "enum": [
+            "created",
+            "updated",
+            "adopted_existing"
+          ]
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "body_sha256": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        },
+        "linear_reference": {
+          "type": "string",
+          "pattern": "^Part of [A-Z][A-Z0-9]{0,9}-[0-9]+$"
+        },
+        "outbox_id": {
+          "$ref": "common.schema.json#/$defs/outbox_id"
+        }
+      },
+      "required": [
+        "pr_id",
+        "number",
+        "url",
+        "head_branch",
+        "base_branch",
+        "head_sha",
+        "base_sha",
+        "draft",
+        "operation",
+        "title",
+        "body_sha256",
+        "linear_reference",
+        "outbox_id"
+      ]
+    }
+  },
+  "unevaluatedProperties": false
+}

@@ -1,0 +1,203 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.mercury.local/v1/task.assignment.schema.json",
+  "title": "Run assignment to an agent",
+  "description": "Record of exactly what an agent run was given. Emitted at claim time (T05, T12, T14, T28 and Claude runs).",
+  "allOf": [
+    {
+      "$ref": "envelope.schema.json"
+    }
+  ],
+  "properties": {
+    "schema": {
+      "const": "mercury.task.assignment.v1"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "run_kind": {
+          "enum": [
+            "codex_plan",
+            "codex_implement",
+            "codex_revise",
+            "claude_authorize",
+            "claude_plan_review",
+            "claude_revision_request",
+            "claude_code_review",
+            "claude_security_review",
+            "claude_triage",
+            "deps_install",
+            "verify"
+          ]
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "authorization": {
+          "oneOf": [
+            {
+              "$ref": "common.schema.json#/$defs/authorization_ref"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "plan": {
+          "oneOf": [
+            {
+              "$ref": "common.schema.json#/$defs/plan_ref"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "approval_id": {
+          "oneOf": [
+            {
+              "$ref": "common.schema.json#/$defs/approval_id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revision_request_id": {
+          "oneOf": [
+            {
+              "$ref": "common.schema.json#/$defs/revision_request_id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "worktree": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1000
+                },
+                "branch": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "maxLength": 255
+                },
+                "base_sha": {
+                  "$ref": "common.schema.json#/$defs/git_sha"
+                },
+                "head_sha": {
+                  "oneOf": [
+                    {
+                      "$ref": "common.schema.json#/$defs/git_sha"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "path",
+                "branch",
+                "base_sha",
+                "head_sha"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sandbox": {
+          "enum": [
+            "read-only",
+            "workspace-write",
+            "none",
+            null
+          ]
+        },
+        "network_access": {
+          "type": "boolean",
+          "const": false
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "max_awake_minutes": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "stall_minutes": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "max_tokens": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "max_budget_usd": {
+              "type": [
+                "number",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "max_awake_minutes",
+            "stall_minutes",
+            "max_tokens",
+            "max_budget_usd"
+          ]
+        },
+        "input_digest": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        },
+        "prompt": {
+          "$ref": "common.schema.json#/$defs/artifact_ref"
+        },
+        "output_schema": {
+          "type": "string",
+          "pattern": "^mercury\\.output\\.[a-z_]+\\.v[0-9]+$"
+        },
+        "resume_session_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 100
+        }
+      },
+      "required": [
+        "run_kind",
+        "attempt",
+        "authorization",
+        "plan",
+        "approval_id",
+        "revision_request_id",
+        "worktree",
+        "sandbox",
+        "network_access",
+        "limits",
+        "input_digest",
+        "prompt",
+        "output_schema",
+        "resume_session_id"
+      ]
+    }
+  },
+  "unevaluatedProperties": false
+}

@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.mercury.local/v1/code.review.schema.json",
+  "title": "Claude PR code review",
+  "description": "T24/T25/T26. Valid only while pr.head_sha is the PR head.",
+  "allOf": [
+    {
+      "$ref": "envelope.schema.json"
+    }
+  ],
+  "properties": {
+    "schema": {
+      "const": "mercury.code.review.v1"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "review_id": {
+          "$ref": "common.schema.json#/$defs/review_id"
+        },
+        "decision": {
+          "enum": [
+            "approve",
+            "revise",
+            "reject",
+            "needs_human"
+          ]
+        },
+        "reviewer": {
+          "$ref": "common.schema.json#/$defs/agent_info"
+        },
+        "input_digest": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        },
+        "artifact": {
+          "$ref": "common.schema.json#/$defs/artifact_ref"
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "$ref": "common.schema.json#/$defs/finding"
+          },
+          "minItems": 0,
+          "maxItems": 200
+        },
+        "injection_suspected": {
+          "type": "boolean"
+        },
+        "validation": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "stages_passed": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "V1",
+                  "V2",
+                  "V3",
+                  "V4"
+                ]
+              },
+              "minItems": 4,
+              "maxItems": 4
+            },
+            "dropped_findings": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "stages_passed",
+            "dropped_findings"
+          ]
+        },
+        "pr": {
+          "$ref": "common.schema.json#/$defs/pr_ref"
+        },
+        "plan": {
+          "$ref": "common.schema.json#/$defs/plan_ref"
+        },
+        "authorization": {
+          "$ref": "common.schema.json#/$defs/authorization_ref"
+        },
+        "github_review": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "event": {
+              "enum": [
+                "COMMENT",
+                "REQUEST_CHANGES"
+              ]
+            },
+            "outbox_id": {
+              "$ref": "common.schema.json#/$defs/outbox_id"
+            },
+            "github_review_id": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "event",
+            "outbox_id",
+            "github_review_id"
+          ]
+        },
+        "body": {
+          "$ref": "output.code_review.schema.json"
+        }
+      },
+      "required": [
+        "review_id",
+        "decision",
+        "reviewer",
+        "input_digest",
+        "artifact",
+        "findings",
+        "injection_suspected",
+        "validation",
+        "pr",
+        "plan",
+        "authorization",
+        "github_review",
+        "body"
+      ]
+    }
+  },
+  "unevaluatedProperties": false
+}

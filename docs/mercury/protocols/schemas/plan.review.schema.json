@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.mercury.local/v1/plan.review.schema.json",
+  "title": "Claude plan review",
+  "description": "T09/T10/T11.",
+  "allOf": [
+    {
+      "$ref": "envelope.schema.json"
+    }
+  ],
+  "properties": {
+    "schema": {
+      "const": "mercury.plan.review.v1"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "review_id": {
+          "$ref": "common.schema.json#/$defs/review_id"
+        },
+        "decision": {
+          "enum": [
+            "approve",
+            "revise",
+            "reject",
+            "needs_human"
+          ]
+        },
+        "reviewer": {
+          "$ref": "common.schema.json#/$defs/agent_info"
+        },
+        "input_digest": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        },
+        "artifact": {
+          "$ref": "common.schema.json#/$defs/artifact_ref"
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "$ref": "common.schema.json#/$defs/finding"
+          },
+          "minItems": 0,
+          "maxItems": 200
+        },
+        "injection_suspected": {
+          "type": "boolean"
+        },
+        "validation": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "stages_passed": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "V1",
+                  "V2",
+                  "V3",
+                  "V4"
+                ]
+              },
+              "minItems": 4,
+              "maxItems": 4
+            },
+            "dropped_findings": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "stages_passed",
+            "dropped_findings"
+          ]
+        },
+        "plan": {
+          "$ref": "common.schema.json#/$defs/plan_ref"
+        },
+        "authorization": {
+          "$ref": "common.schema.json#/$defs/authorization_ref"
+        },
+        "body": {
+          "$ref": "output.plan_review.schema.json"
+        }
+      },
+      "required": [
+        "review_id",
+        "decision",
+        "reviewer",
+        "input_digest",
+        "artifact",
+        "findings",
+        "injection_suspected",
+        "validation",
+        "plan",
+        "authorization",
+        "body"
+      ]
+    }
+  },
+  "unevaluatedProperties": false
+}
