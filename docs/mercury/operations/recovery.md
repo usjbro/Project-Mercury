@@ -1,8 +1,12 @@
 # MERCURY — Failure Recovery and Operations Runbook
 
-Owner: Agent D (DevOps / Platform Architect). Phase 2 design. Status: **proposal for reconciliation**. Feeds TDD §20 (Reliability and Failure Recovery) and §24 (Deployment and Upgrade).
+Owner: Agent D (DevOps / Platform Architect). Phase 4 revision. Status: **revised to the binding reconciliation decisions** (`reviews/30-reconciliation.md`, RD-1…RD-20). Feeds TDD §20 (Reliability and Failure Recovery) and §24 (Deployment and Upgrade).
 
-Read with [`macos-service.md`](macos-service.md), which covers the process model, the REL-nn requirements, paths and assumptions (ASM-D-nn). State names follow the design baseline. Agent C owns the canonical state machine; this document only relies on the rules stated in §1.
+Read with [`macos-service.md`](macos-service.md), which owns the parameter table (§2), the agent-uid design (§3), the exit-code contract (§5.2), the filesystem layout (§7.1), the credential inventory (§9.1) and durability (§14). Parameter names below (`svc.*`, `run.*`, …) refer to macos-service §2; no values are restated here.
+
+Single sources referenced, not restated: task states, holds and block reasons (state-machine §5, §6.1); run failure classes and per-kind attempts (state-machine §7.1); recovery per task state (state-machine §10); DDL (components §6.3); startup pseudocode (components §10.6); outbox handler contract (components §10.7); worktree reset policy (components §9); integration retry matrix (github.md §15); dedup keys (github.md §14); CLI verbs (components §5.5); notification matrix (components §4.15).
+
+Commands marked **(presence)** are `operator-presence` methods: they need Touch ID or the login password through `mercury-presence` (macos-service §9.5, ADR-019). Steps marked **[ROOT — operator consent]** are host changes performed only by the operator.
 
 ---
 
@@ -10,345 +14,455 @@ Read with [`macos-service.md`](macos-service.md), which covers the process model
 
 | # | Principle | Consequence |
 |---|---|---|
-| R1 | **The database is the source of truth for intent. GitHub and Linear are the source of truth for effects.** | After any doubt (crash, restore, outage), MERCURY re-reads remote state before acting again. |
-| R2 | **Commit the intent, then act, then record the outcome.** Every external side effect is a row in the side-effect journal, written in the same transaction as the state transition that requires it (§3). | A crash at any point leaves either no intent, or an intent that can be reconciled. |
-| R3 | **Reconcile before retry.** An `in_flight` side effect is never re-sent blindly. The remote is queried first by a natural key. | REL-06: zero duplicate side effects |
-| R4 | **Authority can only shrink during recovery.** Restoring, rolling back or losing state can cause re-authorization to be required. It can never create an authorization, plan approval or human approval. | Safe direction for every data-loss case |
-| R5 | **Run failures are not task failures.** An interrupted agent run is retried under a run-level policy. The task keeps its workflow state until the retry budget is exhausted. | Sleep, reboot and network blips do not FAIL tasks |
-| R6 | **Environmental failures do not consume the task's retry budget**, but have their own cap (3 per run step). | Flaky Wi-Fi does not escalate to the human |
-| R7 | **Stop dispatch, not the daemon.** Degraded conditions (disk, credentials, outage, contract break) pause the affected dispatch and keep heartbeat, polling (where possible), status and alerting alive. | The operator can still see what is wrong |
-| R8 | **Never destroy evidence automatically.** Worktrees of non-terminal or FAILED tasks, artifacts, backups and audit records are never auto-deleted. | Post-mortem is always possible |
-| R9 | **Never force-push, never merge, never touch protected branches** during recovery. | Same authority invariants as normal operation |
+| R1 | **The database is the source of truth for intent; GitHub and Linear for effects.** | After any doubt (crash, restore, outage), MERCURY re-reads remote state before acting again. |
+| R2 | **Commit the intent, then act, then record the outcome.** Every external effect is an `outbox` row written in the same transaction as the transition that needs it (components §6.3, §10.7). Local git is ordered commit → fsync → DB transaction (macos-service §14.2). | A crash at any point leaves either no intent or an intent that can be reconciled. |
+| R3 | **Reconcile before retry.** Every outbox handler implements `reconcile(natural_key)`; it runs for every `in_flight` item at startup and before every attempt after the first (components §10.7, dedup keys github.md §14). | Zero duplicate side effects. |
+| R4 | **Authority can only shrink during recovery.** Restore, rollback, key loss or a lost DB can make re-authorization necessary (`BLOCKED(reauthorization_required)`); they never create an authorization, plan approval or human approval, and never map to `guard_integrity_failure`. | Safe direction for every data-loss case (RD-4). |
+| R5 | **Run failures are not task failures.** Host-caused losses (`lost_by_host`, `lost_by_coordinator_crash`, `cancelled_by_coordinator`, `network_down`) never consume attempts and never block; `lost_by_host` has its own cap (`run.lost_by_host_cap`) that raises an ops alert, not `BLOCKED`. | Sleep, reboot and Wi-Fi do not escalate (CON-009). |
+| R6 | **Stop dispatch, not the daemon.** Degraded conditions set holds (state-machine §5) and keep heartbeat, status, polling and alerting alive. Only the §5.2 fatal rows stop the process. | The operator can see what is wrong. |
+| R7 | **Security conditions never auto-clear.** `security_halt`, repo `integrity_alert` and `integrity_check_failed` are cleared only through the presence tier; adopted runs are not kept through them (RD-3, RD-11). | An operator-uid process can request but not clear an escalation. |
+| R8 | **Never destroy evidence automatically.** Worktrees of non-terminal or FAILED tasks, quarantine, artifacts, backups and audit records are never auto-deleted; resets archive uncommitted changes first (components §9). | Post-mortem is always possible. |
+| R9 | **Never force-push, never merge, never touch protected branches**, during recovery or otherwise. | Same authority invariants as normal operation. |
 
 ---
 
-## 2. Failure classes and retry policy
+## 2. Host-level failure classification
 
-| Class | Examples | Retry? | Counts against task budget? | Backoff |
+Run failure classes, attempts and backoff are state-machine §7.1; the integration retry matrix is github.md §15. This table defines how **host events** map onto those classes. `lost_by_host` is the class added by ADR-020 / RD-11.
+
+| Host event | How it is detected | Run outcome (C's class) | Attempt consumed? | Escalation |
 |---|---|---|---|---|
-| `network` | DNS failure, connect timeout, TLS reset, HTTP 502/503/504 | Yes | No (cap 3 per step, then `BLOCKED` with reason `network`) | Exp. 30 s → 15 min, ±20% jitter |
-| `environment` | Run interrupted by sleep, shutdown, reboot or daemon crash | Yes | No (cap 3 per step) | Immediate (after wake/start reconcile) |
-| `rate_limit` | GitHub 403/429 with `retry-after` or `x-ratelimit-remaining: 0`; Linear `RATELIMITED`; agent API `rate_limit` | Yes | No | Honour `retry-after` / reset header; minimum 60 s |
-| `external_outage` | ≥ 5 consecutive 5xx from one dependency, or its status page reports an incident (not polled in v1) | Yes, after the circuit half-opens | No | Circuit: open 5 min → 15 → 30 → 60 (cap) |
-| `auth` | 401, revoked App installation, `authentication_failed`, keychain locked | No automatic retry except a token re-mint once | No | Operator action (FM-08) |
-| `contract` | Agent output fails schema validation; unknown required field; CLI flag missing | Once (the first one may be model variance) | Yes | — then the agent circuit opens after 2 consecutive |
-| `agent` | Agent reports failure, tests fail, plan rejected | Per workflow rules (Agent C) | Yes | — |
-| `resource` | RSS cap, worktree size cap, disk guard | Once after cleanup | Yes | 10 min |
-| `conflict` | Remote branch moved unexpectedly, PR closed by a human, base branch force-updated | No | — | → `BLOCKED` + human |
-| `internal` | Invariant violation, unhandled exception | Process restart (launchd) | — | Crash-loop guard → safe mode |
+| Sleep, run process intact | Sleep gap (components §10.10) | Run continues; not credited | — | — |
+| Sleep, model API stream died | Agent error after wake | `network_down` or `transient_api` | No | Per github.md §15 |
+| Network down / flapping | `network_down` hold or probe failure within `net.error_probe_window_s` | `network_down` | No | Never `BLOCKED`, never `dead` |
+| Coordinator crash, adoptable run alive | `agent-ctl probe` = `alive_match` | Adopted (audit event) | No | — |
+| Coordinator crash, Claude run | Pipes gone | `cancelled_by_coordinator`; re-run with the same `input_digest` | No | — |
+| Coordinator crash between claim and spawn | `runs.status = starting`, no `proc.json` | `lost_by_coordinator_crash` | No | — |
+| Reboot, shutdown, power loss, panic | `kern.bootsessionuuid` changed; no `exit.json` | `lost_by_host` | No | `run.lost_by_host_cap` per step → `ops.lost_by_host_cap` |
+| Coordinator absent too long | `exit.json{reason: supervisor_lost}` | `lost_by_host` | No | Same cap |
+| Durable commit missing after power loss | `git cat-file -e last_commit_sha` fails | Current step `lost_by_host`; replay from last durable commit | No | Same cap |
+| Run finished while the coordinator was down (even across reboot) | `exit.json` + `final.json` present | Finalized normally | Per result | — |
+| Wrapper rejected the spec | `agent-exec` exit 125 | `config_fatal` | No | `config_fatal` hold for agents; `ops.agent_infra` |
+| Agent stripped ACLs / unreadable output | Commit read fails | `policy_violation` | — | `BLOCKED(security_policy_violation)` |
+| Disk below interrupt thresholds | Disk guard | `cancelled_by_coordinator` + `low_disk` hold | No | `ops.disk` |
+| RSS cap | `agent-ctl stats` | `crash` (`rss_cap`) | Yes | Per SM §7.1 |
+| Hard deadline in `agent-exec` | `exit.json{reason: deadline}` | `timed_out` | Yes | Per SM §7.1 |
+
+A genuinely stuck task (many environmental interruptions without progress) is caught by C's no-progress detector, which notifies without changing state.
 
 ---
 
-## 3. Side-effect journal (outbox) and reconciliation keys
+## 3. Outbox reconciliation (semantics D relies on)
 
-Agent C owns the table design. This document needs these columns and semantics:
+The table, statuses and handlers are C's (`outbox`, components §6.3, §10.7); keys are B's (github.md §14). Recovery relies on these properties only:
 
-```sql
-CREATE TABLE side_effects (
-  id               TEXT PRIMARY KEY,           -- se_<ulid>
-  task_id          TEXT NOT NULL,
-  kind             TEXT NOT NULL,              -- see table below
-  dedup_key        TEXT NOT NULL UNIQUE,       -- deterministic: hash(task_id, kind, target, logical version)
-  status           TEXT NOT NULL CHECK (status IN ('pending','in_flight','done','failed','abandoned')),
-  attempt          INTEGER NOT NULL DEFAULT 0,
-  request_json     TEXT NOT NULL,              -- redacted, no secrets
-  remote_ref       TEXT,                       -- e.g. PR number, comment id, pushed sha
-  next_attempt_at  TEXT,
-  last_error_class TEXT,
-  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
-);
-```
-
-Execution: `pending` → (transaction) `in_flight, attempt+1` → call → (transaction) `done, remote_ref` plus any resulting state transition. When the daemon finds an `in_flight` row at startup or after reconnect, it runs **reconcile** before anything else:
-
-| Kind | Natural key / reconcile query | If found | If not found |
-|---|---|---|---|
-| `git.push` | `git ls-remote <mirror-remote> refs/heads/<branch>` | Remote sha == intended sha → `done`. Remote sha is an ancestor of the intended sha → retry push (fast-forward). Otherwise → `conflict`, task `BLOCKED`. | Retry push (no force) |
-| `github.pr.create` | `GET /repos/{o}/{r}/pulls?head={owner}:{branch}&state=all` | Adopt the PR number → `done` | Retry create |
-| `github.pr.update` (title/body) | `GET /pulls/{n}`; compare the body marker `<!-- mercury:rev=<n> -->` | Marker ≥ intended → `done` | Retry |
-| `github.review.post` (Claude review, COMMENT/REQUEST_CHANGES) | `GET /pulls/{n}/reviews`; body contains `<!-- mercury:dedup=<dedup_key> -->` | `done` | Retry |
-| `github.comment.post` | `GET /issues/{n}/comments?since=<created_at-5m>`; marker as above | `done` | Retry |
-| `github.reviewers.request` | `GET /pulls/{n}/requested_reviewers` (or an existing human review) | `done` | Retry (idempotent anyway) |
-| `linear.comment.create` | Client-supplied `id` = UUIDv5(dedup_key); `comment(id:)` query | `done` | Retry create with the same `id` |
-| `linear.issue.update` (state/labels) | Read the issue; compare to the target values | Already at target → `done` | Retry (idempotent) |
-| `linear.attachment.link` | Attachment keyed on (issue, url) is an upsert | `done` | Retry |
-| `heartbeat.update` | Not journaled (best effort) | — | — |
-
-Rules:
-- Markers are HTML comments inside bodies, so they are invisible in the UI and searchable. Markers carry only IDs, never content.
-- A side effect whose `attempt > 5` across `network` errors stays `pending`. It continues only after the circuit closes, and never becomes `failed` just because of being offline.
-- `abandoned` is used only when the task was CANCELLED before the effect ran. The reconcile still runs, so a PR that actually got created is found and closed/commented by the cancellation flow (Agent B/C).
+- At startup and after `network_down` clears, every `in_flight` item runs `reconcile(natural_key)` **before** any new attempt.
+- Network-class and 5xx failures do not count toward `max_attempts`; a per-integration circuit hold replaces dead-lettering (RD-18). Only non-network 4xx-class errors lead to `dead`.
+- Pushes are reconciled with `git ls-remote` against the mirror remote: remote SHA = intended → done; remote is an ancestor → fast-forward retry; otherwise `BLOCKED(foreign_push)` (never force).
+- PRs are found with `findPullByHead` using `state=all`.
+- Items for a task that was cancelled are reconciled first, so an effect that did land is found and handled by the cancellation flow.
 
 ---
 
 ## 4. Startup recovery procedure (ordered)
 
-Runs at every start: crash restart, login after reboot, upgrade, or restore. Each step logs `recovery.step {n, name, duration_ms, result}`. Steps 1–8 are local and need no network.
+Runs at every start: crash restart, login after reboot, upgrade, restore. Each step logs `recovery.step {n, name, duration_ms, result}`. Exit-code behaviour is macos-service §5.2; components §10.6 is the implementation pseudocode of the same order.
 
 | # | Step | Detail | On failure |
 |---|---|---|---|
-| 1 | **Crash-loop guard** | Append the start time to `run/starts.log`. If > 5 starts in 10 min → `mode = safe` (no dispatch; status, heartbeat and alerts only). | — |
-| 2 | **Fatal marker** | If `run/fatal.json` exists, stay halted unless started with `--clear-fatal` (written by `mercury resume-after-fix`). | Exit 0 |
-| 3 | **Config and paths** | Parse `mercury.toml`. Verify directories exist, modes are 0700/0600 (repair to stricter only), and no path is under TCC-protected folders. | Fatal halt |
-| 4 | **Open DB** | Pragmas: `journal_mode=WAL`, `synchronous=FULL`, `fullfsync=ON`, `foreign_keys=ON`, `busy_timeout=5000`. Run `PRAGMA quick_check`. | FM-09 (safe mode, no writes) |
-| 5 | **Single-instance lease** | Acquire `instance_lease` (`macos-service.md` §3.4). Read `kern.bootsessionuuid`; set `rebooted = (stored != current)`. | Another live instance → exit 0 |
-| 6 | **Schema** | Migration rules (`macos-service.md` §13.3): backup → migrate, or refuse. | Fatal halt + alert |
-| 7 | **Secrets** | Load Keychain items. A missing or locked item disables only the integrations that depend on it (FM-08). | Partial degrade |
-| 8 | **Agent tool self-test** | `codex --version`, `claude --version` equal the pins; `codex exec --help` contains the required flags. A mismatch opens that agent's circuit (FM-16). | Partial degrade |
-| 9 | **Process and run recovery** | For every `runs` row in `starting`/`running`: if `rebooted` → mark `interrupted`. Else apply the re-attach rules (`macos-service.md` §3.3): live + identity match → **re-attach** (Codex) or **kill group + interrupt** (Claude); dead + valid output → **adopt**; else → `interrupted`. For each interrupted **implementation** run: `git -C <worktree> reset --hard <checkpoint_sha> && git clean -fdx -e .mercury-keep`, where `checkpoint_sha` is the last coordinator commit recorded for the task. Planning and review runs need no worktree reset. | Worktree reset failure → task `BLOCKED` (FM-12) |
-| 10 | **Orphan sweep** | List processes of this uid: `ps -axo pid,ppid,pgid,lstart,command` + `lsof -a -u $UID -d cwd -Fpn` filtered to cwd under the work root or `runs/`. Any process not belonging to a live run → SIGTERM its group, then SIGKILL after 10 s. Log each one with `{pid, pgid, cwd, cmd}` (redacted). | Log + alert if unkillable |
-| 11 | **Worktree and lock hygiene** | `git -C <mirror> worktree prune`. For each DB worktree: the directory exists and `git worktree list` agrees. Remove `index.lock`/`HEAD.lock`/`shallow.lock` only if no live process has cwd in that worktree **and** the lock is older than 10 min. Worktrees on disk without a DB task → move to `worktrees/_quarantine/` (never delete). | FM-12 |
-| 12 | **Start the heartbeat and control socket** | `mode` = normal, safe or degraded. `mercury status` works from here. | — |
-| 13 | **Connectivity gate** | Probe GitHub and Linear (`macos-service.md` §8.5). Offline → wait. Steps 14–16 run when online. | — |
-| 14 | **Side-effect reconcile** | Every `in_flight` journal row → reconcile (§3). | Per row |
-| 15 | **Remote state reconcile** | For every non-terminal task: fetch the PR (by number or head branch), reviews, check runs on the head SHA, merge status and the Linear issue. Apply observed external transitions through the normal event path (dedup by `(source, entity, updated_at/etag)`), e.g. PR merged while down → merge verification flow; PR closed by human → `CANCELLED`/`BLOCKED` per Agent C. Re-validate that each task's authorization is still unrevoked and unexpired. | Per task |
-| 16 | **Deadline sweep** | Re-evaluate wall-clock deadlines that fell due while down. Coalesce notifications: at most **one** summary per task. | — |
-| 17 | **Resume pollers and dispatch** | Linear cursor rewinds by a 10-min overlap; GitHub uses ETags. Dispatch interrupted run steps first (oldest first), then new work. | — |
-| 18 | **Ready** | Log `recovery.completed {duration_ms, reattached, adopted, interrupted, orphans_killed, side_effects_reconciled}` and `daemon.ready`. If the downtime was > 6 h and tasks were active, post one `ops` comment: "MERCURY resumed after N h; X tasks resumed". | — |
+| 1 | **Instance lock** | `flock(run/mercuryd.lock)`. Then start touching `WORK_ROOT/ctl/coordinator.alive` every `supervisor.alive_touch_s`, so `agent-exec` sees a live supervisor during recovery. | Held → exit 0 |
+| 2 | **Crash-loop guard** | Append to `run/starts.log`; above `svc.crash_loop_starts` in `svc.crash_loop_window_min` → `mode = safe`. | — |
+| 3 | **Fatal marker** | `run/fatal.json` present → do not start. | Exit 0 |
+| 4 | **Config and paths** | Parse `mercury.toml`; verify §7.1 owners, modes and ACLs (repair to stricter only, ACLs via `agent-ctl fix-acl`); TCC-safe paths; socket path length. | Fatal → `fatal.json`, exit 0 |
+| 5 | **Open DB** | Pragmas per macos-service §14.2; `PRAGMA quick_check`. | Corruption → safe mode, no writes (FM-09) |
+| 6 | **Schema** | macos-service §13.3: backup → migrate, or refuse if too new. | Too new → `fatal.json`, exit 0 |
+| 7 | **Audit chain** | Verify the chain since the last off-host anchor. If the head is behind the anchor and `run/restore.json` matches the DB → **awaiting restore confirmation** (no dispatch) until `mercury restore --confirm` **(presence)** records the restore epoch (macos-service §14.4). Mismatch without a matching restore → safe mode + one SECURITY notification (`integrity_check_failed`). | Safe mode |
+| 8 | **Secrets** | Read every §9.1 item once via `mercury-keychain`. Missing → that integration `config_fatal`; locked → `keychain_locked` hold. | Partial degrade |
+| 9 | **Self-tests** | Agent CLI versions and hashes; agent-uid infrastructure (macos-service §3.10); power and presence helpers present. | `config_fatal` hold (agents) |
+| 10 | **Host and durability** | `rebooted = (stored bootsessionuuid ≠ current)`. For every non-terminal task with `last_commit_sha`: `git cat-file -e` + branch ref in the mirror. Missing → mark the step for replay from the last durable commit (`lost_by_host`). | Per task |
+| 11 | **Runs** | For each `runs` row in `starting`/`running`/`stopping`: see the table below. | Per run |
+| 12 | **Orphan sweep** | `agent-ctl list`: any `_mercuryagent` process not in an adopted run's group → `agent-ctl reap` (ladder), audit `orphan_killed`. | Unkillable → `ops.agent_infra` |
+| 13 | **Worktree hygiene** | Resume worktree steps in `creating`/`archiving`/`removing` idempotently (components §9); clear stale `lock_owner`; `git worktree prune`; remove `index.lock` only if no agent process has its cwd there (`agent-ctl list`) and it is older than 10 min; worktrees on disk without a DB row → `WORK_ROOT/quarantine/` (mode 0000). Tasks marked in step 10 or with `lost` runs get the reset policy at re-dispatch. | FM-12 |
+| 14 | **Surfaces** | Heartbeat file, control socket, `mercury-power`, remote heartbeat. `mercury status` works from here. | — |
+| 15 | **Connectivity gate** | Authenticated probes (macos-service §8.5). Offline → `network_down` hold; steps 16–18 wait. | — |
+| 16 | **Outbox reconcile** | Every `in_flight` item → `reconcile` (§3). | Per item |
+| 17 | **Remote reconcile** | Every non-terminal task: PR (by number or head, `state=all`), reviews, checks on the head SHA, merge state, Linear issue (`linear.poll_overlap_s` after restart). Facts enter through the inbox (dedup keys, github.md §14). After a restore: tasks with unverifiable authority → `BLOCKED(reauthorization_required)`; remote objects naming unknown tasks → orphan remote objects (never adopted). | Per task |
+| 18 | **Timers** | Due state timers fire only after a fresh attempt of the awaited action (RD-14); due reminders and expiries → **one** summary notification; hold ageing evaluated (`hold_age.*`). | — |
+| 19 | **Dispatch gate** | Dark-wake rule (macos-service §8.4). Then resume pollers and dispatch: replayed steps first (oldest first), then new work. | — |
+| 20 | **Ready** | Log `recovery.completed {duration_ms, adopted, finalized, lost_by_host, orphans_reaped, outbox_reconciled}` and `daemon.ready`. Downtime above `recovery.downtime_notice_min` with non-terminal tasks → one ops notice. | — |
 
-Steps 9–11 also run after a restore (§7 RB-08), with `rebooted` forced to true.
+**Step 11 — run recovery table** (statuses and classes are C's):
+
+| Situation | Action |
+|---|---|
+| `starting`, no `proc.json` | `lost_by_coordinator_crash`; re-dispatch |
+| `agent-ctl probe` = `alive_match`, kind adoptable (Codex, `verify`, `deps_install`), mode normal | **Adopt**: resume tailing from the persisted offset; deadlines continue from persisted `awake_ms`. The authorization guard (incl. `spec_hash`) is re-evaluated before the result is acted on. |
+| `alive_match`, kind adoptable, mode safe or `security_halt` | Kill ladder via `agent-ctl signal`; `cancelled_by_coordinator` |
+| `alive_match`, kind `claude` or `git_step` | Kill ladder; `cancelled_by_coordinator`; re-run (same `input_digest`) |
+| Dead, `exit.json` present (any boot session) | Finalize from `exit.json` + `final.json` (validated); `reason: supervisor_lost` → `lost_by_host` |
+| Dead, no `exit.json`, boot session changed | `lost_by_host` |
+| Dead, no `exit.json`, same boot session | `agent-exec` itself was killed → `crash` (SM §7.1), unless `proc.json` is also absent (`lost_by_coordinator_crash`) |
+| `alive_mismatch` | Treat as dead for this run; the process is handled by the orphan sweep |
+
+Safe mode stops after step 14 (no steps 15–19 dispatch effects; read-only polling only when the DB is writable).
 
 ### 4.1 Failure-recovery flowchart
 
 ```mermaid
 flowchart TD
-    S["mercuryd start"] --> CL{"more than 5 starts in 10 min?"}
-    CL -->|yes| SAFE["safe mode - no dispatch - alert"]
+    S["mercuryd start"] --> LK{"flock acquired?"}
+    LK -->|no| DUP["another instance live - exit 0"]
+    LK -->|yes| ALIVE["touch coordinator.alive"] --> CL{"crash loop?"}
+    CL -->|yes| SAFE["safe mode - no dispatch - stop adopted runs - alert"]
     CL -->|no| FM{"fatal.json present?"}
-    FM -->|yes| HALT["stay halted - exit 0 - watchdog alerts"]
-    FM -->|no| DB{"quick_check ok?"}
-    DB -->|no| CORR["FM-09 DB corruption - safe mode - operator restore"]
-    DB -->|yes| LEASE{"lease free?"}
-    LEASE -->|no| DUP["another instance live - exit 0"]
-    LEASE -->|yes| MIG{"schema compatible?"}
-    MIG -->|"needs migrate"| BK["backup then migrate"] --> SEC
-    MIG -->|"too new for this version"| HALT
-    MIG -->|ok| SEC["load Keychain secrets"]
-    SEC --> TOOLS["agent version self-test - open circuits on mismatch"]
-    TOOLS --> RUNS{"for each running run"}
-    RUNS -->|"rebooted"| INT["mark interrupted - reset worktree to checkpoint"]
-    RUNS -->|"alive and identity matches - Codex"| ATT["re-attach and tail output"]
-    RUNS -->|"alive - Claude"| KILL["kill group - mark interrupted"]
-    RUNS -->|"dead and valid output"| ADOPT["adopt result"]
-    RUNS -->|"dead and no valid output"| INT
-    INT --> ORPH["orphan sweep by cwd and pgid"]
-    ATT --> ORPH
+    FM -->|yes| HALT["stay down - exit 0 - watchdog alerts"]
+    FM -->|no| CFG{"config and paths valid?"}
+    CFG -->|no| HALT
+    CFG -->|yes| DB{"quick_check ok?"}
+    DB -->|no| CORR["FM-09 corruption - safe mode - no writes - operator restore"]
+    DB -->|yes| MIG{"schema compatible?"}
+    MIG -->|"too new"| HALT
+    MIG -->|"needs migrate"| BK["backup then migrate"] --> CH
+    MIG -->|ok| CH{"audit chain matches anchors?"}
+    CH -->|"behind anchor with matching restore.json"| RCONF["await restore confirmation - presence - record restore epoch"] --> SECR
+    CH -->|"mismatch"| SECH["safe mode - integrity_check_failed - SECURITY notice"]
+    CH -->|ok| SECR["read secrets once"]
+    SECR --> SELF["self-tests - agent-uid checks - config_fatal holds on failure"]
+    SELF --> DUR["boot session and git durability check"]
+    DUR --> RUNS{"for each active run"}
+    RUNS -->|"alive and adoptable"| ADOPT["adopt - guard re-checked before acting"]
+    RUNS -->|"alive and Claude or git_step"| KILL["agent-ctl kill ladder - cancelled_by_coordinator"]
+    RUNS -->|"dead with exit.json"| FIN["finalize from exit.json and final.json"]
+    RUNS -->|"dead, boot changed or supervisor_lost"| LOST["lost_by_host - no attempt"]
+    ADOPT --> ORPH["orphan sweep via agent-ctl list and reap"]
     KILL --> ORPH
-    ADOPT --> ORPH
-    ORPH --> WT["worktree prune and stale lock cleanup"]
-    WT --> HB["start heartbeat and control socket"]
-    HB --> NET{"GitHub and Linear reachable?"}
-    NET -->|no| WAIT["offline - backoff probe - no dispatch"] --> NET
-    NET -->|yes| REC["reconcile in_flight side effects"]
-    REC --> RS["reconcile remote state per task - revalidate authorizations"]
-    RS --> DL["sweep deadlines - coalesce notices"]
-    DL --> READY["resume pollers and dispatch - daemon.ready"]
+    FIN --> ORPH
+    LOST --> ORPH
+    ORPH --> WT["worktree hygiene - quarantine unknown worktrees"]
+    WT --> HB["heartbeat, control socket, power helper"]
+    HB --> NET{"authenticated probe ok?"}
+    NET -->|no| WAIT["network_down hold - probe every interval"] --> NET
+    NET -->|yes| REC["reconcile in_flight outbox items"]
+    REC --> RS["reconcile remote state - reauthorization_required and orphan objects after restore"]
+    RS --> DL["fire due timers after fresh attempt - one summary notice"]
+    DL --> DW{"full wake or settled awake time?"}
+    DW -->|no| DWW["poll only - no dispatch"] --> DW
+    DW -->|yes| READY["resume dispatch - daemon.ready"]
 ```
 
 ---
 
 ## 5. Failure-mode catalogue
 
-Columns: **Detection** (how and how fast), **Automatic recovery**, **Operator action** (blank = none needed), **Bound** (REL reference or invariant).
+Columns: **Detection**, **Automatic recovery**, **Operator action** (blank = none), **Bound** (parameter or invariant). Parameter names are macos-service §2.
 
 | ID | Failure | Detection | Automatic recovery | Operator action | Bound |
 |---|---|---|---|---|---|
-| FM-01 | **Daemon crash mid-transition** (exception, OOM, SIGKILL) | launchd sees a non-zero exit or signal death | launchd restarts after ≥ 30 s. The transition transaction either committed (state + journal rows) or rolled back. Startup §4 reconciles `in_flight` effects. | — (if crash-looping: FM-17) | REL-01, REL-03, REL-06 |
-| FM-02 | **Daemon crash mid-agent-run** | Same as FM-01 | Codex run keeps going (detached, output to file) → re-attached at step 9. Claude run is killed (pipes gone) → `interrupted` → re-dispatched as `environment` (decision runs are idempotent; outputs are new artifact versions, never overwriting). | — | REL-04 |
-| FM-03 | **Mac sleeps mid-run** | Tick gap > 30 s + `kern.waketime` (`macos-service.md` §8.2) | All processes resume. Awake-time budget excludes the gap. Stall clock is reset with a 5-min post-wake grace. Connectivity gate → token re-mint → reconcile → re-poll. If the agent's API stream died and the run fails → `environment` retry. | — | REL-13 |
-| FM-04 | **Reboot / logout** (graceful) | SIGTERM → shutdown sequence (`macos-service.md` §12). At next start, `bootsessionuuid` changed. | Runs interrupted cleanly with state persisted. At login: full startup recovery. Implementation worktree reset to checkpoint; step re-run. | Log in (FileVault) | REL-05, REL-14 |
-| FM-05 | **Power loss / kernel panic** | No `daemon.stopped` event for the previous instance + `bootsessionuuid` changed | As FM-04. The DB is durable to the last commit (`synchronous=FULL`, `fullfsync`). Uncommitted worktree changes may be torn → reset to checkpoint. `quick_check` at start; FM-09 if it fails. | Log in | REL-03, REL-05 |
-| FM-06 | **Network loss during push / PR creation** | Request error class `network`; journal row stays `in_flight` | Connectivity gate → reconcile by natural key (§3): `ls-remote` for push, `pulls?head=` for PR. Adopt or retry; never duplicate. | — | REL-06 |
-| FM-07 | **GitHub or Linear outage / rate limit** | 5xx streak → circuit open. 403/429 with `retry-after` or `x-ratelimit-remaining` < 10% → throttle. | Per-dependency circuit (5 → 60 min). Polling slows to the budget. GitHub open → no new Codex dispatch for PR-stage steps; planning may continue. Linear open → Linear writes queue in the journal (Linear is not on the code path). Outage time does not count toward stall or SLA timers (paused on `external_outage`). | Only if > 6 h (notified once via the other channel) | REL-06 |
-| FM-08 | **Expired or revoked credentials / locked keychain** | GitHub: JWT mint returns 401 (key revoked) or installation 404 (App uninstalled). Linear 401. Agent `authentication_failed` result. Keychain `-25308`. | One re-mint/re-read attempt. Then that integration → `credential_invalid`: dispatch depending on it stops. Other integrations continue. Keychain-locked retried every 5 min. | Rotate credential (RB-06), then `mercury reload-credentials` | Alert ≤ 15 min |
-| FM-09 | **DB corruption** (`quick_check` ≠ ok, `SQLITE_CORRUPT`, `SQLITE_NOTADB`) | Start step 4, daily `integrity_check`, or any query error | **Safe mode**: no writes, no dispatch. Copy `db/*` to `backups/quarantine/<ts>/`. Alert. Agent runs left running are allowed to finish; their output files are kept. | RB-08 restore (latest verified backup) → reconcile. Optional `sqlite3 corrupt.db .recover` for forensics. | REL-11, REL-12, R4 |
-| FM-10 | **Disk full** | `ENOSPC`/`SQLITE_FULL`, or the guard at dispatch (`macos-service.md` §10.4) | Delete ballast → commit `degraded:disk` → stop dispatch → safe cleanup (old run dirs, logs, completed worktrees). Below 2 GiB: interrupt active Codex runs (checkpoint first). Resume automatically when above threshold; recreate ballast. | Free disk space if automatic cleanup is not enough | — |
-| FM-11 | **Orphaned agent processes** | Startup step 10, and every 10 min: processes with cwd under the work root without a live run; a run's pgid alive after the run ended | SIGTERM group → SIGKILL after 10 s. Log each one. | Only if unkillable (zombie or `UE` state) → reboot | REL-10 |
-| FM-12 | **Stuck worktree / git locks** | git error `index.lock exists`; `worktree add` fails (path exists or branch checked out); worktree missing for a non-terminal task | Remove the stale lock if no process uses the worktree and it is > 10 min old. Missing worktree → recreate from the mirror at `checkpoint_sha` (if pushed) or the last pushed branch sha; else task `BLOCKED`. Branch-in-use → `git worktree prune`, then retry once. | For `BLOCKED`: inspect, then `mercury task retry <id>` or cancel | R8 |
-| FM-13 | **Half-created PR** (pushed but no PR; PR created but DB not updated; PR created but Linear not linked) | Journal `in_flight`/`pending` rows at reconcile | §3: `pulls?head=` adopts an existing PR. Missing PR is created. Linear link via an idempotent attachment upsert. | — | REL-06 |
-| FM-14 | **Duplicate polling events** (overlapping Linear windows, ETag replay, repeated GitHub states) | Inbox unique key `(source, entity_id, version)` where version = `updatedAt`, review id, check-run id + status, or PR `updated_at` | Duplicates are dropped at insert (`INSERT … ON CONFLICT DO NOTHING`). Handlers are idempotent with respect to current state (guards reject transitions that are no longer valid). | — | REL-06 |
-| FM-15 | **Clock jumps** (NTP step, manual change, DST is irrelevant because UTC is used) | `|wall delta − mono delta| > 2 s` (`macos-service.md` §8.2) | Durations inside a process lifetime use the monotonic clock. Persisted `due_at` values are re-evaluated. A backward jump > 5 min → log `clock.jump`; ULID generation stays monotonic (ULID monotonic factory). JWT `iat` set to now − 60 s to tolerate GitHub clock skew. | If skew vs GitHub `Date` header > 2 min persists: check System Settings › Date & Time | — |
-| FM-16 | **Claude or Codex CLI upgrade breaks the output schema** (or someone upgrades outside MERCURY) | Start step 8 version pin mismatch; run final output fails schema; JSONL lacks the required event; required flag missing from `--help` | Run → `contract` failure, retried once. 2 consecutive contract failures, or a version mismatch → that agent's **circuit opens** (dispatch for that agent stops; tasks stay in state and are shown as deferred `circuit:codex`). Other agent continues. | Re-pin to the previous version (RB-09 agent rollback), or validate the new version with `mercury doctor --agents` and update the pin | Max 2 wasted runs |
-| FM-17 | **Crash loop** (bug triggered by specific data) | > 5 starts in 10 min | Safe mode (no dispatch). Heartbeat `mode: safe`. Ops alert with the last exception class. | Inspect logs → `mercury rollback` (upgrade-related) or `mercury task quarantine <id>` (data-related) → `mercury resume` | REL-15 |
-| FM-18 | **Agent run hangs** (alive, no output) | No stdout growth for `stall_min` of awake time | SIGINT (Claude) / SIGTERM (Codex) the group → 10 s → SIGKILL. Run `agent` failure class `stalled` → retried once; second stall → task `BLOCKED` + notify | Investigate if repeated | REL-08 |
-| FM-19 | **Agent run dies** (OOM, segfault, killed by the user) | Liveness poll 15 s; RSS cap | Classify from JSONL/stderr: `resource` or `agent`. Retry per §2. | — | REL-07 |
-| FM-20 | **Daemon down for a long time** (BTM toggle off, plist removed, fatal halt, operator logged out) | Watchdog: heartbeat issue stale > 45 min with pending work | None possible locally | §8 troubleshooting tree | REL-09 |
-| FM-21 | **Unauthorized external change** (human or other bot pushed to a MERCURY branch, PR closed, Linear-native coding session started) | Reconcile sees an unexpected head sha, PR state or delegate | Never overwrite. Task → `BLOCKED` (reason `conflict`/`foreign_actor`) + notify. Security-relevant cases are escalated per Agent E. | Decide: adopt, retry or cancel | R9 |
+| FM-01 | **Coordinator crash mid-transition** | launchd sees non-zero exit or signal | Restart after `svc.throttle_interval_s`; the transaction committed or rolled back; §4 reconciles `in_flight` items | If crash-looping: FM-17 | `svc.restart_to_ready_max_s` |
+| FM-02 | **Coordinator crash mid-run** | As FM-01 | Codex, `verify`, `deps_install` keep running under `agent-exec` and are adopted; Claude re-run with the same `input_digest`, no attempt | — | 0 lost adoptable runs |
+| FM-03 | **Mac sleeps mid-run** | Sleep gap + `kern.waketime`; power helper | Not credited; `host_sleep_grace`; connectivity gate; token re-mint; reconcile; dark-wake rule before new dispatch | — | `recovery.first_poll_max_s` |
+| FM-04 | **Logout or graceful reboot** | SIGTERM (macos-service §12); boot session changes on reboot | Claude runs interrupted; adoptable runs left under `agent-exec` (lease-bounded); at login full §4 | Log in (FileVault) | `supervisor.lease_stale_min` |
+| FM-05 | **Power loss / kernel panic** | No `daemon.stopped` + boot session changed | DB durable to last commit; runs → `lost_by_host`; git durability check (§4 step 10); reset policy at re-dispatch | Log in | `run.lost_by_host_cap` |
+| FM-06 | **Network loss during push / PR creation** | Network-class error; item stays `in_flight` | `network_down` hold; on recovery reconcile by natural key; adopt or retry; attempts not consumed | — | 0 duplicates |
+| FM-07 | **GitHub or Linear outage / rate limit** | Retry matrix (github.md §15); circuit holds | Per-integration circuit; polls widen; Codex work that does not need the integration continues | Only if long (one notification through the other channel) | — |
+| FM-08 | **Credential expired, revoked, keychain locked** | 401 after one re-mint; Keychain −25308 at start or reload | Integration `config_fatal` / `keychain_locked` hold; others continue; retry every `credentials.locked_retry_s` | RB-06 then `mercury reload-credentials` | `credentials.locked_alert_min` |
+| FM-09 | **DB corruption** | `quick_check`, daily `integrity_check`, `SQLITE_CORRUPT` | Safe mode (no writes, no dispatch); copy `db/*` to `backups/quarantine/<ts>/`; adopted runs stopped; alert | RB-08 restore → restore epoch | — |
+| FM-10 | **Disk full** | `ENOSPC`/`SQLITE_FULL` or guard | Ballast released; `low_disk` hold; cleanup of safe items; interrupts at `disk.interrupt_local_gib` / `disk.interrupt_codex_gib` | Free space if cleanup is not enough | `disk.*` |
+| FM-11 | **Orphaned agent processes** | §4 step 12 and every 10 min: `agent-ctl list` shows `_mercuryagent` processes outside live run groups | `agent-ctl reap`; audit | Only if unkillable → reboot | 0 orphans |
+| FM-12 | **Stuck worktree / git locks** | `index.lock exists`; `worktree add` fails; worktree missing for a non-terminal task | Stale lock removal (no agent cwd there, > 10 min); missing worktree recreated from the mirror at `last_commit_sha` or `base_sha` (components §9); branch in use → prune + retry once | If `BLOCKED`: RB-12 | R8 |
+| FM-13 | **Half-created PR** | Outbox items `in_flight`/`pending` at reconcile | Reconcile adopts the PR found by head (`state=all`) | — | 0 duplicates |
+| FM-14 | **Duplicate poll events** | Inbox unique dedup key (github.md §14) | Dropped at insert; handlers idempotent | — | 0 duplicates |
+| FM-15 | **Clock jumps** | `|Δwall − Δmono| > clock.wall_jump_s` | Not treated as sleep; persisted `due_at` re-evaluated; ULIDs monotonic; JWT `iat` = now − 60 s | If skew vs GitHub `Date` > 2 min persists: check Date & Time | — |
+| FM-16 | **Agent CLI upgrade breaks the contract** | Version/hash pin mismatch; schema validation failures; missing flag | `config_fatal` for that agent; circuit; other agent continues | RB-09 | — |
+| FM-17 | **Crash loop** | `svc.crash_loop_starts` in `svc.crash_loop_window_min` | Safe mode; ops alert with the last exception class | Logs → `mercury rollback` (upgrade-related) or `mercury pause --task <id>` for a data-related task → `mercury clear-fatal`/restart | — |
+| FM-18 | **Agent run hangs** | No stdout growth **and** no group CPU progress (`agent-ctl stats`) for the stall value (macos-service §2.3) | Kill ladder; `stalled` per SM §7.1 | Investigate if repeated | — |
+| FM-19 | **Agent run dies** (OOM, segfault) | `agent-ctl probe` every `run.liveness_poll_s` | Classified from `exit.json`/stderr per SM §7.1 | — | — |
+| FM-20 | **Daemon down for a long time** (BTM off, plist removed, fatal halt, logged out) | Watchdog (`watchdog.stale_awake_min` / `watchdog.stale_sleeping_h`) with `pending_work` | None locally | §8 troubleshooting | — |
+| FM-21 | **Foreign change** (foreign push, PR closed, foreign Linear agent) | Reconcile sees unexpected head, PR state or delegate | Never overwrite; `BLOCKED(foreign_push \| pr_closed_unexpectedly \| foreign_agent)` per SM §6.1 | Decide: adopt, reset, reopen, cancel | R9 |
+| FM-22 | **Supervisor lost** (coordinator absent beyond the lease) | `exit.json{reason: supervisor_lost}` | `lost_by_host`; replay | — | `supervisor.lease_stale_min` |
+| FM-23 | **Agent-uid infrastructure broken** (sudoers changed, wrapper hash mismatch, user/group missing, ACLs missing) | `doctor` at start and on demand; `agent-exec` exit 125; `sudo -n` failure | `config_fatal` hold for agents; coordinator keeps polling and notifying | RB-17 | — |
+| FM-24 | **Audit chain mismatch** (not explained by a restore epoch) | §4 step 7 or `mercury audit verify` | Safe mode, `integrity_check_failed`, one SECURITY notification; adopted runs stopped | RB-14 | R7 |
+| FM-25 | **Restore or new host** | `run/restore.json` | Awaiting confirmation; restore epoch; `reauthorization_required`; orphan remote objects reported | RB-08 / RB-11 / RB-18 | R4 |
+| FM-26 | **Dark wake with queued work** | Power helper reports `dark`; or no full-wake signal | No dispatch until full wake or `wake.dark_wake_min_awake_s`; polls allowed | — | 0 dispatches in dark wake |
+| FM-27 | **MERCURY down while the operator must merge** | Required MERCURY checks absent or pending | None (by design the merge waits) | RB-13 | — |
+| FM-28 | **Security halt** (unauthorized merge actor, merge commit not on base, governance drift, secret-scan hit, git-config tamper, sandbox violation, canary read) | MergeVerifier, drift monitor, canary self-test, pre-push gates | Global `security_halt` (or repo `integrity_alert`); all runs in scope stopped; SECURITY notification | RB-14 | R7 |
+| FM-29 | **Agent tampered with permissions** (ACL stripped, files 0600) | Coordinator read fails during commit or archive | `policy_violation`; `BLOCKED(security_policy_violation)` | RB-12 with `--discard-worktree-changes` | — |
+| FM-30 | **Keychain locked at start** (not at runtime: secrets are read once) | −25308 at step 8 | `keychain_locked` hold; retry | Unlock (log in again or `security unlock-keychain`) | `credentials.locked_alert_min` |
 
 ---
 
-## 6. Recovery verification (feeds `testing/verification-plan.md`)
+## 6. Recovery verification (procedures; IDs registered by F)
 
-| Test | Method | Pass criterion |
-|---|---|---|
-| T-REC-01 crash at every journal boundary | Fault injector kills the process (SIGKILL) before and after each outbound call and each commit; 100 randomized seeds | 0 duplicate remote objects; all tasks reach the same final state as a fault-free run |
-| T-REC-02 power-loss durability | macOS VM hard reset during write load; then `integrity_check` + ledger compare | `ok`; 0 committed transitions lost |
-| T-REC-03 re-attach | Kill mercuryd mid-Codex run (fake Codex that writes JSONL for 2 min) | Run completes and its result is adopted; no re-run |
-| T-REC-04 sleep | Fake clock: inject a 2 h tick gap | Budget unchanged; stall grace applied; one coalesced notice |
-| T-REC-05 orphan sweep | Spawn grandchildren that `setsid` with cwd in the worktree; kill mercuryd | After restart: 0 orphans (REL-10) |
-| T-REC-06 restore | Restore a 24 h-old backup while fake GitHub has newer PRs | PRs adopted; no duplicate PRs; tasks whose authorization is missing go back to awaiting authorization |
-| T-REC-07 contract break | Fake Codex emits a schema-invalid final message | 1 retry, then circuit open after a 2nd; no task FAILED for environment reasons |
-| T-REC-08 shutdown budget | `launchctl kill TERM` with 2 active fake runs | Exit ≤ 20 s; runs `interrupted`; WAL truncated |
+IDs are proposals for F (`TC-REC-*`, `TC-NET-*`, `TC-OPS-*`); Phase 2 `T-REC-nn` are aliases. Environments: T1 unit with FakeClock (every sleep test runs in **both** monotonic modes, RD-16), T2 integration with fakes and FaultProxy, T4 real Mac, VM = macOS guest on an Apple Silicon host. ⓗ = operator involvement.
+
+| Test | Scenario and method | Env | Pass criterion |
+|---|---|---|---|
+| TC-REC-001 (T-REC-01) | SIGKILL before and after every outbound call and every commit; 100 seeds | T2 | 0 duplicate remote objects; same final states as a fault-free run; git and SQLite consistent (`last_commit_sha` present) |
+| TC-REC-002 (T-REC-02) | Power-loss durability (see §6.1) | VM | 50/50 cycles: `integrity_check` ok; ledger matches; every recorded `last_commit_sha` present or the step classified `lost_by_host`; no torn `exit.json` accepted |
+| TC-REC-003 (T-REC-03) | Kill `mercuryd` mid-Codex run (fake agent writing JSONL for 2 min) under `agent-exec` | T2 / VM | Run adopted and finalized; no re-run; guard re-checked before acting |
+| TC-REC-004 (T-REC-04) | 2 h sleep gap, both monotonic modes | T1 | Budget unchanged; grace applied; one summary notice |
+| TC-REC-005 (T-REC-05) | Agent grandchildren that `setsid` away; kill `mercuryd` | VM | After restart: 0 `_mercuryagent` orphans (`agent-ctl list`) |
+| TC-REC-006 (T-REC-06) | Restore a 24 h-old backup while fake GitHub has newer PRs | T2 | Restore epoch recorded after presence confirmation; orphan remote objects reported; 0 duplicate PRs; 0 auto-adoptions; tasks with missing authority `BLOCKED(reauthorization_required)` |
+| TC-REC-007 (T-REC-07) | Fake Codex emits a schema-invalid final message | T2 | Classified per SM §7.1; `config_fatal`/circuit on repeat; no task FAILED for environment reasons |
+| TC-REC-008 (T-REC-08) | `launchctl kill TERM` with one Claude and one Codex fake run | T2 / VM | Exit within `svc.shutdown_budget_s`; Claude run `cancelled_by_coordinator`; Codex run still alive and adopted on restart |
+| TC-REC-009 | Supervisor lease: stop `mercuryd` permanently with an active run | VM | Run ended after `supervisor.lease_stale_min` of credited time with `reason: supervisor_lost`; next start classifies `lost_by_host`, 0 attempts consumed |
+| TC-REC-010 | Lid-close sleep ≥ 2 h during `codex_implement` | T4 ⓗ | `network_down`/`transient_api`, resumed or replayed; 0 attempts consumed; token re-minted |
+| TC-REC-011 | Idle-sleep assertion present only while runs are active | T4 | Assertion present/absent as expected |
+| TC-REC-012 | Dark wake (Power Nap) with tasks queued | T4 ⓗ | 0 dispatches during dark wake; dispatch after full wake |
+| TC-REC-013 | Logout with an active Codex run; log in within and beyond the lease | T4 ⓗ | Within: adopted. Beyond: `lost_by_host`. 0 orphans |
+| TC-REC-014 | Login Keychain locked at start; "lock on sleep" set | T4 | `keychain_locked` hold and alert; recovery after unlock; no effect of later locks on a running daemon |
+| TC-REC-015 | Disk full during a run | T2 + T4 | Ballast released; `low_disk`; 0 DB corruption |
+| TC-REC-016 | Wall-clock jump ±10 min | T1 + T4 | No false sleep; deadlines correct |
+| TC-REC-017 | BTM "Allow in the Background" off | T4 ⓗ | `doctor` reports it; watchdog alerts with pending work |
+| TC-REC-018 | Upgrade during a real Codex run | T4 | Adopted; finalized; 0 re-runs |
+| TC-REC-019 | Restore with anchors ahead of the backup | T2 | Epoch recorded; 0 cancelled tasks; authority only shrinks |
+| TC-REC-020 | Power-loss VM cycles (= TC-REC-002 at scale) | VM | As TC-REC-002 |
+| TC-REC-021 | Merged while asleep > 24 h | T2 virtual clock | Verified, not BLOCKED (RD-14 timer rule) |
+| TC-REC-022 | Wrapper rejects: tampered `spec.json` mode, symlinked `--run-dir`, unknown flag, key on fd 3 for `verify` | VM | 100 % rejected with exit 125; nothing executed; `config_fatal` hold |
+| TC-REC-023 | Agent strips ACLs in its worktree | VM | `policy_violation`; `BLOCKED(security_policy_violation)`; nothing committed |
+| TC-NET-006 | Flapping link (GitHub reachable, Linear not, and reverse) | T2 FaultProxy | 0 `dead` outbox items from network-class errors |
+| TC-NET-007 | Captive portal / TLS interception | T2 | Treated as offline; TLS never disabled |
+| TC-OPS-011 | Watchdog end-to-end: daemon stopped vs sleeping heartbeat | Sandbox repo | Alert vs no alert |
+| TC-OPS-012 | Restore drill ⓗ (RB-08) on the VM | VM | Completed with the runbook within the restore-time target registered by F |
+
+### 6.1 Power-loss test approach (RD-24)
+
+- **Rig:** a macOS guest VM on an Apple Silicon host (Virtualization.framework through `tart` or UTM; P0-047). The VM disk uses uncached/synchronous host I/O so that a guest flush reaches the host disk; record the setting in the test report because it determines fidelity.
+- **Load:** inside the guest, MERCURY runs against the fakes with a write-heavy synthetic workload: transitions, outbox items, coordinator commits in a mirror, and fake agent runs writing `proc.json`/`exit.json` through the real `agent-exec`.
+- **Fault:** force-stop the VM (`tart stop --timeout 0` or the hypervisor's hard power-off) at a random point, 50 cycles.
+- **Check after each boot:** `PRAGMA integrity_check`; the ledger of acknowledged transitions (written by the load generator to the host) is a prefix of the DB; every `last_commit_sha` exists in the mirror (or the step is `lost_by_host`); every `exit.json` parses or is treated as absent; MERCURY's own §4 completes without safe mode.
+- **Not done:** never power-cut the operator's Mac. GitHub-hosted macOS runners cannot run the VM (no nested virtualization). The Linux fault-injection filesystem is used for SQLite logic only.
 
 ---
 
 ## 7. Operations runbook
 
-All commands run as the operator in Terminal. `mercury` is the CLI installed at `~/Library/Application Support/Mercury/app/current/bin/mercury`; the installer adds a symlink in `~/.local/bin`. `L=com.usjbro.mercury; U=$(id -u)`.
+All commands run as the operator in Terminal. `mercury` is `~/Library/Application Support/Mercury/app/current/bin/mercury` (symlinked into `~/.local/bin`). `L=com.usjbro.mercury; U=$(id -u)`. CLI verbs follow components §5.5; maintenance verbs (`stop`, `reload-credentials`, `backup`, `restore`, `clear-fatal`, `upgrade`, `rollback`, `runtime upgrade`, `agents upgrade|pin`, `toolchain sync`, `repo check`, `orphan adopt|close`, `policy ack`, `ruleset-emergency`) are listed there too.
 
 ### RB-01 Install (first time)
 
-1. Complete Phase 0 (`macos-service.md` §16) and the identity prerequisites: GitHub App created and installed on the selected repos only; Linear key or app; CODEOWNERS and protections per discovery G3.
-2. Install the pinned Node into `runtime/` (verify against nodejs.org SHASUMS256). Install the pinned Codex and Claude versions.
-3. Download the MERCURY release → verify `SHA256SUMS` (and optionally `gh attestation verify`) → `mercury-install` creates the directory tree with 0700, renders `mercury.toml` and the plist, and creates `run/ballast`.
-4. Create the Keychain items (`macos-service.md` §9.2). Never paste secrets into config files.
-5. `tmutil addexclusion` for `db/`, `runs/`, `tmp/`, `~/Library/Mercury`.
-6. `plutil -lint ~/Library/LaunchAgents/$L.plist && launchctl bootstrap gui/$U ~/Library/LaunchAgents/$L.plist`
-7. Allow the background item if macOS asks (Login Items).
-8. Create the heartbeat and ops issues in `project-mercury` and enable the watchdog workflow.
+1. Phase 0 read-only checks (macos-service §16.1) and governance prerequisites: **two** GitHub Apps (`mercury-bot` on the selected target repos, `mercury-ops` on `project-mercury` and the private anchor repo) with the RD-6 permissions; Linear OAuth app (`actor=app`); rulesets per RD-5 with the two required MERCURY checks; CODEOWNERS = operator.
+2. **[ROOT — operator consent]** `mercury-install --system`: shows the plan (user, group, wrappers, sudoers, `WORK_ROOT` + ACLs, `chmod 700 ~`, optional managed settings), asks for confirmation, then runs it with `sudo`.
+3. Phase 0 agent-uid checks P0-026…P0-032 and SEC-T-20 (macos-service §16.2). **No non-sandbox agent run before these pass.**
+4. Install the pinned Node into `runtime/`; `mercury toolchain sync` (agent CLIs and repo toolchains into `WORK_ROOT/toolchains`).
+5. Verify the release (`SHA256SUMS`, optional `gh attestation verify`) → `mercury-install` (operator level) creates `MERCURY_HOME`, renders `mercury.toml` and the plist, creates `run/ballast`.
+6. Create the Keychain items (macos-service §9.2), trusting only `mercury-keychain`.
+7. `tmutil addexclusion` for `db/`, `run/`, `tmp/` and `/Users/Shared/MercuryWork`.
+8. `plutil -lint ~/Library/LaunchAgents/$L.plist && launchctl bootstrap gui/$U ~/Library/LaunchAgents/$L.plist`; allow the background item if asked.
+9. In `project-mercury`: create the heartbeat and ops issues, **lock both conversations to collaborators**, enable the watchdog workflow.
 
 ### RB-02 First-run verification
 
 | Check | Command | Expected |
 |---|---|---|
-| Job running | `launchctl print gui/$U/$L \| grep -E "state\|pid\|last exit"` | `state = running`, a pid |
-| Health | `mercury doctor` | All checks `ok` (warnings explained) |
-| Status | `mercury status` | `mode: normal`, `net: online`, pollers have run |
-| Heartbeat | `cat "~/Library/Application Support/Mercury/run/heartbeat.json"` | `ts` < 60 s old |
-| Remote heartbeat | Open the heartbeat issue | Updated < 10 min ago |
-| Watchdog | Run the `mercury-watchdog` workflow manually (`workflow_dispatch`) | Green; no alert (no pending work) |
-| Restart behaviour | `launchctl kickstart -k gui/$U/$L` then `mercury status` | Back to `ready` ≤ 45 s |
-| Sleep behaviour | Start a dry-run task, put the Mac to sleep for 2 min, wake | `wake.detected` and `wake.recovered` in logs; run resumes |
-| Dry-run task | `mercury task dry-run <ISSUE> --repo <owner/repo>` (no push, no PR) | Reaches the plan-review stage with artifacts |
+| Job running | `launchctl print gui/$U/$L \| grep -E "state\|pid\|last exit"` | `state = running` |
+| Health | `mercury doctor` | All `ok`, including the agent-uid checks and canary self-test |
+| Status | `mercury status` | `mode: normal`, `net: online`, pollers ran |
+| Heartbeat | `ls -l "$HOME/Library/Application Support/Mercury/run/heartbeat.json"` | Updated within `heartbeat.local_s` |
+| Remote heartbeat | Open the heartbeat issue | Updated within `heartbeat.remote_min` |
+| Watchdog | Run `mercury-watchdog` manually | Green, no alert |
+| Restart | `launchctl kickstart -k gui/$U/$L`; `mercury status` | Ready within `svc.restart_to_ready_max_s` |
+| Presence | `mercury doctor --presence` | Touch ID/password sheet appears and succeeds |
+| Sleep | Start a sandbox task, sleep the Mac 2 min, wake | `wake.detected`, `wake.recovered`; run continues |
+| Sandbox task | `mercury request authorize <ISSUE>` on the sandbox repo | Reaches plan review with artifacts |
 
 ### RB-03 Daily checks
 
-**None required.** MERCURY reports problems through GitHub notifications (ops issue + watchdog) and local notifications. Optional weekly glance: `mercury status --summary` (backup age, deferrals, circuits).
+None required. Problems arrive through the ops issue, the watchdog and local notifications. Optional weekly: `mercury status` (backup age, anchor age, holds, deferrals).
 
-### RB-04 Pause / resume
+**Trust rule:** act only on ops comments posted by the `mercury-ops` App or `github-actions` (badge visible in GitHub Mobile). Never run a command quoted in a comment; responses happen only through the local CLI (RD-19).
+
+### RB-04 Pause, unpause, stop
 
 ```sh
-mercury pause [--reason "travel"]      # stop new dispatch; active runs finish; polling + heartbeat continue
-mercury pause --hard                    # also interrupt active runs (checkpointed), like a shutdown without exiting
-mercury resume
-mercury stop                            # graceful exit 0; launchd will NOT restart; next login starts it
-launchctl kickstart gui/$U/$L          # start again without logging out
+mercury pause --all --reason "travel"     # operator_pause hold: no new dispatch; runs finish; polling + heartbeat continue
+mercury pause --repo usjbro/network_monitor --reason "..."
+mercury cancel-run <run>                   # stop one run (no attempt consumed)
+mercury unpause --all
+mercury stop                               # graceful exit 0; launchd does not restart; adoptable runs continue (lease-bounded)
+launchctl kickstart gui/$U/$L              # start again
 ```
 
-While paused, the heartbeat reports `mode: paused` and the watchdog does not alert (`pending_work = false`).
+While paused, the heartbeat says `mode: paused` and the watchdog stays silent.
 
 ### RB-05 Cancel a task
 
 ```sh
-mercury task show <task_id|ISSUE>       # state, active run, PR, side effects pending
-mercury task cancel <task_id> --reason "<text>"
+mercury show <task|issue>
+mercury cancel <task> --reason "<text>"
 ```
 
-Effects (Agent C owns the transition): active runs are interrupted; pending journal rows become `abandoned` (reconciled first); task → `CANCELLED`; an open PR gets a comment and is closed only if the cancellation policy says so (Agent B); the worktree is kept for 7 days, then removed. Cancelling never deletes remote branches automatically in v1.
+Effects are C's (G1b): active runs cancelled, outbox items reconciled then cancelled, PR to draft + comment (never closed), worktree archived then removed after retention.
 
 ### RB-06 Rotate credentials
 
 | Credential | Procedure |
 |---|---|
-| GitHub App private key | GitHub › App settings › Generate a new private key → `security add-generic-password -U -s com.usjbro.mercury.github-app-key -a mercury -T /usr/bin/security -w` (paste the base64) → `mercury reload-credentials` → `mercury doctor` (mints a token) → **delete the old key in GitHub** → securely delete the downloaded PEM. |
-| Linear key | Create the new key (same team scope) → update the Keychain item → `mercury reload-credentials` → revoke the old key in Linear. |
-| Anthropic / Codex keys | New key in the vendor console → update the Keychain item → `mercury reload-credentials` (next runs use it; active runs keep the old key until they end) → revoke the old key after active runs finish. |
-| Suspected compromise | `mercury pause --hard` first → revoke at the vendor immediately → rotate → review `audit.jsonl` and GitHub audit events → `mercury resume`. |
+| `mercury-bot` / `mercury-ops` App key | App settings › Generate a new private key → `security add-generic-password -U -s com.usjbro.mercury.github-bot-key` (or `github-ops-key`) `-a mercury -T /usr/local/libexec/mercury/mercury-keychain -w` → `mercury reload-credentials` → `mercury doctor` (mints a token) → **delete the old key in GitHub** → delete the downloaded PEM. |
+| Linear client secret | Regenerate in the Linear app settings → update `com.usjbro.mercury.linear-client-secret` → `mercury reload-credentials` (new app token minted) → confirm the old secret is invalid. |
+| Anthropic / OpenAI keys | New key in the dedicated workspace/project → update the item → `mercury reload-credentials` (new runs use it; running runs keep the fd-3 copy) → revoke the old key after active runs end. |
+| Claude OAuth token (only under OD-03 subscription mode) | `claude setup-token` as instructed by B → update `com.usjbro.mercury.claude-oauth` with the new expiry → reload. Alert fires 14 d before expiry. |
+| `k_auth` (HMAC) | Not rotated in place. Rotation = new key + `BLOCKED(reauthorization_required)` for non-terminal tasks; do it only after compromise (then follow RB-14). |
+| **Suspected compromise** | `mercury pause --all` → revoke at the vendor immediately → rotate → `mercury audit verify`, review `audit.jsonl` and the GitHub audit log → if any security condition is open, RB-14 → `mercury unpause --all`. |
 
-### RB-07 Upgrade MERCURY
+### RB-07 Upgrade
 
 ```sh
-mercury upgrade <version>        # preflight → drain → pre-upgrade backup → switch symlink → restart → verify
-mercury status                   # version = new, mode normal
+mercury upgrade <version>                  # preflight → drain → pre-upgrade backup → switch → restart → verify (macos-service §13.2)
+mercury status                             # new version, mode normal
+mercury runtime upgrade <node-version>     # Node runtime (plist re-render, bootout/bootstrap)
+mercury agents upgrade codex|claude <ver>  # side-by-side install, contract suite, pin switch
 ```
 
-If verification fails, auto-rollback runs (`macos-service.md` §13.4). Node runtime upgrade: `mercury runtime upgrade <node-version>` (re-renders the plist, then bootout/bootstrap). Agent CLI upgrade: `mercury agents upgrade codex|claude <version>`.
+Wrapper or helper changes in a release: **[ROOT — operator consent]** `mercury-install --system --upgrade-wrappers` (new digests in sudoers, `visudo -cf`). After a `mercury-keychain` re-sign, macOS asks once per item: choose "Always Allow" only when the requesting binary is `/usr/local/libexec/mercury/mercury-keychain`. Failed verification → automatic rollback (macos-service §13.4).
 
-### RB-08 Roll back / restore from backup
+### RB-08 Roll back code / restore data (restore epoch)
 
 ```sh
-# Code rollback (schema-compatible):
-mercury rollback                         # current -> previous release; kickstart
+# Code rollback (schema-compatible)
+mercury rollback
 
-# Data restore:
+# Data restore
 mercury stop
-mercury backup list                      # verified backups with user_version + age
-mercury restore <backup-file>            # quarantines current db/*, copies backup, removes -wal/-shm,
-                                         # sets a flag forcing full reconcile with rebooted=true
-launchctl kickstart gui/$U/$L
+mercury backup list                        # verified backups: user_version, age, audit head, epoch
+mercury restore <backup-file> --reason restore    # quarantines db/*, copies the backup, writes run/restore.json
+launchctl kickstart gui/$U/$L              # daemon waits in "awaiting restore confirmation"
+mercury restore --confirm                  # (presence) records audit.restore_epoch, anchors it
 mercury status; mercury doctor
 ```
 
 After a restore:
-- Tasks are reconciled against GitHub and Linear. PRs created after the backup are adopted by head branch.
-- Authorizations and plan approvals recorded after the backup are **gone**, so those tasks return to awaiting authorization or plan review (R4).
-- Audit records lost with the restore are partly recoverable from `audit.jsonl` and from GitHub/Linear history. The restore itself is logged as an audit event.
+- Tasks whose authority rows are missing or unverifiable are `BLOCKED(reauthorization_required)` → `mercury request reauth <task>` for each that should continue, or `mercury cancel`.
+- PRs and branches created after the backup are reported as orphan remote objects → RB-18.
+- The restore and its epoch are audit events; the gap between the backup and the old head is visible in `mercury trace` and in the anchor repo.
 
 ### RB-09 Agent CLI rollback
 
-`mercury agents pin codex <previous-version>` → `mercury doctor --agents` → `mercury circuit close codex`.
+`mercury agents pin codex <previous-version>` (also updates `agent.conf` with **[ROOT — operator consent]**) → `mercury doctor --agents` → `mercury doctor --recheck` clears the `config_fatal` hold.
 
 ### RB-10 Decommission
 
-1. `mercury pause` → wait for `active_runs = 0` (or `mercury pause --hard`).
-2. `mercury backup` (final) → copy `backups/` and `artifacts/` to an archive location if they are to be kept.
-3. `launchctl bootout gui/$U/$L && rm ~/Library/LaunchAgents/$L.plist`
-4. Delete the Keychain items: `security delete-generic-password -s com.usjbro.mercury.<name> -a mercury` for each.
-5. Revoke credentials at the vendors. Uninstall the GitHub App from the account. Delete the Linear key/app.
-6. Disable the watchdog workflow; close the heartbeat and ops issues.
-7. Remove `~/Library/Application Support/Mercury`, `~/Library/Mercury`, `~/Library/Logs/Mercury` (after checking that no worktree holds unpushed work you want: `mercury task list --non-terminal` before step 1).
+1. `mercury pause --all`; wait for `active_runs = 0` or `mercury cancel-run` each.
+2. `mercury backup`; copy `backups/` and `artifacts/` to an archive if they are to be kept. `mercury show` every non-terminal task first to decide about unpushed work.
+3. `launchctl bootout gui/$U/$L && rm ~/Library/LaunchAgents/$L.plist`.
+4. Delete the Keychain items (`security delete-generic-password -s com.usjbro.mercury.<name> -a mercury`).
+5. Revoke at the vendors; uninstall both GitHub Apps; delete the Linear app.
+6. Disable the watchdog; close the heartbeat and ops issues.
+7. **[ROOT — operator consent]** `mercury-install --system --uninstall` (sudoers, wrappers, user, group, `WORK_ROOT`).
+8. Remove `~/Library/Application Support/Mercury` and `~/Library/Logs/Mercury`.
 
-### RB-11 Restore after a new Mac or disk loss
+### RB-11 New Mac or disk loss
 
-Restore `backups/` and `artifacts/` from Time Machine → RB-01 steps 1–6 with a restore flag → `mercury restore <latest>` → mirrors and worktrees are recreated from GitHub. Unpushed worktree changes are lost (bounded by REL-05 semantics: at most the current step per task).
+Follow macos-service §14.4 "New Mac": system install **[ROOT — operator consent]** → **new** App private keys (delete the old ones) → recreate items → restore `backups/`, `artifacts/`, `config/` from Time Machine → `mercury toolchain sync` → `mercury restore <latest> --reason new_host` → `mercury restore --confirm` **(presence)**. Without `k_auth` escrow, every non-terminal task needs `mercury request reauth`. Commits that existed only on the old Mac are replayed from the last pushed commit (`lost_by_host`).
 
-### RB-12 Force-clean a stuck task
+### RB-12 Stuck or blocked task
 
 ```sh
-mercury task show <id>                    # look at blocked_reason, worktree path, locks
-mercury task retry <id> [--from-checkpoint]
-mercury task quarantine <id>              # exclude from dispatch + crash-loop suspects; keeps evidence
+mercury show <task>          # state, blocked reason, failing guard, worktree, holds, runs
+mercury trace <task>
+mercury resume <task> --action resume|retry|adopt|reset|reopen     # actions allowed per reason: state-machine §6.1
+mercury resume <task> --discard-worktree-changes                   # security_policy_violation: archive, reset, agent-ctl purge/fix-acl
+mercury grant <task> --counter plan|pr|verify|human --extra N --reason TEXT   # (presence)
+mercury pause --task <task> --reason "investigate"                 # exclude a crash-suspect task from dispatch
+```
+
+Inspect a quarantined worktree only with `mercury show <task> --diff`; never open `WORK_ROOT/worktrees` or `quarantine` in an IDE or interactive agent (hostile files such as `.vscode/tasks.json` would run with your credentials, RE-13).
+
+### RB-13 MERCURY is down and a PR must be merged (RD-5)
+
+Default: **wait.** The ruleset requires `MERCURY / claude-review` and `MERCURY / policy`, so a merge waits for MERCURY by design.
+
+1. Bring MERCURY back (§8). Once Claude reviews the head, the checks conclude and the merge proceeds normally.
+2. Only if the merge cannot wait:
+   1. If `mercuryd` is running: `mercury ruleset-emergency begin --repo <owner/repo> --pr <n> --reason "<text>"` **(presence)**. This records an audited expected-drift window, so the drift monitor reports the change as expected instead of raising `security_halt`.
+   2. In your own browser session (never with MERCURY's credentials): edit the default-branch ruleset of that repository and remove **only** the two MERCURY required checks. Do not disable other rules; do not add a bypass actor.
+   3. Review and merge the PR yourself.
+   4. Immediately restore both required checks, pinned to the `mercury-bot` App, and run `mercury ruleset-emergency end --repo <owner/repo>` **(presence)** if MERCURY is running.
+3. When MERCURY next runs:
+   - If no emergency window was recorded (MERCURY was down), the drift monitor sees the edit in the ruleset history → `security_halt` + SECURITY notification → clear it with RB-14, giving the emergency as the reason.
+   - Merge verification for the PR reports `merged_unreviewed_head` (a policy notice, not a security incident, RD-14) → the task goes to `BLOCKED(merge_verification_failed)` with that detail → `mercury ack-merge <task> --reason "<text>"` **(presence)**.
+
+### RB-14 Clearing a security halt or integrity alert
+
+1. `mercury status` — halt scope (global `security_halt`, repo `integrity_alert`, `integrity_check_failed`) and trigger.
+2. Investigate: `mercury trace <task>`, `mercury audit verify`, GitHub audit log, ruleset history, collaborators, installed Apps, the anchor repo. Assume compromise until explained (RB-06 "Suspected compromise").
+3. Fix the cause (restore the ruleset, rotate keys, remove the tampered file, restore a backup with RB-08 if the chain was tampered with).
+4. Clear: `mercury unpause --security [--repo <owner/repo>] --reason "<text>"` **(presence)**. Tasks blocked by the incident are resumed individually (`ack-merge`, `resume`) **(presence)**; any resume that re-enables Codex work passes the authorization guard first (RD-3).
+5. An `integrity_check_failed` caused by a chain mismatch cannot be cleared by unpause alone: `mercury audit verify` must pass, or a restore epoch must be recorded (RB-08).
+
+### RB-15 Policy acknowledgement (`BLOCKED(policy_ack_required)`)
+
+`MERCURY / policy` stays neutral/failure when a PR changes protected paths, dependencies, lockfiles or build scripts.
+
+```sh
+mercury show <task> --diff --policy        # lists the triggering paths and pre-check results
+mercury policy ack <task> --reason "<text>"   # (presence) concludes MERCURY / policy as success for this head SHA
+```
+
+A new push after the acknowledgement invalidates it (the check is bound to the head SHA). Lockfile changes acknowledged here are the only ones `deps_install` may use (RD-17).
+
+### RB-16 Toolchain changes
+
+Edit `[repos."<owner/repo>".toolchain]` in `mercury.toml` → `mercury toolchain sync` → `mercury doctor --agents` → the next `verify` uses the new toolchain. Toolchains are never installed by agents.
+
+### RB-17 Agent-uid infrastructure repair (`config_fatal` for agents)
+
+1. `mercury doctor` names the failing check (sudoers digests, wrapper hash, user/group, ACLs, agent home contents).
+2. Credential-shaped files in `/Users/_mercuryagent` → treat as a security event (RB-14), then remove them with **[ROOT — operator consent]** `sudo -u _mercuryagent rm …` after recording them.
+3. ACLs or modes → `mercury doctor --repair` (uses `agent-ctl fix-acl` and operator-level `chmod`; never loosens).
+4. Wrappers, sudoers, user or group → **[ROOT — operator consent]** `mercury-install --system --repair`.
+5. `mercury doctor --recheck` clears the hold.
+
+### RB-18 Orphan remote objects after a restore
+
+```sh
+mercury orphan list
+mercury orphan adopt <pr>      # creates a new task in AWAITING_AUTHORIZATION (proposal_source=orphan_adoption); reused only after Claude authorization and plan approval
+mercury orphan close <pr>      # closes MERCURY's orphan PR with a comment; branch kept
 ```
 
 ---
 
 ## 8. "MERCURY is silent — what do I check?"
 
-Use this when no updates arrive on GitHub or Linear and you expected some.
-
 ```mermaid
 flowchart TD
-    A["No MERCURY activity"] --> B{"Is the Mac awake and are you logged in?"}
-    B -->|no| B1["Expected - MERCURY runs only while logged in and awake. Log in or wake it. Recovery is automatic."]
-    B -->|yes| C{"launchctl print gui/UID/com.usjbro.mercury shows running?"}
-    C -->|"not found"| C1["Job not loaded - check Login Items Allow in the Background - re-bootstrap the plist - RB-01 step 6"]
+    A["No MERCURY activity"] --> B{"Mac awake and you are logged in?"}
+    B -->|no| B1["Expected - log in or wake it - recovery is automatic"]
+    B -->|yes| C{"launchctl print shows the job running?"}
+    C -->|"not found"| C1["Job not loaded - check Login Items - re-bootstrap the plist - RB-01 step 8"]
     C -->|"not running, last exit 0"| C2{"fatal.json present?"}
-    C2 -->|yes| C3["Read the reason - fix - mercury resume-after-fix"]
-    C2 -->|no| C4["Was stopped deliberately - launchctl kickstart"]
-    C -->|"not running, non-zero exit"| C5["Crash loop - see launchd.stderr.log and mercuryd.jsonl - FM-17 - rollback if after upgrade"]
+    C2 -->|yes| C3["Read the reason - fix - mercury clear-fatal - kickstart"]
+    C2 -->|no| C4["Stopped deliberately or duplicate - launchctl kickstart"]
+    C -->|"not running, non-zero exit"| C5["Crash loop - launchd.stderr.log and mercuryd.jsonl - FM-17 - rollback after an upgrade"]
     C -->|running| D{"mercury status mode?"}
-    D -->|paused| D1["mercury resume"]
-    D -->|safe| D2["See the safe-mode reason - DB corruption FM-09 or crash loop FM-17"]
-    D -->|degraded| D3{"Which reason?"}
-    D3 -->|"disk"| D4["Free disk - FM-10"]
-    D3 -->|"credentials"| D5["Rotate or unlock keychain - RB-06 - FM-08"]
-    D3 -->|"offline"| D6["Check Wi-Fi, VPN, captive portal, DNS - FM-03 and FM-06"]
-    D3 -->|"circuit open"| D7["GitHub or Linear outage or rate limit - FM-07 - or agent contract break - FM-16"]
-    D -->|normal| E{"Any tasks in active states?"}
-    E -->|no| E1["Nothing authorized - Claude may not have authorized new work - check Awaiting authorization list"]
-    E -->|yes| F{"Tasks deferred?"}
-    F -->|yes| F1["Deferral reason - slots, cpu, memory, disk, repo-slot - usually self-resolves"]
-    F -->|no| G{"Waiting on you?"}
-    G -->|yes| G1["Check GitHub review requests - PR awaiting your approval"]
-    G -->|no| H["Run mercury doctor and check the active run's last output age - FM-18 stall handling will act within 15 min"]
+    D -->|paused| D1["mercury unpause"]
+    D -->|safe| D2{"Which cause?"}
+    D2 -->|"DB corruption"| D2a["FM-09 - RB-08 restore"]
+    D2 -->|"chain mismatch or security halt"| D2b["RB-14"]
+    D2 -->|"crash loop"| D2c["FM-17"]
+    D -->|"awaiting restore confirmation"| R1["mercury restore --confirm - presence"]
+    D -->|degraded| E{"Which hold?"}
+    E -->|"low_disk"| E1["Free disk - FM-10"]
+    E -->|"keychain_locked or credentials"| E2["Unlock or rotate - RB-06 - FM-08"]
+    E -->|"network_down"| E3["Wi-Fi, VPN, captive portal, DNS - FM-06"]
+    E -->|"circuit or rate_limited"| E4["Outage or rate limit - FM-07"]
+    E -->|"config_fatal for agents"| E5["RB-17 or agent pin - RB-09"]
+    D -->|normal| F{"Tasks in active states?"}
+    F -->|no| F1["Nothing authorized - check awaiting-authorization list and holds"]
+    F -->|yes| G{"Deferred?"}
+    G -->|yes| G1["Reason - slots, cpu, memory, disk, repo_slot, dark_wake - usually self-resolves"]
+    G -->|no| H{"Waiting on you?"}
+    H -->|yes| H1["GitHub review requests, BLOCKED tasks, policy acks - RB-12 or RB-15"]
+    H -->|no| I["mercury doctor - check the active run's output and CPU progress - FM-18 acts at the stall threshold"]
 ```
 
-Quick commands in order:
+Quick commands:
 
 ```sh
-pmset -g log | grep -E " (Sleep|Wake) " | tail -5
+pmset -g log | grep -E " (Sleep|Wake|DarkWake) " | tail -5
 launchctl print gui/$(id -u)/com.usjbro.mercury | grep -E "state|pid|last exit"
-ls -l "$HOME/Library/Application Support/Mercury/run/"     # heartbeat age, fatal.json?
+ls -l "$HOME/Library/Application Support/Mercury/run/"      # heartbeat age, fatal.json, restore.json
 mercury status
 mercury doctor
 tail -n 50 "$HOME/Library/Logs/Mercury/mercuryd.jsonl" | grep -E '"level":"(warn|error|fatal)"'

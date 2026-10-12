@@ -510,6 +510,7 @@ Installed at `~/Library/LaunchAgents/com.usjbro.mercury.plist`, mode 0644 (launc
 | Config invalid, path under a TCC-protected folder, socket path too long | Write `fatal.json {reason}`, local notification | 0 | Stays down |
 | Schema too new (`schema_meta.min_reader_version` > app version) | Write `fatal.json`, local notification, never write the DB | 0 | Stays down |
 | DB corruption (`quick_check` ≠ ok, `SQLITE_CORRUPT`, `SQLITE_NOTADB`) | **Stay alive in safe mode**: no DB writes, no dispatch, read-only status, heartbeat file, local + ops alerts | — | Running |
+| Audit head behind the last anchor **with** a matching `run/restore.json` (§14.4) | `mode = awaiting_restore_confirmation`: no dispatch until `mercury restore --confirm` (presence) records the restore epoch | — | Running |
 | Audit chain verification fails and no matching restore epoch (§14.4) | **Safe mode** + one SECURITY notification (global `integrity_check_failed` hold, components / state-machine §5) | — | Running |
 | More than `svc.crash_loop_starts` starts in `svc.crash_loop_window_min` | Safe mode (no dispatch); ops alert with the last exception class | — | Running |
 | Agent-uid infrastructure check fails (§3.10) | Normal mode, `config_fatal` hold for agent dispatch | — | Running |
