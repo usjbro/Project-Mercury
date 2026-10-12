@@ -120,3 +120,6 @@ OD-01 merge mode (default G-DETECT for sandbox/pilot with written acceptance; G-
 | F | traceability.md, verification-plan.md; **create** planning/roadmap.md and planning/issue-breakdown.md | All RF-*; ID registry; parameter registration; new TCs from RD §4.11, RE, RB; revised milestones |
 
 Each owner records a disposition for every finding addressed to them in `reviews/4X-revision-<agent>.md` (finding ID → fixed / rejected with reason / deferred with owner).
+
+## Addendum A (after Phase 4 revisions)
+- **E objection to RD-1 (44-revision-E.md §3) — accepted in part.** With `mercuryd` in the operator uid, a code-execution bug in the coordinator reaches the operator's own GitHub credentials (RISK-27). RD-1 stands for v1 (agents, which execute untrusted content, are isolated; the coordinator executes only MERCURY's own pinned code and parses untrusted data). **OD-36 (dedicated coordinator account, U2) is promoted from "optional future hardening" to a required operator decision before unattended operation**, alongside OD-01 (G-ORG). Second condition accepted: if Phase 0 shows MERCURY Keychain items must trust `/usr/bin/security`, the signed Keychain helper moves into v1 (M1).
