@@ -30,18 +30,18 @@
 | Design invariants | `INV-01…` | C | `architecture/state-machine.md` §4 | C's `I1…I20` renamed in order (I1 → INV-01) |
 | Test properties | `PROP-01…` | F | `testing/verification-plan.md` §5 | Each cites the INV/CON it checks |
 | Test cases | `TC-<LEVEL>-nnn` | F (IDs, levels, gates); C, D, E contribute content | `testing/verification-plan.md` §4, §8 | Only test-ID scheme. Contributor IDs are aliases (§8.3) |
-| Security acceptance criteria | `SAC-01…12` | E | `security/threat-model.md` §10.1 | Used as milestone gates (verification plan §7) |
+| Security acceptance criteria | `SAC-01…20` | E | `security/threat-model.md` §10.1 | Each SAC names its gate G-S1…G-S5 (verification plan §7) |
 | Security test procedures | `SEC-T-nn` | E | `security/threat-model.md` §10.2 | Registered as TC aliases (§8.3) |
-| Phase 0 checks | `P0-nnn` | D (Mac procedures), B/E (integration and governance procedures), F (closure tracking) | Procedures: `operations/macos-service.md` Phase 0 checklist; register: verification plan §8 `TC-P0` | `TC-P0-nnn` ≡ `P0-nnn` (same number). D's two-digit `P0-nn` ≡ `P0-0nn` |
+| Phase 0 checks | `P0-nnn` | D (Mac procedures), B/E (integration and governance procedures), F (closure tracking) | Procedures: `operations/macos-service.md` Phase 0 checklist; register: verification plan §8 `TC-P0` | `TC-P0-nnn` ≡ `P0-nnn`. `P0-001…049` Mac items (D, `operations/macos-service.md` §16); `P0-050…079` agent-CLI, GitHub and Linear items (F allocates, §10.2). Phase 2 `P0-nn` and `E1…E9` are D's aliases |
 | Assumptions | `ASM-<agent>-nn` | each agent | the agent's own document | Each gating ASM is linked to a `P0-nnn` check (§10.2) |
 | ADRs | `ADR-001…020` | A | `architecture/decisions/` | `ADR-Pnn` retired (§5.2) |
 | Operator decisions | `OD-01…36` | F (register), operator (decision) | this file §9 | One list; contributor IDs (OD-A/OQ-B/OD-C/OD-D/OD-E, E Qn) are aliases |
-| Risks | `RISK-01…` | F (register), each agent (mitigation) | `planning/roadmap.md` §8 | Aliases: E `R-01…26`, F `PR-01…12`, A/B/C/D risk rows |
+| Risks | `RISK-01…99` | E (`RISK-01…34`, security, `security/threat-model.md` §9); F (`RISK-41…`, delivery and schedule, `planning/roadmap.md` §8) | as listed | Aliases: E `R-01…26`; F `PR-01…12`. `RISK-35…40` reserved for D/C additions |
 | Milestones | `P0a…P0d`, `M1…M8`, `M9a…M9c` | F | `planning/roadmap.md` | A's migration stages are `MIG-0…MIG-4` (§8.5) |
-| Security gates | `G-SEC-0…4`, `G-ORG`, `G-DETECT-ACK` | F (gate), E (criteria) | `planning/roadmap.md` §4 | Gate IDs, not requirements |
+| Security gates | `G-S1…G-S5` | E (controls and SAC per gate, `security/threat-model.md` §8.10, §10.1); F (placement in the roadmap) | `planning/roadmap.md` §4 | Gate IDs, not requirements. `G-ORG`/`G-SPLIT`/`G-DETECT` are governance **modes** (ADR-014), not gates |
 | Implementation issues | `MERC-nnn` | F | `planning/issue-breakdown.md` | Proposals; not created in Linear by this design |
 | Failure modes / runbooks | `FM-nn`, `RB-nn` | D | `operations/recovery.md` | Unchanged |
-| Operational parameters | by **name** | D (values), F (registration) | `operations/macos-service.md` parameter table | §7 |
+| Operational parameters | by **name** (`svc.*`, `run.*`, …) | D (values), F (registration) | `operations/macos-service.md` §2 | §7. Workflow policy (attempt counts, revision budgets, authorization expiry, state reminder timers) stays in `architecture/state-machine.md` §7, §9 and OD-08 (Addendum B.4) |
 
 ### 1.2 Numeric bands (F-owned prefixes)
 
@@ -192,7 +192,7 @@ Each brief item and discovery pain point maps to at least one requirement. Phase
 | Linear coding sessions as a second start path (fact 5) | FR-005, FR-904, SEC-803, SEC-804 |
 | Linear GitHub integration auto-moves status (integrations C3) | FR-183, FR-200, OD-06 |
 | Personal-account repo; merge restriction is org-only (fact 4) | CON-014, OPS-017, OD-01 |
-| Codex likely cannot commit in a sandboxed worktree (fact 7) | FR-140, P0-105 |
+| Codex likely cannot commit in a sandboxed worktree (fact 7) | FR-140, P0-037 |
 | Claude runs repo hooks and `.mcp.json` headless (fact 6) | FR-066, SEC-204, SEC-205, TC-SEC-103 |
 | No whole-run timeout in either CLI (fact 8) | FR-044, FR-055, NFR-083 |
 | launchd: LaunchAgent only while logged in; detached children escape cleanup (fact 10) | FR-051, FR-055, FR-281, NFR-024, OPS-012 |
@@ -211,11 +211,11 @@ Each brief item and discovery pain point maps to at least one requirement. Phase
 |---|---|---|---|---|---|---|
 | **CON-001** | MERCURY's design phase must not modify any host, repository setting, Linear workspace, GitHub resource or Slack workspace; implementation starts only after operator sign-off of the TDD. | Brief: Mission | M | Phase 4/5 review finds 0 write actions in agent evidence logs; TDD §32 sign-off recorded before M1 starts. | Inspection | TDD §32, §27 · `reviews/` |
 | **CON-002** | The coordinator must run locally on the operator's Mac and must not require any public inbound network path; all integrations are outbound. | Brief; discovery fact 9 | M | No MERCURY listener on a non-loopback interface; control is a Unix socket; all GitHub/Linear traffic is outbound HTTPS. | Inspection + Test | TDD §7, §18 · `architecture/overview.md`; `operations/macos-service.md` |
-| **CON-003** | Role boundary: Claude makes development decisions, MERCURY coordinates execution, Codex implements, the operator holds final merge authority. Operator CLI actions may stop, hold, cancel, grant budget or acknowledge escalations; they never authorize work or approve plans or PRs. An interactive agent running as the operator may *request* a decision but never clear an escalation (RD-12, RD-20). | Brief: core boundary; RA-09 | M | Every authority record (`authorizations`, `plan_approvals`, `plan_reviews`, `pr_reviews`) references a successful Claude decision run (INV-18); the control API exposes no authorize/approve method (TC-INT-024); safety-relaxing methods require the presence tier (TC-SEC-009). | Inspection + Test | TDD §9 · `architecture/overview.md` §8; `architecture/components.md` §5 |
+| **CON-003** | Role boundary: Claude makes development decisions, MERCURY coordinates execution, Codex implements, the operator holds final merge authority. Operator CLI actions may stop, hold, cancel, grant budget or acknowledge escalations; they never authorize work or approve plans or PRs. An interactive agent running as the operator may *request* a decision but never clear an escalation (RD-12, RD-20). | Brief: core boundary; RA-09 | M | Every authority record (`authorizations`, `plan_approvals`, `plan_reviews`, `pr_reviews`) references a successful Claude decision run (INV-18); the control API exposes no authorize/approve method (TC-INT-024); safety-relaxing methods require the presence tier (TC-SEC-145). | Inspection + Test | TDD §9 · `architecture/overview.md` §8; `architecture/components.md` §5 |
 | **CON-004** | A Linear status change alone must never start development work; it may only make an issue eligible for Claude evaluation. | Invariant 3; fact 5 | M | 0 Codex runs start without an authorization record across E2E and sandbox; moving 50 sandbox issues to Todo produces 0 Codex spawns before authorization; PROP-03 holds. | Test | TDD §11, §12 · `architecture/state-machine.md` §4; `integrations/linear.md` |
 | **CON-005** | No Codex run may execute without a valid, unrevoked Claude authorization bound to the exact task, Linear issue, repository and current `spec_hash`. | Invariant 1; RD-13 | M | Spawn gate refuses 100 % of the negative matrix (missing, revoked, expired, superseded, mismatched task/issue/repo/spec); PROP-01: 0 counterexamples. | Test | TDD §9, §11, §13 · `architecture/state-machine.md` §8.1 |
 | **CON-006** | No Codex implementation run may execute without a Claude approval bound to the exact plan artifact hash; any plan revision invalidates earlier approval unless the revised artifact is explicitly re-approved. | Invariant 2 | M | PROP-02: 0 counterexamples; spawn gate refuses 100 % of hash-mismatch mutants. | Test | TDD §11, §14 · `architecture/state-machine.md` §8.2 |
-| **CON-007** | The human approval boundary must be enforced by GitHub rulesets, required MERCURY check runs pinned to the MERCURY App, CODEOWNERS and token permissions, not by prompt instructions; no MERCURY identity may satisfy required human approval or impersonate it. | Invariant 4; RD-5 | M | TC-GOV-110…116 and TC-GOV-009…013 pass on the sandbox; SAC-01 and SAC-02 pass. | Test + Inspection | TDD §15, §19 · `integrations/github.md` §9; `architecture/decisions/ADR-014` |
+| **CON-007** | The human approval boundary must be enforced by GitHub rulesets, required MERCURY check runs pinned to the MERCURY App, CODEOWNERS and token permissions, not by prompt instructions; no MERCURY identity may satisfy required human approval or impersonate it. | Invariant 4; RD-5 | M | TC-GOV-110…118 and TC-PI-138 pass on the sandbox; SAC-01, SAC-02, SAC-16 and SAC-17 pass. | Test + Inspection | TDD §15, §19 · `integrations/github.md` §9; `architecture/decisions/ADR-014` |
 | **CON-008** | Agents and the coordinator must never act under the operator's personal GitHub, Linear or Slack identity or credentials. | Fact 3; RD-6 | M | Every PR, commit, review, check run and Linear write is attributed to `mercury-bot`, `mercury-ops` or the Linear app actor; credential inventory contains no human token (SEC-T-13). | Test + Inspection | TDD §9, §15, §19 · `integrations/github.md` §2; `integrations/linear.md` §2 |
 | **CON-009** | The design must not assume work continues while macOS sleeps, dark-wakes, is logged out or is rebooting; every timer must tolerate indefinite pauses. | Hard constraints; fact 10; RD-16 | M | No task reaches `FAILED` or `BLOCKED` solely because of a sleep gap in TC-SM-009/TC-REC-031 (both FakeClock modes) and TC-REC-003/021 (real Mac / virtual clock). | Test | TDD §18, §20 · `architecture/components.md` §10.10; `operations/macos-service.md` §8 |
 | **CON-010** | Secrets must never appear in docs, repositories, plists, process argv, logs, artifacts, PR bodies or Linear comments. | Fact 12 (leaked bot token) | M | Secret canary test finds 0 occurrences (TC-SEC-004, SAC-06); repository secret scan returns 0 findings (TC-OPS-009). | Test + Inspection | TDD §19, §21 · `security/threat-model.md` §8.4 |
@@ -226,7 +226,7 @@ Each brief item and discovery pain point maps to at least one requirement. Phase
 | **CON-015** | All Mac-, GitHub- and Linear-dependent behaviour marked as an assumption must be verified by a Phase 0 check (or explicitly accepted by the operator) before the milestone that depends on it starts. | Fact 1 | M | Phase 0 report shows every gating `ASM-*` (§10.2) as Verified, Refuted-with-design-change or Accepted; 0 Open at each milestone entry. | Inspection | TDD §18, §30 · §10 below |
 | **CON-016** | Codex must execute only in coordinator-managed local worktrees on the Mac; cloud worktrees, Codex Cloud or Linear coding sessions are not part of the controlled path. | Pattern 7 | M | Every Codex run record has `cwd` under `WORK_ROOT` task worktrees; FR-005 covers Linear-native sessions. | Test + Inspection | TDD §13 · `integrations/codex.md`; `operations/macos-service.md` §7.1 |
 | **CON-017** | Each requirement and each contract is defined in exactly one place; other documents reference IDs (§1.1). | Brief: documentation layout | M | ID lint finds 0 requirement definitions outside this file / TDD §5, 0 references to undefined IDs, 0 restated parameter values outside the parameter table (TC-OPS-010). | Inspection | TDD §5, §29 · this file |
-| **CON-018** | No Codex workspace-write run, L2 `verify` run or `deps_install` run may execute against a non-sandbox repository until the agent-uid isolation (SEC-201) has passed the credential-canary test (SEC-T-20) on the operator's real Mac. Same-uid execution under Seatbelt is permitted only with fakes and the sandbox repository. | RD-1 gates; RF-01 | M | Dispatcher refuses such runs while gate `G-SEC-1` is not recorded (TC-UNIT-072); SAC-05 evidence exists before the first non-sandbox run. | Test + Inspection | TDD §18, §19 · `ADR-013`; `planning/roadmap.md` §4 |
+| **CON-018** | No Codex workspace-write run, L2 `verify` run or `deps_install` run may execute against a non-sandbox repository until the agent-uid isolation (SEC-201) has passed the credential-canary test (SEC-T-20) on the operator's real Mac. Same-uid execution under Seatbelt is permitted only with fakes and the sandbox repository. | RD-1 gates; RF-01 | M | Dispatcher refuses such runs while gate `G-S2` is not recorded (TC-UNIT-072); SAC-05 evidence exists before the first non-sandbox run. | Test + Inspection | TDD §18, §19 · `ADR-013`; `planning/roadmap.md` §4 |
 
 ### FR — Intake, eligibility and dependencies (content area A; operating model 2)
 
@@ -248,7 +248,7 @@ Each brief item and discovery pain point maps to at least one requirement. Phase
 | **FR-020** | The coordinator shall invoke Claude to evaluate and prioritize eligible issues and accept only output valid against the triage/authorization schemas in `protocols/schemas/` (the schemas are the single source of the decision enum; RA-29). | Steps 1–3 | M | Contract tests: valid outputs accepted; invalid or missing `structured_output` → run failure, no state change beyond retry accounting. | Test | TDD §9, §14 · `integrations/claude.md`; `protocols/schemas/` |
 | **FR-021** | For each `authorize` decision the coordinator shall write an immutable, versioned authorization record (task, issue, repo, `spec_hash`, scope, limits, expiry) derived only from schema-valid Claude output; re-authorization creates a new version that supersedes the old one, never mutates it. | Hard constraint; RD-13 | M | DB rejects UPDATE on authorization rows (trigger, TC-INT-020); each record carries the SHA-256 of its canonical JSON; re-authorization yields version n+1. | Test + Inspection | TDD §9, §16 · `architecture/components.md` §6, §10.3 |
 | **FR-022** | Before spawning any Codex run, and again before applying any run result, the coordinator shall verify in one transaction that a current authorization exists, is unrevoked, unexpired, not superseded, and matches task, issue, repository and current `spec_hash`. | Invariant 1; RD-13 | M | Gate unit tests at 100 % branch coverage; 0 unauthorized spawns or applied results in TC-SM-004 and TC-REC-001/038. | Test | TDD §11, §13 · `architecture/state-machine.md` §8.1 |
-| **FR-023** | Claude (decision run) or the operator (CLI) shall be able to revoke an authorization; running Codex processes for the task are stopped and no further work side effects (push, PR creation, review request) occur. | Area A | M | E2E: revocation during implementation stops the run within the cancel-ladder bound (parameter table) and produces 0 pushes/PRs afterwards. | Test | TDD §9, §11 · `architecture/state-machine.md` §8.6 |
+| **FR-023** | Claude (decision run) or the operator (CLI) shall be able to revoke an authorization; running Codex processes for the task are stopped and no further work side effects (push, PR creation, review request) occur. | Area A | M | E2E: revocation during implementation stops the run within the kill-ladder bound (`supervisor.kill_ladder_s`) and produces 0 pushes/PRs afterwards. | Test | TDD §9, §11 · `architecture/state-machine.md` §8.6 |
 | **FR-024** | Spec drift: the compared value is `spec_hash` (normalized title, description, acceptance criteria and eligibility-relevant labels). A change after authorization sets the `spec_changed` hold; results of runs that finish after the change are not acted upon until Claude re-authorizes against the new hash (Claude may confirm "no material change"); PR-stage tasks keep the PR open and require re-authorization before further Codex work. One non-mention Linear comment records the drift; escalation to `BLOCKED` happens only through hold ageing (FR-050). | RD-13; RF-16; RE-14 | M | TC-E2E-008/020: edit after authorization → hold set, 0 Codex dispatches and 0 applied results until a new authorization version exists; PR stays open; TC-SM-015 passes. | Test | TDD §11, §12 · `architecture/state-machine.md` §5, §8.1 |
 
 ### FR — Scheduling, dispatch, holds and execution control (content area A)
@@ -259,18 +259,18 @@ Each brief item and discovery pain point maps to at least one requirement. Phase
 | **FR-041** | Configurable concurrency limits: global, per agent type (Claude, Codex) and per repository (defaults per OD-07). | Area A | M | TC-CONC-001: never exceeded over 1,000 simulated steps with 20 queued tasks. | Test | TDD §8, §23 · `architecture/components.md` §7.3 |
 | **FR-042** | The dispatcher orders authorized work by Claude priority, then authorization time, and does not starve tasks beyond the configured ageing bound. | Steps 2, 4 | S | Scheduler tests: order respected; no task waits beyond the bound in simulation. | Test | TDD §8 · `architecture/components.md` §7.4 |
 | **FR-043** | Each side-effecting step carries a deterministic idempotency key from the single dedup key catalogue so re-execution after a crash or retry has at most one external effect. | Area A/B; RD-18 | M | See NFR-001; TC-CON-015 checks keys against the catalogue. | Test | TDD §10, §20 · `integrations/github.md` §14; `architecture/components.md` §4.14 |
-| **FR-044** | The coordinator detects agent failure by awake-time deadline, stall and exit classification. Liveness = stdout growth **or** process-group CPU-time progress; a run is stalled only when both are flat for the kind's stall threshold, which is never shorter than the repository test timeout while a command runs. Termination is SIGINT → SIGTERM → SIGKILL of the whole group via `agent-ctl`. | Fact 8; RD-15 | M | Hung fake agent with 3 descendants: all terminated within deadline + grace; 0 survivors; a 20-minute quiet test command with CPU progress is **not** classified stalled (TC-AFS-009). | Test | TDD §13, §18 · `architecture/components.md` §8.4; parameter table (`stall_*`) |
+| **FR-044** | The coordinator detects agent failure by awake-time deadline, stall and exit classification. Liveness = stdout growth **or** process-group CPU-time progress; a run is stalled only when both are flat for the kind's stall threshold, which is never shorter than the repository test timeout while a command runs. Termination is SIGINT → SIGTERM → SIGKILL of the whole group via `agent-ctl`. | Fact 8; RD-15 | M | Hung fake agent with 3 descendants: all terminated within deadline + grace; 0 survivors; a 20-minute quiet test command with CPU progress is **not** classified stalled (TC-AFS-009). | Test | TDD §13, §18 · `architecture/components.md` §8.4; parameter table (`run.<kind>.*`) |
 | **FR-045** | Each step has a bounded retry policy per the single retry matrix; non-transient failures route to `FAILED` or `BLOCKED` with escalation. | Area C; RD-18 | M | Retry-calculator tests match the matrix; injected permanent error → exactly one escalation. | Test | TDD §11, §20 · `integrations/github.md` §15 |
 | **FR-046** | The operator (CLI) and Claude (decision) can cancel a task from any non-terminal state; cancellation stops running processes, records the reason, reaches `CANCELLED` and schedules cleanup per FR-184. After the cancel timestamp there are 0 **work** side effects (runs, pushes, PR creation, review requests); the cancel-protocol notices are each sent exactly once. | Area A; RC-19 | M | TC-SM-010: cancel succeeds from every non-terminal state; 0 processes survive; 0 work effects; each cancel notice once. | Test | TDD §11 · `architecture/state-machine.md` §8.6 |
 | **FR-047** | The operator can pause and resume a task or the whole coordinator; pause is a hold (no state change) and resume continues from the last durable point without repeating completed side effects. Verbs are those of `architecture/components.md` §5.5 (single source). | Area A; RF-31 | M | TC-SM-011: pause/resume from every pausable state; 0 repeated effects; state unchanged by pause. | Test | TDD §11, §20 · `architecture/components.md` §5.5 |
 | **FR-048** | Only one coordinator instance may run per `MERCURY_HOME` (`flock`, the single instance guard); the CLI acts only through the control socket. | Fact 11; RD-11 | M | Second instance with the lock held logs and exits 0 within 5 s; no CLI path writes SQLite (inspection). | Test + Inspection | TDD §8, §18 · `architecture/components.md` §5.1 |
 | **FR-049** | The CLI exposes task status (state, holds, step, age, attempts, next deadline, waiting-on). | Area A | M | `mercury status` returns all non-terminal tasks in ≤ 2 s with the listed fields. | Demo + Test | TDD §8, §21 · `architecture/components.md` §5.5 |
-| **FR-050** | Holds (`operator_pause`, `sleep`, `network_down`, `rate_limited`, `spec_changed`, `dependency_unresolved`, `deprioritized`, `integrity_alert` (repo), `security_halt` (global)) block new work only and never change task state. Each hold kind has a defined setter, clearer and notification policy. A hold active longer than its ageing threshold (awake time) escalates **once** to `BLOCKED(needs_human_decision)` or a digest notification. Security conditions are never auto-clearing; a hold whose clearing re-enables Codex work clears only through the authorization guard. Holds can emit outbox effects. | ADR-015; RD-3 | M | PROP-20, PROP-21: 0 counterexamples; TC-SM-012/013/014 pass. | Test | TDD §11 · `architecture/state-machine.md` §5; parameter table (`hold_age_*`) |
-| **FR-051** | Every process that executes model-directed or repository-derived code (Codex plan/implement/revise, L2 `verify`, `deps_install`, Claude decision runs) is spawned as the agent uid through the root-owned `agent-exec` wrapper and is signalled, probed, listed, measured and swept only through `agent-ctl`, both with a fixed argument grammar. Secrets reach agents only on fd 3. The coordinator never signals agent processes directly. | RD-1; RF-01; RF-12 | M | TC-INT-025 (fake broker) and P0-026…028 (real Mac) pass; argv-grammar fuzzing yields 0 escapes (TC-SEC-010); `ps` audit shows agent kinds running as the agent uid. | Test | TDD §13, §18 · `ADR-013`; `operations/macos-service.md` agent-uid design; `architecture/components.md` §4.7 |
-| **FR-052** | No new run is dispatched during a dark wake: dispatch requires a full-wake signal or a continuous credited awake period of at least `dispatch_min_awake_after_wake`. | RD-16; RD-18 (D) | M | TC-REC-012 (real Mac, Power Nap) and TC-SM-023: 0 dispatches during dark wake. | Test | TDD §18 · `operations/macos-service.md` §8 |
-| **FR-053** | Run outcome class `lost_by_host` applies when the boot session changed or `exit.json` reports `supervisor_lost`; it consumes no attempt, has a separate cap per step (`lost_by_host_cap`) and on exhaustion raises an ops alert, not `BLOCKED`. | RD-11; RD-12 (D) | M | TC-REC-032: three reboots during one implementation step consume 0 attempts; cap exhaustion → 1 ops alert, state unchanged; PROP-24 holds. | Test | TDD §20 · `architecture/components.md` §8.6 |
+| **FR-050** | Holds (`operator_pause`, `sleep`, `network_down`, `rate_limited`, `spec_changed`, `dependency_unresolved`, `deprioritized`, `integrity_alert` (repo), `security_halt` (global)) block new work only and never change task state. Each hold kind has a defined setter, clearer and notification policy. A hold active longer than its ageing threshold (awake time) escalates **once** to `BLOCKED(needs_human_decision)` or a digest notification. Security conditions are never auto-clearing; a hold whose clearing re-enables Codex work clears only through the authorization guard. Holds can emit outbox effects. | ADR-015; RD-3 | M | PROP-20, PROP-21: 0 counterexamples; TC-SM-012/013/014 pass. | Test | TDD §11 · `architecture/state-machine.md` §5; parameter table (`hold_age.*`) |
+| **FR-051** | Every process that executes model-directed or repository-derived code (Codex plan/implement/revise, L2 `verify`, `deps_install`, Claude decision runs) is spawned as the agent uid through the root-owned `agent-exec` wrapper and is signalled, probed, listed, measured and swept only through `agent-ctl`, both with a fixed argument grammar. Secrets reach agents only on fd 3. The coordinator never signals agent processes directly. | RD-1; RF-01; RF-12 | M | TC-INT-025 (fake broker) and P0-026…028 (real Mac) pass; argv-grammar fuzzing yields 0 escapes (TC-SEC-128); `ps` audit shows agent kinds running as the agent uid. | Test | TDD §13, §18 · `ADR-013`; `operations/macos-service.md` agent-uid design; `architecture/components.md` §4.7 |
+| **FR-052** | No new run is dispatched during a dark wake: dispatch requires a full-wake signal or a continuous credited awake period of at least `wake.dark_wake_min_awake_s`. | RD-16; RD-18 (D) | M | TC-REC-012 (real Mac, Power Nap) and TC-SM-023: 0 dispatches during dark wake. | Test | TDD §18 · `operations/macos-service.md` §8 |
+| **FR-053** | Run outcome class `lost_by_host` applies when the boot session changed or `exit.json` reports `supervisor_lost`; it consumes no attempt, has a separate cap per step (`run.lost_by_host_cap`) and on exhaustion raises an ops alert, not `BLOCKED`. | RD-11; RD-12 (D) | M | TC-REC-032: three reboots during one implementation step consume 0 attempts; cap exhaustion → 1 ops alert, state unchanged; PROP-24 holds. | Test | TDD §20 · `architecture/components.md` §8.6 |
 | **FR-054** | After a coordinator restart, detached Codex, `verify` and `deps_install` runs are adopted when the identity triple (`run_id` marker, start time, boot session) matches; piped Claude runs are killed and re-run with the same `input_digest` without consuming an attempt. The authorization guard (FR-022) is re-evaluated before an adopted output is acted on. Adopted runs are never kept through safe mode or a security halt. | RD-11 | M | TC-REC-030: adopted run finalized, 0 re-runs; TC-REC-038: authorization revoked while down → adopted output discarded; TC-AFS-010: Claude re-run consumes 0 attempts. | Test | TDD §20 · `architecture/components.md` §8.6; `ADR-020` |
-| **FR-055** | `agent-exec` enforces the hard awake-time deadline it is given and a supervisor lease: if `run/coordinator.alive` is stale for more than `supervisor_lease_stale` of credited time it terminates the group (SIGINT → SIGTERM → SIGKILL) and writes `exit.json{reason: supervisor_lost}`. | RD-11; RD-10 (D) | M | TC-REC-033: daemon stopped with a live run → run terminated after the lease, `exit.json` reason recorded; 0 orphans. | Test | TDD §18, §20 · `ADR-020`; parameter table |
+| **FR-055** | `agent-exec` enforces the hard awake-time deadline it is given and a supervisor lease: if `WORK_ROOT/ctl/coordinator.alive` (operator-owned 0640, group-readable; Addendum B.3) is stale for more than `supervisor.lease_stale_min` of credited time it terminates the group (SIGINT → SIGTERM → SIGKILL) and writes `exit.json{reason: supervisor_lost}`. | RD-11; RD-10 (D) | M | TC-REC-033: daemon stopped with a live run → run terminated after the lease, `exit.json` reason recorded; 0 orphans. | Test | TDD §18, §20 · `ADR-020`; parameter table |
 
 ### FR — Agent communication and contracts (content area B)
 
@@ -313,9 +313,9 @@ Each brief item and discovery pain point maps to at least one requirement. Phase
 |---|---|---|---|---|---|---|
 | **FR-120** | One isolated git worktree per task, created from the base branch at a recorded base SHA under `WORK_ROOT` (layout per `operations/macos-service.md` §7.1). The branch name contains the Linear identifier only in Linear mode `integration_owns_done`; in `mercury_owns_all` it does not (OD-06). | Step 8; RD-2; RD-9 | M | Worktree path under `WORK_ROOT`; branch name matches the mode's pattern in `integrations/github.md` §4.1; base SHA recorded. | Test | TDD §13, §15 · `integrations/github.md` §4.1 |
 | **FR-121** | A Codex implementation run (workspace-write sandbox, no network, allowlisted environment, agent uid) starts only after FR-022 and the plan-approval gate pass, with the approved plan as input. | Step 8 | M | Spawn audit shows both gate results for 100 % of implementation runs; argv contains approved flags only. | Test + Inspection | TDD §13 · `integrations/codex.md` §4 |
-| **FR-122** | The coordinator runs the repository's configured tests (`verify`) as the agent uid under a fail-closed Seatbelt profile with no network, and stores a test-results artifact. If no sandbox mechanism is available, `verify` is recorded `not_run` and CI is the gate; tests never run unsandboxed. | Step 9; RD-17; RE-02 | M | Test-results artifact for 100 % of PRs; TC-SEC-012: unsandboxed execution 0 times; network attempts from `verify` denied. | Test | TDD §13, §22 · `integrations/codex.md` §10 |
-| **FR-123** | Dependency installation is a coordinator step (`deps_install`) run as the agent uid with `--ignore-scripts`, a registry allowlist and lockfile lint, using only base-branch lockfiles or lockfile changes acknowledged through `MERCURY / policy` (OD-09). | Runtimes R2; RD-17 | M | TC-SEC-012/171: lifecycle scripts not executed; non-allowlisted `resolved` hosts rejected before install; unacknowledged lockfile change → install refused. | Test + Inspection | TDD §13 · `integrations/codex.md` §10 |
-| **FR-124** | Before committing, the coordinator compares the diff with the approved plan scope and the protected-path policy (owned by SEC-310). Secret hits, forbidden symlinks and forbidden events **block** (`BLOCKED(security_policy_violation)`). A protected-path change within the authorization's `escalate` allowance proceeds to push with `MERCURY / policy` not successful until the operator acknowledges it (FR-167); outside the allowance it blocks. | Discovery; RF-26 | M | TC-UNIT-043 and TC-AFS-007: out-of-scope and forbidden fixtures block; allowed protected-path fixture → push + policy check pending; TC-GOV-013 passes. | Test | TDD §13, §19 · `integrations/codex.md` §9; `architecture/state-machine.md` T19 |
+| **FR-122** | The coordinator runs the repository's configured tests (`verify`) as the agent uid under a fail-closed Seatbelt profile with no network, and stores a test-results artifact. If no sandbox mechanism is available, `verify` is recorded `not_run` and CI is the gate; tests never run unsandboxed. | Step 9; RD-17; RE-02 | M | Test-results artifact for 100 % of PRs; TC-SEC-125: unsandboxed execution 0 times; network attempts from `verify` denied. | Test | TDD §13, §22 · `integrations/codex.md` §10 |
+| **FR-123** | Dependency installation is a coordinator step (`deps_install`) run as the agent uid with `--ignore-scripts`, a registry allowlist and lockfile lint, using only base-branch lockfiles or lockfile changes acknowledged through `MERCURY / policy` (OD-09). | Runtimes R2; RD-17 | M | TC-SEC-125/171: lifecycle scripts not executed; non-allowlisted `resolved` hosts rejected before install; unacknowledged lockfile change → install refused. | Test + Inspection | TDD §13 · `integrations/codex.md` §10 |
+| **FR-124** | Before committing, the coordinator compares the diff with the approved plan scope and the protected-path policy (owned by SEC-310). Secret hits, forbidden symlinks and forbidden events **block** (`BLOCKED(security_policy_violation)`). A protected-path change within the authorization's `escalate` allowance proceeds to push with `MERCURY / policy` not successful until the operator acknowledges it (FR-167); outside the allowance it blocks. | Discovery; RF-26 | M | TC-UNIT-043 and TC-AFS-007: out-of-scope and forbidden fixtures block; allowed protected-path fixture → push + policy check pending; TC-PI-138 passes. | Test | TDD §13, §19 · `integrations/codex.md` §9; `architecture/state-machine.md` T19 |
 | **FR-125** | Codex progress (JSONL) is converted into progress messages so stall detection and the audit trail reflect real activity. | Stalls | M | ≥ 1 progress event per completed Codex item; FR-044 liveness uses it. | Test | TDD §13, §21 · `integrations/codex.md` |
 | **FR-126** | Worktree reset follows one policy: archive uncommitted changes as a patch artifact → `reset --hard tasks.last_commit_sha` (or `base_sha`) → `clean -ffd`, adding `-x` only when `deps_install` is re-queued in the same step. No checkpoint commits. | RD-11; RD-04 (D) | M | TC-REC-037: after each reset the tree equals the recorded commit; archived patch restores the discarded changes; ignored dependency trees survive retries that do not re-queue `deps_install`. | Test | TDD §13, §20 · `architecture/components.md` §9 |
 
@@ -325,7 +325,7 @@ Each brief item and discovery pain point maps to at least one requirement. Phase
 |---|---|---|---|---|---|---|
 | **FR-140** | The coordinator (never Codex or Claude) commits, pushes and opens the PR as `mercury-bot`. Commits are created with plumbing against the mirror, never with configuration from an agent-writable worktree; the worktree `.git` pointer is verified before every git invocation; pushes happen from the mirror with `GIT_ASKPASS` reading the token from an inherited fd. | RD-17; RE-03 | M | TC-INT-027 and TC-SEC-140/141: planted hooks, fsmonitor, `insteadOf` and pointer tampering never execute or redirect; sandbox PRs and commits authored by the bot. | Test | TDD §13, §15 · `architecture/components.md` §9; `integrations/github.md` §3–§4 |
 | **FR-141** | Commits carry the trailer set of `integrations/github.md` §4.2 (single source; `Mercury-Plan` carries the full SHA-256). | RF-28 | S | Trailer parser finds the full set on 100 % of MERCURY commits. | Test | TDD §15 · `integrations/github.md` §4.2 |
-| **FR-142** | The PR opens as **draft** from the template (`integrations/github.md` §5.1) with the Linear link phrasing of the active Linear mode, authorization and plan references and the test summary. It is marked ready and the operator review is requested only when `MERCURY / claude-review` succeeds. Agent text in the body passes the public-sink renderer (mentions, closing keywords and Linear magic words neutralised). | RD-18; RD-9; RE-12 | M | Golden render test; sandbox PR is draft until the check succeeds; 0 review requests before success (TC-E2E-019); TC-SEC-014 passes. | Test | TDD §15 · `integrations/github.md` §5–§6 |
+| **FR-142** | The PR opens as **draft** from the template (`integrations/github.md` §5.1) with the Linear link phrasing of the active Linear mode, authorization and plan references and the test summary. It is marked ready and the operator review is requested only when `MERCURY / claude-review` succeeds. Agent text in the body passes the public-sink renderer (mentions, closing keywords and Linear magic words neutralised). | RD-18; RD-9; RE-12 | M | Golden render test; sandbox PR is draft until the check succeeds; 0 review requests before success (TC-E2E-019); TC-SEC-153 passes. | Test | TDD §15 · `integrations/github.md` §5–§6 |
 | **FR-143** | PR creation is idempotent: lookup by head (`state=all`) before create; at most one PR per task. | Area A; RD-18 | M | Crash/timeout between create and response: retry yields the same PR (0 duplicates in 1,000 crash runs). | Test | TDD §15, §20 · `integrations/github.md` §5 |
 | **FR-144** | The coordinator derives the required CI contexts from `GET /rules/branches/{base}` at each evaluation, waits only on non-MERCURY required checks, and routes CI failures through a Claude `revision_request` decision run (CI logs are untrusted) to a bounded fix loop (OD-08 default) or escalation. | RD-5; RD-8; RD-18; RF-14 | M | E2E: failing check → Claude revision request → fix → green; limit + 1 → `BLOCKED` + 1 notification; changed ruleset contexts picked up on the next evaluation (TC-INT-029). | Test | TDD §15 · `integrations/github.md` §7 |
 | **FR-145** | Target-repository CI must run on draft PRs; onboarding verifies this before the first dispatch to the repository. | RD-18 | M | OPS-016 onboarding check fails for a repo whose workflows skip drafts (TC-OPS-016). | Test + Inspection | TDD §15 · `integrations/github.md` §9 |
@@ -336,13 +336,13 @@ Each brief item and discovery pain point maps to at least one requirement. Phase
 |---|---|---|---|---|---|---|
 | **FR-160** | Claude independently reviews each PR head SHA (snapshot per FR-066) for functionality, maintainability, security, spec compliance, plan conformance and approval conditions, returning a schema-valid verdict bound to the head SHA. | Step 10 | M | Contract tests pass; verdict bound to head SHA in the store. | Test | TDD §14 · `integrations/claude.md` §3 |
 | **FR-161** | A Claude security review runs on **every** PR as a separate run (OD-23); findings at or above the configured severity block the claude-review check. | Area E; RF-13 | M | E2E: blocking security finding → check not successful regardless of the functional verdict. | Test | TDD §14, §19 · `integrations/claude.md` §3; SEC-314 |
-| **FR-162** | Review results are persisted as artifacts and posted by `mercury-bot` as `COMMENT` reviews only; MERCURY never submits `APPROVE` or `REQUEST_CHANGES`, never dismisses reviews. | RD-5; RA-04; RB-03; RC-01 | M | Sandbox: 100 % of MERCURY reviews are `COMMENT`; static check finds no other event literal on the review path (TC-CON-012); TC-GOV-010 passes. | Test + Inspection | TDD §15 · `integrations/github.md` §6 |
+| **FR-162** | Review results are persisted as artifacts and posted by `mercury-bot` as `COMMENT` reviews only; MERCURY never submits `APPROVE` or `REQUEST_CHANGES`, never dismisses reviews. | RD-5; RA-04; RB-03; RC-01 | M | Sandbox: 100 % of MERCURY reviews are `COMMENT`; static check finds no other event literal on the review path (TC-CON-012); TC-GOV-118 passes. | Test + Inspection | TDD §15 · `integrations/github.md` §6 |
 | **FR-163** | Revision requests: a validated Claude review bound to the current head yields its `required_change` items verbatim through the fixed template; every other source (CI failures, local test failures, merge conflicts, operator `CHANGES_REQUESTED` reviews, diff-gate violations, conflicting or `needs_plan_change` reviews) goes through a Claude `revision_request` decision run. Loops are bounded (OD-08) with escalation. | Step 11; RD-8 | M | TC-E2E-004/018: each source routes as specified; provenance (`producer.kind`) recorded; limit + 1 → `BLOCKED` + 1 notification. | Test | TDD §11, §14 · `protocols/messages.md` §5.1 |
 | **FR-164** | On a passing review the task enters `AWAITING_HUMAN_APPROVAL` and the operator is notified through the GitHub review request per the channel matrix. | Step 12 | M | Sandbox: review request within NFR-043. | Test | TDD §11, §15 · `integrations/github.md` §6 |
 | **FR-165** | Any new commit on the PR head after a Claude pass invalidates the pass (check reset) and triggers re-review. | Last-push rule | M | E2E: human push → re-review on the new SHA; check not successful meanwhile. | Test | TDD §11 · `architecture/state-machine.md` §8.3 |
-| **FR-166** | `MERCURY / claude-review` is a required check run created by `mercury-bot` and pinned to it by integration id in the ruleset; it is `success` only when the code and security reviews pass for the exact head SHA, otherwise neutral/failure; hold changes update it through the outbox. | RD-5; RB-04/05 | M | TC-GOV-009: same-named check from another identity does not satisfy the ruleset; TC-E2E-019: success only for the reviewed head. | Test | TDD §15 · `integrations/github.md` §6, §9; `ADR-014` |
-| **FR-167** | `MERCURY / policy` is a required check run (deterministic pre-checks) that stays neutral/failure while protected-path, dependency or build-script changes await operator acknowledgement; the task is `BLOCKED(policy_ack_required)` until `mercury policy ack` (presence tier) concludes the check `success` for that head SHA. | RD-5; RD-14; RF-07 | M | TC-GOV-013: merge impossible until acknowledgement; acknowledgement without presence rejected (TC-SEC-009); TC-SM-016 passes. | Test | TDD §15, §19 · `integrations/github.md` §6; `architecture/state-machine.md` §6 |
-| **FR-168** | Security findings on public PRs: details for medium and below; critical/high and pre-existing findings are withheld (generic line plus local report ID) per OD-21. | RD-18 | M | TC-SEC-021: seeded high finding never appears in PR text; report ID resolves locally. | Test | TDD §14, §19 · `integrations/github.md` §6 |
+| **FR-166** | `MERCURY / claude-review` is a required check run created by `mercury-bot` and pinned to it by integration id in the ruleset; it is `success` only when the code and security reviews pass for the exact head SHA, otherwise neutral/failure; hold changes update it through the outbox. | RD-5; RB-04/05 | M | TC-GOV-117: same-named check from another identity does not satisfy the ruleset; TC-E2E-019: success only for the reviewed head. | Test | TDD §15 · `integrations/github.md` §6, §9; `ADR-014` |
+| **FR-167** | `MERCURY / policy` is a required check run (deterministic pre-checks) that stays neutral/failure while protected-path, dependency or build-script changes await operator acknowledgement; the task is `BLOCKED(policy_ack_required)` until `mercury policy ack` (presence tier) concludes the check `success` for that head SHA. | RD-5; RD-14; RF-07 | M | TC-PI-138: merge impossible until acknowledgement; acknowledgement without presence rejected (TC-SEC-145); TC-SM-016 passes. | Test | TDD §15, §19 · `integrations/github.md` §6; `architecture/state-machine.md` §6 |
+| **FR-168** | Security findings on public PRs: details for medium and below; critical/high and pre-existing findings are withheld (generic line plus local report ID) per OD-21. | RD-18 | M | TC-SEC-154: seeded high finding never appears in PR text; report ID resolves locally. | Test | TDD §14, §19 · `integrations/github.md` §6 |
 
 ### FR — Merge verification and post-merge (operating model 13–14)
 
@@ -370,9 +370,9 @@ Each brief item and discovery pain point maps to at least one requirement. Phase
 |---|---|---|---|---|---|---|
 | **FR-220** | The coordinator notifies the operator for repeated plan-review failure, decisions needing human judgement, security escalation, unrecoverable failures, PR ready for approval, CI failures needing intervention and merge completion, using exactly the channels of the notification channel matrix (kind → channel → dedup key → reminder cadence; `architecture/components.md` §4.15, ADR-019). | Area G; RD-19; RF-21 | M | Sandbox: each kind delivered once through its matrix channel (TC-SBX-006). | Test | TDD §21 · `architecture/components.md` §4.15 |
 | **FR-221** | Notifications are deduplicated by (task, kind, subject version) and never sent for unchanged status. | Report-on-change rule | M | TC-DUP-005: 0 repeats over 100 unchanged polls. | Test | TDD §21 · `architecture/components.md` §4.15 |
-| **FR-222** | After downtime or sleep longer than `downtime_notice_threshold` with active tasks, the coordinator sends one summary notification on resume (coalescing all due reminders, FR-085). | Unnoticed stalls | S | TC-REC-009: one summary per episode. | Test | TDD §20, §21 · `operations/recovery.md` |
+| **FR-222** | After downtime or sleep longer than `recovery.downtime_notice_min` with active tasks, the coordinator sends one summary notification on resume (coalescing all due reminders, FR-085). | Unnoticed stalls | S | TC-REC-009: one summary per episode. | Test | TDD §20, §21 · `operations/recovery.md` |
 | **FR-223** | Undelivered notifications are persisted and retried until delivered or expired; delivery failure is logged. Network-class failures consume no attempt (FR-283). | DNS incident | M | Network down during notify → delivered once after recovery. | Test | TDD §21 · `architecture/components.md` §4.14 |
-| **FR-224** | Operations and SECURITY alerts go to the `mercury-ops` issue in `project-mercury`; the issue conversation is locked to collaborators and alert text is template-only (no task content). | RD-19; RE-11 | M | TC-SEC-016: template-only body; non-collaborator comment impossible; heartbeat carries no task content. | Test + Inspection | TDD §21 · `operations/macos-service.md` §11 |
+| **FR-224** | Operations and SECURITY alerts go to the `mercury-ops` issue in `project-mercury`; the issue conversation is locked to collaborators and alert text is template-only (no task content). | RD-19; RE-11 | M | TC-SEC-190: template-only body; non-collaborator comment impossible; heartbeat carries no task content. | Test + Inspection | TDD §21 · `operations/macos-service.md` §11 |
 
 ### FR — Operator control
 
@@ -380,8 +380,8 @@ Each brief item and discovery pain point maps to at least one requirement. Phase
 |---|---|---|---|---|---|---|
 | **FR-240** | A local CLI provides the verbs of `architecture/components.md` §5.5 (single source), restricted to the operator account through the 0600 socket token; every mutating command is audited. | Areas A, F, I; RF-31 | M | CLI integration tests per verb; audit event per mutating command (TC-INT-010). | Test | TDD §8, §18 · `architecture/components.md` §5 |
 | **FR-241** | The operator resolves escalations only through the local CLI in v1 (OD-12); GitHub and Linear text is never a control input. The operator can see escalations on the iPhone but not resolve them (accepted tradeoff). | RD-19 | M | Escalation resolution recorded with the operator principal; comments cannot resolve escalations (TC-GOV-006). | Test | TDD §9, §19 · `ADR-019` |
-| **FR-242** | Operator-presence tier: `ack-merge`, security resume/unhalt, `adopt`, budget/revision `grant`, `policy ack`, post-incident `unpause` and the ruleset-emergency runbook require a local user-presence confirmation (Touch ID or password via the signed LocalAuthentication helper) in addition to the socket token. Other operator commands need only the token. | RD-12; RA-09 | M | TC-SEC-009: each presence command rejected with token only; accepted with presence; a process running as the operator can request but not clear. | Test | TDD §9, §19 · `ADR-019`; `architecture/components.md` §5.2 |
-| **FR-243** | Global `security_halt` is set automatically on the triggers listed in SEC-902/SEC-905 and E's halt list (unauthorized merge, merge without approval, content mismatch, unexpected base commit, governance drift, secret-scan hit, git-config tamper, chain failure, sandbox violation) and is cleared only through the presence tier; `mercury pause --all` and the halt flag file act as a kill switch. | RE-25; RD-3 | M | TC-SEC-017: each trigger sets the halt; 0 dispatches while set; token-only unpause rejected. | Test | TDD §19, §20 · `architecture/state-machine.md` §5 |
+| **FR-242** | Operator-presence tier: `ack-merge`, security resume/unhalt, `adopt`, budget/revision `grant`, `policy ack`, post-incident `unpause`, restore-epoch confirmation (Addendum B.5) and the ruleset-emergency runbook require a local user-presence confirmation (Touch ID or password via the signed LocalAuthentication helper) in addition to the socket token. Other operator commands need only the token. | RD-12; RA-09 | M | TC-SEC-145: each presence command rejected with token only; accepted with presence; a process running as the operator can request but not clear. | Test | TDD §9, §19 · `ADR-019`; `architecture/components.md` §5.2 |
+| **FR-243** | Global `security_halt` is set automatically on the triggers listed in SEC-902/SEC-905 and E's halt list (unauthorized merge, merge without approval, content mismatch, unexpected base commit, governance drift, secret-scan hit, git-config tamper, chain failure, sandbox violation) and is cleared only through the presence tier; `mercury pause --all` and the halt flag file act as a kill switch. | RE-25; RD-3 | M | TC-SEC-191: each trigger sets the halt; 0 dispatches while set; token-only unpause rejected. | Test | TDD §19, §20 · `architecture/state-machine.md` §5 |
 
 ### FR — Audit queries and integrity (content area I)
 
@@ -389,9 +389,9 @@ Each brief item and discovery pain point maps to at least one requirement. Phase
 |---|---|---|---|---|---|---|
 | **FR-260** | `mercury trace <task|issue|pr>` answers the ten brief §I questions using the question → table/column → artifact mapping of `architecture/components.md` §5.4. | Area I; RF-35 | M | TC-E2E-010: 10/10 correct, including a crashed and restarted task. | Test | TDD §21 · `architecture/components.md` §5.4 |
 | **FR-261** | Every state transition, agent run (argv without secrets, versions, exit, cost/tokens, model actually used), external write and operator action produces an audit event linked by correlation and causation IDs. | Area I; RD-18 | M | See NFR-060. | Test | TDD §21 · `architecture/components.md` §4.16 |
-| **FR-262** | At startup and daily the coordinator verifies the audit hash chain; a failure enters safe mode (no dispatch) and sends one SECURITY notification. | RD-4 | M | TC-SEC-018: single-row mutation → safe mode + 1 notification (SAC-08). | Test | TDD §21 · `ADR-018` |
-| **FR-263** | The chain head `(seq, hash)` is anchored off-host in App-posted artifacts: the `MERCURY / claude-review` check-run output summary, the Linear completion comment, and a daily anchor in a private anchor repository via `mercury-ops`. Anchoring is required before unattended operation (M7 exit). | RD-4; RF-10 | M | TC-SEC-019/163: anchors present at each point; a local rewrite behind an anchor is detected by `audit verify`. | Test | TDD §21 · `ADR-018`; `architecture/components.md` §6 (`anchors`) |
-| **FR-264** | Restore and new-Mac flows record an operator-initiated `audit.restore_epoch` event; `audit verify` accepts a chain fork only through that event; authority that cannot be verified after restore maps to `BLOCKED(reauthorization_required)`, never to `guard_integrity_failure`. | RD-4; RD-06 (D); RF-19 | M | TC-REC-019: restore of a 24 h-old backup with anchors ahead → epoch recorded, 0 cancelled tasks, authority only shrinks; TC-SM-022 passes. | Test | TDD §20, §21 · `operations/recovery.md`; `ADR-018` |
+| **FR-262** | At startup and daily the coordinator verifies the audit hash chain; a failure enters safe mode (no dispatch) and sends one SECURITY notification. | RD-4 | M | TC-SEC-161: single-row mutation → safe mode + 1 notification (SAC-08). | Test | TDD §21 · `ADR-018` |
+| **FR-263** | The chain head `(seq, hash)` is anchored off-host in App-posted artifacts: the Linear completion comment per task and a daily anchor in a private anchor repository via `mercury-ops`; the `MERCURY / claude-review` check-run summary carries it **only on private repositories** (Addendum B.2, OD-24). An overdue anchor (`audit.anchor_overdue_h`) raises an ops alert, never a halt. Anchoring is required before unattended operation (M7 exit). | RD-4; RF-10 | M | TC-SEC-163: anchors present at each carrier and absent from public check summaries; a local rewrite behind an anchor is detected by `audit verify`. | Test | TDD §21 · `ADR-018`; `architecture/components.md` §6 (`anchors`) |
+| **FR-264** | Restore and new-Mac flows record an operator-initiated `audit.restore_epoch` event; `audit verify` accepts a chain fork only through that event; authority that cannot be verified after restore maps to `BLOCKED(reauthorization_required)`, never to `guard_integrity_failure`. | RD-4; RD-06 (D); RF-19 | M | TC-REC-019 and TC-SEC-164: restore of a 24 h-old backup with anchors ahead → epoch recorded, 0 cancelled tasks, authority only shrinks; TC-SM-022 passes. | Test | TDD §20, §21 · `operations/recovery.md`; `ADR-018` |
 
 ### FR — Recovery (content area F; operating model 15)
 
@@ -399,7 +399,7 @@ Each brief item and discovery pain point maps to at least one requirement. Phase
 |---|---|---|---|---|---|---|
 | **FR-280** | On start the coordinator follows the startup/exit contract (lock held → exit 0; DB corruption → stay alive in safe mode; schema too new → `fatal.json`, exit 0) and then recovers every non-terminal task: reconcile runs (FR-054), reconcile external state, resume or re-queue from the last durable point. | Step 15; RD-11 | M | TC-REC-001/004/035: 100 % of non-terminal tasks recovered; 0 duplicates; each contract case behaves as specified. | Test | TDD §20 · `operations/recovery.md`; `architecture/components.md` §10.6 |
 | **FR-281** | Orphaned agent processes are reaped through `agent-ctl sweep`, keyed by `run_id`, with pgid and start time verified (PID-reuse safe). | Fact 10; RF-12 | M | TC-REC-005: orphans killed; unrelated process with reused PID untouched; 0 orphans after recovery. | Test | TDD §18, §20 · `architecture/components.md` §8.3 |
-| **FR-282** | Sleep gaps are not credited to run budgets or state timers. On wake the coordinator probes connectivity, re-evaluates deadlines under the timer rule (FR-085) and resumes polling. (Detection mechanism: `architecture/components.md` §10.10.) | Platform §4.4; RD-16; RF-15 | M | TC-SM-009 and TC-REC-031 in both FakeClock modes: 0 credited sleep; TC-REC-003 (real Mac): first poll ≤ `first_poll_after_network_max` after the network is reachable. | Test | TDD §18, §20 · `architecture/components.md` §10.10; `operations/macos-service.md` §8 |
+| **FR-282** | Sleep gaps are not credited to run budgets or state timers. On wake the coordinator probes connectivity, re-evaluates deadlines under the timer rule (FR-085) and resumes polling. (Detection mechanism: `architecture/components.md` §10.10.) | Platform §4.4; RD-16; RF-15 | M | TC-SM-009 and TC-REC-031 in both FakeClock modes: 0 credited sleep; TC-REC-003 (real Mac): first poll ≤ `recovery.first_poll_max_s` after the network is reachable. | Test | TDD §18, §20 · `architecture/components.md` §10.10; `operations/macos-service.md` §8 |
 | **FR-283** | During connectivity loss the coordinator holds external effects (`network_down` hold), queues intents durably and resumes without state corruption. Network-class failures never consume run or outbox attempts while the hold is set or the authenticated probe fails within 60 s of the error; there is no `BLOCKED(network)`. | Area F; RD-18 | M | TC-NET-001…003 and TC-NET-006/008: 0 `dead` outbox items and 0 attempts consumed from network-class errors. | Test | TDD §20 · `integrations/github.md` §15 |
 
 ### FR — Migration from the Slack workflow
@@ -425,11 +425,11 @@ Each brief item and discovery pain point maps to at least one requirement. Phase
 | ID | Requirement | Rationale / source | Pri | Acceptance criterion (pass/fail) | Verification | Owning design |
 |---|---|---|---|---|---|---|
 | **NFR-001** | External side effects are exactly-once in effect under crashes and retries. **Duplicate execution** = two concurrently active runs violating INV-02, or a second run for the same (task, kind, binding) after a validated result was recorded. Re-execution after a lost run is allowed and counted by NFR-026. | Area A; RC-31; RD-27 (D) | M | 0 ledger violations across 1,000 randomized crash-injection runs per nightly, every crash point hit ≥ 10 times (TC-REC-001). | Test | TDD §20 · `architecture/components.md` §8.7 (crash-point registry) |
-| **NFR-002** | After a coordinator crash launchd restarts it and it is `ready` within `restart_ready_max` and dispatching within 60 s of the crash. | Platform M1; RF-04 | M | 10 `kill -9` trials on the Mac: 10/10 within the bounds (TC-REC-006). | Test | TDD §18 · `operations/macos-service.md` §5; parameter table |
+| **NFR-002** | After a coordinator crash launchd restarts it and it is `ready` within `svc.restart_to_ready_max_s` and dispatching within 60 s of the crash. | Platform M1; RF-04 | M | 10 `kill -9` trials on the Mac: 10/10 within the bounds (TC-REC-006). | Test | TDD §18 · `operations/macos-service.md` §5; parameter table |
 | **NFR-003** | Task-level stall: any task not waiting on a human with no progress beyond its state timeout is flagged within timeout + 2 poll intervals of awake time. | 14 h stall | M | 100 % of injected stalls detected within bound; pilot max undetected stall within bound (TC-PIL-004). | Test + Analysis | TDD §20, §21 · `architecture/state-machine.md` §7 |
 | **NFR-004** | Coordinator availability (per §1.5) ≥ 99 % during the supervised pilot and ≥ 99.5 % over the 30 days after cutover. | Monitoring gap; RF-04 | S | Heartbeat analysis per §1.5 (TC-PIL-002, TC-PERF-007). | Analysis | TDD §20 · `operations/macos-service.md` §11 |
 | **NFR-005** | Every durable event (review, merge, comment, check conclusion) and the final state of each tracked entity relevant to an active task is observed, including across network interruptions and sleep; transient intermediate states that polling cannot observe are out of scope. | Missed replies; RD-22 | M | Sandbox replay of 500 events with 20 injected interruptions and sleep gaps: 0 durable events or final states missed. | Test | TDD §12, §15, §20 · `integrations/github.md` §7 |
-| **NFR-006** | A dead agent run is detected within 60 s; a stalled run within its stall threshold + 60 s (liveness per FR-044). | REL-07/08; RF-20 | M | TC-AFS-002/009 and TC-REC-005 measurements within bounds. | Test | TDD §20 · parameter table (`stall_*`) |
+| **NFR-006** | A dead agent run is detected within 60 s; a stalled run within its stall threshold + 60 s (liveness per FR-044). | REL-07/08; RF-20 | M | TC-AFS-002/009 and TC-REC-005 measurements within bounds. | Test | TDD §20 · parameter table (`run.<kind>.*`) |
 | **NFR-007** | Retired → OPS-013 (downtime awareness is an operational watchdog target). | RD-10 | — | — | — | — |
 | **NFR-008** | Latency and availability metrics are computed only per the measurement rule §1.5 from `host_events`. | RD-16; RD-22 | M | TC-PERF-007: computed values equal the fixture oracle. | Test | TDD §23 · this file §1.5 |
 
@@ -438,13 +438,13 @@ Each brief item and discovery pain point maps to at least one requirement. Phase
 | ID | Requirement | Rationale / source | Pri | Acceptance criterion (pass/fail) | Verification | Owning design |
 |---|---|---|---|---|---|---|
 | **NFR-020** | After `kill -9`, power loss or reboot, 100 % of non-terminal tasks resume or reach a defined state, and the database passes `quick_check`. | Step 15 | M | TC-REC-001/002/004/020: 0 lost tasks; 0 integrity errors. | Test | TDD §20 · `operations/recovery.md` |
-| **NFR-021** | No task fails solely because of a sleep gap of any duration; the first poll after wake happens within `first_poll_after_network_max` of the network becoming reachable. | Fact 10 | M | TC-REC-003, TC-NET-004. | Test | TDD §18, §20 · parameter table |
+| **NFR-021** | No task fails solely because of a sleep gap of any duration; the first poll after wake happens within `recovery.first_poll_max_s` of the network becoming reachable. | Fact 10 | M | TC-REC-003, TC-NET-004. | Test | TDD §18, §20 · parameter table |
 | **NFR-022** | Online backup at least daily (RPO ≤ 24 h awake time plus before every upgrade/migration); restore drill ≤ 15 min of operator time. | Platform P2 | M | TC-INT-011, TC-OPS-006. | Test + Demo | TDD §20, §24 · `operations/recovery.md` |
 | **NFR-023** | Schema migrations follow the expand/contract model with a backup first; a failed migration leaves the prior DB usable. | Platform P2 | M | Injected migration failure → original DB intact (TC-INT-012). | Test | TDD §16, §24 · `operations/macos-service.md` §13.3 |
-| **NFR-024** | On SIGTERM the coordinator stops dispatch, interrupts non-adoptable runs, keeps adoptable runs, checkpoints and exits within `ExitTimeOut` (internal budget `shutdown_budget`). | Platform M1–M2; RD-11; RD-10 (D) | M | 10/10 trials within bounds; adoptable runs survive and are adopted on restart (TC-REC-007). | Test | TDD §18, §20 · `operations/macos-service.md` §12 |
-| **NFR-025** | Full reconciliation of all non-terminal tasks completes within `reconcile_complete_max` after `ready` or after wake + network (for ≤ 50 open tasks). | REL-02; RF-20 | M | `recovery.completed` duration within bound in TC-REC-004 and TC-REC-003. | Test | TDD §20 · parameter table |
+| **NFR-024** | On SIGTERM the coordinator stops dispatch, interrupts non-adoptable runs, keeps adoptable runs, checkpoints and exits within `svc.exit_timeout_s` (internal budget `svc.shutdown_budget_s`). | Platform M1–M2; RD-11; RD-10 (D) | M | 10/10 trials within bounds; adoptable runs survive and are adopted on restart (TC-REC-007). | Test | TDD §18, §20 · `operations/macos-service.md` §12 |
+| **NFR-025** | Full reconciliation of all non-terminal tasks completes within `recovery.reconcile_max_s` after `ready` or after wake + network (for ≤ 50 open tasks). | REL-02; RF-20 | M | `recovery.completed` duration within bound in TC-REC-004 and TC-REC-003. | Test | TDD §20 · parameter table |
 | **NFR-026** | Lost agent work (cost metric): 0 Codex/`verify`/`deps_install` runs lost on a coordinator crash (adoption); at most one re-run per lost step after reboot or power loss, classified `lost_by_host`. | REL-04/05; RD-11 | S | TC-REC-030/032 counts. | Test | TDD §20 · `ADR-020` |
-| **NFR-027** | Crash-loop containment: more than the configured starts within the window → safe mode (no dispatch, heartbeat `degraded`). | REL-15 | M | TC-REC-036. | Test | TDD §18 · parameter table |
+| **NFR-027** | Crash-loop containment: more than `svc.crash_loop_starts` within `svc.crash_loop_window_min` → safe mode (no dispatch, heartbeat `degraded`). | REL-15 | M | TC-REC-036. | Test | TDD §18 · parameter table |
 
 ### NFR — Latency while awake (measured per §1.5)
 
@@ -490,7 +490,7 @@ Each brief item and discovery pain point maps to at least one requirement. Phase
 |---|---|---|---|---|---|---|
 | **NFR-080** | Idle coordinator ≤ 250 MB RSS and ≤ 2 % of one core averaged over 1 h (stretch: 200 MB / 1 %). | RF-04 | S | 24 h soak (TC-PERF-001). | Test | TDD §23 · `operations/macos-service.md` §10 |
 | **NFR-081** | Non-304 GitHub reads ≤ 20 % of each identity's hourly primary limit at 10 active PRs; Linear ≤ 20 % of its limit; writes are capped by SEC-705. | RF-04 | M | TC-SBX-008, TC-NET-005. | Test | TDD §23 · `integrations/github.md` §15 |
-| **NFR-082** | Dispatch holds and run interruption at the disk thresholds of the parameter table (`disk_*`). | Resource safety | S | TC-PERF-005, TC-REC-015. | Test | TDD §23 · parameter table |
+| **NFR-082** | Dispatch holds and run interruption at the disk thresholds of the parameter table (`disk.*`). | Resource safety | S | TC-PERF-005, TC-REC-015. | Test | TDD §23 · parameter table |
 | **NFR-083** | Per-run agent limits (Claude turns/budget; Codex tokens; awake-time deadline) and per-task budget totals are enforced and recorded. | Runtimes §1.9 | M | Exceeding a limit ends the run with a classified reason; cost/tokens per run recorded (TC-AFS-001). | Test | TDD §13, §14, §23 · `integrations/claude.md` §3.1 |
 | **NFR-084** | A daily agent spend cap (OD-08) holds new dispatch when reached and notifies once. | RF-32 | S | E2E with fake costs: cap reached → `rate_limited`-class hold + 1 notification (TC-E2E-022). | Test | TDD §23 · `planning/roadmap.md` §7 (cost model) |
 | **NFR-085** | Event-loop lag p99 ≤ 250 ms and SQLite commit p99 ≤ 50 ms under one Codex run plus a test run; no false sleep-gap detection from measured blocking operations. | RD-17 (D) | S | TC-PERF-004/006. | Test | TDD §23 · `architecture/components.md` §10.10 |
@@ -518,8 +518,8 @@ Each brief item and discovery pain point maps to at least one requirement. Phase
 | ID | Requirement | Rationale / source | Pri | Acceptance criterion (pass/fail) | Verification | Owning design |
 |---|---|---|---|---|---|---|
 | **OPS-001** | The Phase 0 register (`P0-nnn`) is executed and recorded before each milestone it gates. | Fact 1 | M | Phase 0 report with every check Pass/Fail/Accepted and evidence; §10.2 closure 0 Open at milestone entry. | Inspection | TDD §18, §27 · `operations/macos-service.md` Phase 0 checklist |
-| **OPS-002** | Identities exist before any write integration: GitHub Apps `mercury-bot` (target repos: `contents:write`, `pull_requests:write`, `checks:write`, `metadata:read`, plus `statuses:write` only if P0-303 requires it) and `mercury-ops` (`issues:write` on `project-mercury`, `contents:write` on the private anchor repo, `metadata:read` on targets); Linear OAuth app `actor=app`; dedicated Anthropic and OpenAI keys with spend limits. Installation tokens are narrowed per purpose. | RD-6; RF-11 | M | Identity inventory equals this list (SAC-02, TC-GOV-112); no human credential anywhere. | Inspection + Test | TDD §15, §19 · `integrations/github.md` §2; `ADR-008` |
-| **OPS-003** | Repository governance uses **rulesets** (not classic protection) per ADR-014 and is checked by the drift monitor at start, at every wake and at least every 60 min (SEC-108); drift raises a SECURITY alert and a global `security_halt`. | RB-16; RE-17; RF-11 | M | TC-GOV-014/115: relaxed rule detected ≤ 60 min, dispatch halted (SAC-09). | Test | TDD §15, §19 · `integrations/github.md` §9 |
+| **OPS-002** | Identities exist before any write integration: GitHub Apps `mercury-bot` (target repos: `contents:write`, `pull_requests:write`, `checks:write`, `statuses:read`, `metadata:read`, plus `statuses:write` only if P0-062 requires it; Addendum B.1) and `mercury-ops` (`issues:write` on `project-mercury`, `contents:write` on the private anchor repo, `metadata:read` on targets); Linear OAuth app `actor=app`; dedicated Anthropic and OpenAI keys with spend limits. Installation tokens are narrowed per purpose. | RD-6; RF-11 | M | Identity inventory equals this list (SAC-02, TC-GOV-112); no human credential anywhere. | Inspection + Test | TDD §15, §19 · `integrations/github.md` §2; `ADR-008` |
+| **OPS-003** | Repository governance uses **rulesets** (not classic protection) per ADR-014 and is checked by the drift monitor at start, at every wake and at least every 60 min (SEC-108); drift raises a SECURITY alert and a global `security_halt`. | RB-16; RE-17; RF-11 | M | TC-GOV-115/115: relaxed rule detected ≤ 60 min, dispatch halted (SAC-09). | Test | TDD §15, §19 · `integrations/github.md` §9 |
 | **OPS-004** | A dedicated sandbox GitHub repository and Linear team exist; no automated test may write to production repos or teams. | JAM-160 | M | Test allow-list contains only sandbox targets; CI guard fails on any other (TC-OPS-009). | Inspection + Test | TDD §22 · `testing/verification-plan.md` §2.3 |
 | **OPS-005** | Upgrades (coordinator, Node, agent CLIs, wrappers, helpers) follow the documented procedure with backup, contract tests and rollback. | Version churn | M | Upgrade + rollback demo (TC-OPS-007). | Demo | TDD §24 · `operations/macos-service.md` §13 |
 | **OPS-006** | Backup and restore procedures are documented and drilled at least quarterly. | Platform P2 | S | Drill log (TC-OPS-006). | Demo | TDD §20, §24 · `operations/recovery.md` |
@@ -534,8 +534,8 @@ Each brief item and discovery pain point maps to at least one requirement. Phase
 | **OPS-015** | Per-repo toolchains are provisioned by `mercury toolchain sync` into `WORK_ROOT/toolchains` (coordinator-owned, agent read/execute only); the agent `HOME` holds caches only and is scanned for credential files. | RD-1; RD-26 (D) | M | P0-032 and TC-INT-028: target test suite passes as the agent uid; doctor flags a planted credential file (TC-OPS-013). | Test | TDD §18 · `operations/macos-service.md` §7 |
 | **OPS-016** | Target-repository onboarding verifies: ruleset per ADR-014 (PR, 1 approval, Code Owner review, last-push approval, dismiss stale, no bypass, block force-push/deletion), CODEOWNERS = operator only, `allow_auto_merge=false`, both MERCURY checks required and pinned to the App, CI on draft PRs, toolchain manifest. | RD-5; RD-18 | M | `mercury repo check` passes on sandbox and `network_monitor` (TC-OPS-016, SEC-T-10). | Test | TDD §15 · `integrations/github.md` §9 |
 | **OPS-017** | Each repository's governance mode and, for G-DETECT, the operator's written risk acceptance are recorded in config and audit before dispatch; unattended dispatch to a target requires G-ORG. | RD-5; CON-014 | M | Dispatcher refuses an unrecorded mode and unattended dispatch to a non-G-ORG target (TC-E2E-021). | Test + Inspection | TDD §15 · `ADR-014` |
-| **OPS-018** | Signed helpers (LocalAuthentication presence helper; sleep/wake notification helper) are installed, code-signature-verified at start, and their absence degrades safely (presence commands refused; watchdog uses the awake threshold only). | RD-12; RD-16 | M | TC-OPS-012 and TC-SEC-009: missing/unsigned helper → presence commands refused, alert raised. | Test | TDD §18 · `operations/macos-service.md` §3.5 |
-| **OPS-019** | The operator completes the OD-35 policy checklist (2FA; no plaintext classic PAT; Linear coding sessions and agent triage automations off; Actions settings per SEC-105; leaked Slack token rotated; interactive agents restricted from `gh pr review --approve`/`gh pr merge`; Linear write connectors acting as the human removed) with evidence before G-SEC-0. | SEC-106/804/806; RD-12 | M | Evidence recorded per item (P0-316). | Inspection | TDD §19 · `security/threat-model.md` §6 |
+| **OPS-018** | Signed helpers (LocalAuthentication presence helper; sleep/wake notification helper) are installed, code-signature-verified at start, and their absence degrades safely (presence commands refused; watchdog uses the awake threshold only). | RD-12; RD-16 | M | TC-OPS-012 and TC-SEC-145: missing/unsigned helper → presence commands refused, alert raised. | Test | TDD §18 · `operations/macos-service.md` §3.5 |
+| **OPS-019** | The operator completes the OD-35 policy checklist (2FA; no plaintext classic PAT; Linear coding sessions and agent triage automations off; Actions settings per SEC-105; leaked Slack token rotated; interactive agents restricted from `gh pr review --approve`/`gh pr merge`; Linear write connectors acting as the human removed) with evidence before G-S1. | SEC-106/804/806; RD-12 | M | Evidence recorded per item (P0-074). | Inspection | TDD §19 · `security/threat-model.md` §6 |
 
 ---
 
@@ -547,49 +547,53 @@ E owns each statement, level, tag and verification method in `security/threat-mo
 
 | SEC | Pri | Topic label | SEC | Pri | Topic label |
 |---|---|---|---|---|---|
-| SEC-100 | M | Ruleset on protected branches | SEC-401 | M | Hardened git invocation |
-| SEC-101 | M | Forbidden App permissions | SEC-402 | M | Git config verification |
-| SEC-102 | M | GitHub endpoint allowlist | SEC-403 | M | Committed-tree checks |
-| SEC-103 | M | Human credentials absent | SEC-404 | M | No-follow coordinator reads |
-| SEC-104 | M | CODEOWNERS operator only | SEC-405 | M | Directory layout and ownership |
-| SEC-105 | M | Actions settings | SEC-406 | M | Safe worktree removal |
-| SEC-106 | M | Operator account hygiene | SEC-501 | M | Redaction at every sink |
-| SEC-107 | M | Act only on own PRs | SEC-502 | M | Pre-push secret scan |
-| SEC-108 | M | Governance drift monitor | SEC-503 | M | Keychain custody |
-| SEC-109 | M | Merge-actor enforcement | SEC-504 | M | Rotation |
-| SEC-110 | S | Separate author/review identities | SEC-505 | M | Masked run records |
-| SEC-111 | M | Bot commit identity and trailers | SEC-506 | S | GitHub secret scanning |
-| SEC-112 | S | Tag ruleset | SEC-601 | M | Security event audit |
-| SEC-201 | M | Agent process isolation (agent uid) | SEC-602 | M | Hash chain |
-| SEC-202 | M | Agent environment allowlist | SEC-603 | S¹ | HMAC on authority rows |
-| SEC-203 | M | Per-task generated `CODEX_HOME` | SEC-604 | M | Off-host anchoring |
-| SEC-204 | M | Claude run profiles | SEC-605 | M | `audit verify` |
-| SEC-205 | M | Review snapshots | SEC-606 | S | Log retention |
-| SEC-206 | S | Agent egress control | SEC-701 | M | Pinned agent binaries |
-| SEC-207 | M | Per-run scratch | SEC-702 | M | Dependency-change escalation |
-| SEC-208 | M | Forbidden Codex flags | SEC-703 | M | Controlled dependency install |
-| SEC-209 | M | Instruction-file integrity | SEC-704 | M | Resource limits |
-| SEC-210 | M | Absolute pinned agent paths | SEC-705 | M | External write budgets |
-| SEC-211 | S | Codex network off | SEC-706 | M | MERCURY's own dependencies |
-| SEC-301 | M | Provenance tagging | SEC-707 | S | Target workflow hygiene |
-| SEC-302 | M | Text is never authority | SEC-801 | M | Linear `actor=app` |
-| SEC-303 | M | Strict schemas | SEC-802 | M | No MCP/connectors in runs |
-| SEC-304 | M | Free text display-only | SEC-803 | M | Delegation/coding-session block |
-| SEC-305 | M | Decision constraints in code | SEC-804 | M | Coding sessions off (policy) |
-| SEC-306 | M | Plan approval binding | SEC-805 | M | Linear endpoint allowlist |
-| SEC-307 | M | Spec drift | SEC-806 | M | Legacy decommission |
-| SEC-308 | M | PR review binding | SEC-901 | M | SECURITY notifications |
-| SEC-309 | M | Deterministic pre-checks | SEC-902 | M | Kill switch |
-| SEC-310 | M | Protected paths escalate | SEC-903 | M | Sandbox-violation signals |
-| SEC-311 | M | Prompt-injection suite | SEC-904 | M | Re-check before review request |
-| SEC-312 | M | Bidi / invisible characters | SEC-905 | M | Merge verification |
-| SEC-313 | M | Revision-input allowlist | | | |
-| SEC-314 | M | Role separation; security review | | | |
-| SEC-315 | M | Bounded loops | | | |
+| SEC-100 | M | Ruleset on protected branches | SEC-315 | M | Bounded loops |
+| SEC-101 | M | App permission sets | SEC-316 | M | Revision provenance |
+| SEC-102 | M | Endpoint allowlist; COMMENT only | SEC-401 | M | Hardened git invocation |
+| SEC-103 | M | Human credentials absent | SEC-402 | M | Git config and pointer verification |
+| SEC-104 | M | CODEOWNERS operator only | SEC-403 | M | Committed-tree checks |
+| SEC-105 | M | Repository and Actions settings | SEC-404 | M | No-follow coordinator reads |
+| SEC-106 | M | Operator account and agent policy | SEC-405 | M | Layout properties |
+| SEC-107 | M | Act only on own PRs | SEC-406 | M | Safe removal |
+| SEC-108 | M | Governance drift monitor | SEC-407 | M | Push from mirror |
+| SEC-109 | M | Merge-actor enforcement | SEC-501 | M | Redaction at every sink |
+| SEC-110 | S | Separate author/review identities | SEC-502 | M | Pre-push secret scan |
+| SEC-111 | M | Bot commit identity and trailers | SEC-503 | M | Keychain custody |
+| SEC-112 | S | Tag ruleset | SEC-504 | M | Rotation |
+| SEC-113 | M | Required MERCURY check runs | SEC-505 | M | Masked run records; raw output lifetime |
+| SEC-114 | M | Draft until Claude passes | SEC-506 | S | GitHub secret scanning |
+| SEC-115 | M | Operator-presence tier | SEC-507 | M | Publication (disclosure) policy |
+| SEC-201 | M | Agent process isolation (agent uid) | SEC-601 | M | Security event audit |
+| SEC-202 | M | Agent environment allowlist | SEC-602 | M | Hash chain |
+| SEC-203 | M | Per-task generated `CODEX_HOME` | SEC-603 | S | HMAC on authority rows |
+| SEC-204 | M | Claude run profiles | SEC-604 | M | Off-host anchoring |
+| SEC-205 | M | Review snapshots | SEC-605 | M | `audit verify` |
+| SEC-206 | S | Agent egress control | SEC-606 | S | Log retention |
+| SEC-207 | M | Per-run scratch | SEC-607 | M | Restore epochs |
+| SEC-208 | M | Forbidden Codex flags | SEC-701 | M | Pinned agent binaries |
+| SEC-209 | M | Instruction-file integrity | SEC-702 | M | Dependency-change escalation |
+| SEC-210 | M | Pinned binaries and TCB | SEC-703 | M | Controlled dependency install |
+| SEC-211 | S | Codex network off | SEC-704 | M | Resource limits |
+| SEC-212 | M | Wrapper contract | SEC-705 | M | External write budgets |
+| SEC-213 | M | Cross-run isolation | SEC-706 | M | MERCURY's own dependencies |
+| SEC-214 | M | Supervised lifetime | SEC-707 | S | Target workflow hygiene |
+| SEC-215 | M | `verify`/`deps_install` profiles | SEC-708 | M | Toolchain provisioning |
+| SEC-301 | M | Provenance tagging | SEC-801 | M | Linear `actor=app` |
+| SEC-302 | M | Text is never authority | SEC-802 | M | No MCP/connectors in runs |
+| SEC-303 | M | Strict schemas | SEC-803 | M | Delegation, coding session, foreign PR block |
+| SEC-304 | M | Free text display-only; neutraliser | SEC-804 | M | Coding sessions off (policy) |
+| SEC-305 | M | Decision constraints in code | SEC-805 | M | Linear endpoint allowlist |
+| SEC-306 | M | Plan approval binding | SEC-806 | M | Legacy decommission |
+| SEC-307 | M | Spec drift | SEC-901 | M | SECURITY notifications |
+| SEC-308 | M | PR review binding | SEC-902 | M | Kill switch |
+| SEC-309 | M | Deterministic pre-checks | SEC-903 | M | Sandbox-violation signals |
+| SEC-310 | M | Block vs escalate; policy acknowledgement | SEC-904 | M | Re-check before review request |
+| SEC-311 | M | Prompt-injection suite | SEC-905 | M | Merge verification |
+| SEC-312 | M | Bidi / invisible characters | SEC-906 | M | `security_halt` scoping |
+| SEC-313 | M | Revision-input allowlist | SEC-907 | M | Ops-channel hardening |
+| SEC-314 | M | Role separation; security review every PR | SEC-908 | M | Fail-closed startup |
 
-¹ RD-4 makes HMAC a SHOULD; E updates SEC-603's level in Phase 4. If E keeps MUST, the registry follows E (the statement owner) and OD-20 records the dissent.
-
-Text in E's threat model that RD-1/RD-5/RD-6/RD-12/RD-15 change (SEC-101, SEC-201, SEC-203, SEC-603, SEC-604, SEC-102 "COMMENT only") is E's to update; the IDs above do not change.
+SEC-603 is SHOULD (RD-4, E revision). New in E's Phase 4 revision: SEC-113…115, SEC-212…215, SEC-316, SEC-407, SEC-507, SEC-607, SEC-708, SEC-906…908.
 
 ### 4.2 Retired F reservation `SEC-001…099`
 
@@ -668,12 +672,12 @@ Columns: requirement → ADR(s) → test case(s) → milestone where first verif
 |---|---|---|---|---|---|
 | CON-001 | M | — | TC-OPS-010 | P0d | BC |
 | CON-002 | M | ADR-007, ADR-010 | TC-OPS-001, TC-SEC-008 | M1 | BC |
-| CON-003 | M | ADR-011, ADR-019 | TC-SM-004, TC-INT-024, TC-SEC-009 | M1 | BC |
+| CON-003 | M | ADR-011, ADR-019 | TC-SM-004, TC-INT-024, TC-SEC-145 | M1 | BC |
 | CON-004 | M | ADR-011 | TC-SM-004, TC-E2E-006, TC-SBX-001 | M2 | BC |
 | CON-005 | M | ADR-011 | TC-UNIT-011, TC-SM-004 | M3 | BC |
 | CON-006 | M | ADR-011 | TC-UNIT-012, TC-SM-007 | M4 | BC |
-| CON-007 | M | ADR-008, ADR-014 | TC-GOV-009, TC-GOV-010, TC-GOV-013, TC-GOV-110, TC-GOV-116 | P0c / M6 | BC |
-| CON-008 | M | ADR-008 | TC-SBX-002, TC-SBX-005, TC-SEC-113, P0-301 | P0c | BC |
+| CON-007 | M | ADR-008, ADR-014 | TC-GOV-117, TC-GOV-118, TC-PI-138, TC-GOV-110, TC-GOV-116 | P0c / M6 | BC |
+| CON-008 | M | ADR-008 | TC-SBX-002, TC-SBX-005, TC-SEC-113, P0-060 | P0c | BC |
 | CON-009 | M | ADR-010, ADR-020 | TC-SM-009, TC-REC-003, TC-REC-021, TC-REC-031 | M1 / M8 | BC |
 | CON-010 | M | — | TC-SEC-004, TC-OPS-009 | M1 | BC |
 | CON-011 | M | ADR-019 | TC-SBX-006 | M7 | BC |
@@ -683,7 +687,7 @@ Columns: requirement → ADR(s) → test case(s) → milestone where first verif
 | CON-015 | M | — | P0-001, TC-OPS-010 | P0a | BC |
 | CON-016 | M | ADR-005 | TC-INT-005, TC-E2E-014 | M4 | BC |
 | CON-017 | M | — | TC-OPS-010 | P0d | BC |
-| CON-018 | M | ADR-013 | TC-UNIT-072, TC-SEC-120 | M4 (G-SEC-1) | BC |
+| CON-018 | M | ADR-013 | TC-UNIT-072, TC-SEC-120 | M4 (G-S2) | BC |
 | FR-001 | M | ADR-007 | TC-INT-001, TC-SBX-001, TC-DUP-001, TC-DUP-006, TC-CON-007 | M2 | BC |
 | FR-002 | M | — | TC-UNIT-001, TC-E2E-006 | M2 | BC |
 | FR-003 | M | — | TC-UNIT-002 | M2 | BC |
@@ -698,7 +702,7 @@ Columns: requirement → ADR(s) → test case(s) → milestone where first verif
 | FR-023 | M | ADR-011 | TC-E2E-007 | M5 | BC |
 | FR-024 | M | ADR-011 | TC-UNIT-013, TC-SM-015, TC-E2E-008, TC-E2E-020 | M3 / M6 | BC |
 | FR-040 | M | ADR-015 | TC-INT-003, TC-CONC-004, TC-SM-004 | M1 | BC |
-| FR-041 | M | — | TC-UNIT-022, TC-CONC-001, TC-CONC-002, P0-106 | M1 | BC |
+| FR-041 | M | — | TC-UNIT-022, TC-CONC-001, TC-CONC-002, P0-038 | M1 | BC |
 | FR-042 | S | — | TC-UNIT-022 | M1 | BC |
 | FR-043 | M | ADR-002 | TC-DUP-003, TC-REC-001, TC-CON-015 | M1 | BC |
 | FR-044 | M | ADR-013 | TC-UNIT-021, TC-INT-005, TC-AFS-002, TC-AFS-004, TC-AFS-009 | M1 / M4 | BC |
@@ -708,14 +712,14 @@ Columns: requirement → ADR(s) → test case(s) → milestone where first verif
 | FR-048 | M | ADR-002 | TC-INT-004, TC-CONC-003 | M1 | BC |
 | FR-049 | M | — | TC-INT-010 | M1 | BC |
 | FR-050 | M | ADR-015 | TC-SM-012, TC-SM-013, TC-SM-014 | M1 | BC |
-| FR-051 | M | ADR-013 | TC-INT-025, TC-SEC-010, P0-026, P0-028 | P0b / M1 | BC |
+| FR-051 | M | ADR-013 | TC-INT-025, TC-SEC-128, P0-026, P0-028 | P0b / M1 | BC |
 | FR-052 | M | ADR-020 | TC-SM-023, TC-REC-012 | M1 / M8 | BC |
 | FR-053 | M | ADR-020 | TC-REC-032 | M1 | BC |
 | FR-054 | M | ADR-020 | TC-REC-030, TC-REC-038, TC-AFS-010 | M1 / M4 | BC |
 | FR-055 | M | ADR-020 | TC-REC-033 | M1 | BC |
 | FR-060 | M | ADR-003 | TC-UNIT-030, TC-CON-001 | M1 | BC |
 | FR-061 | M | ADR-003 | TC-CON-001 | M1 | BC |
-| FR-062 | M | ADR-004, ADR-005 | TC-CON-003, TC-CON-005, TC-CON-014, TC-AFS-005, TC-AFS-011, P0-203 | M3 | BC |
+| FR-062 | M | ADR-004, ADR-005 | TC-CON-003, TC-CON-005, TC-CON-014, TC-AFS-005, TC-AFS-011, P0-050 | M3 | BC |
 | FR-063 | M | ADR-002, ADR-003 | TC-INT-003, TC-DUP-003 | M1 | BC |
 | FR-064 | M | ADR-003, ADR-016 | TC-UNIT-031 | M1 | BC |
 | FR-065 | S | — | TC-CON-002 | M8 | BC |
@@ -735,55 +739,55 @@ Columns: requirement → ADR(s) → test case(s) → milestone where first verif
 | FR-106 | M | — | TC-UNIT-012, TC-E2E-004 | M4 | BC |
 | FR-120 | M | ADR-016 | TC-UNIT-040, TC-INT-006 | M4 | BC |
 | FR-121 | M | ADR-005 | TC-UNIT-011, TC-UNIT-012, TC-E2E-001 | M5 | BC |
-| FR-122 | M | ADR-013 | TC-INT-008, TC-SEC-012 | M5 | BC |
-| FR-123 | M | ADR-005 | TC-INT-009, TC-SEC-012, TC-SEC-171 | M5 | BC |
-| FR-124 | M | ADR-006 | TC-UNIT-043, TC-AFS-007, TC-GOV-013 | M5 | BC |
+| FR-122 | M | ADR-013 | TC-INT-008, TC-SEC-125 | M5 | BC |
+| FR-123 | M | ADR-005 | TC-INT-009, TC-SEC-125, TC-SEC-171 | M5 | BC |
+| FR-124 | M | ADR-006 | TC-UNIT-043, TC-AFS-007, TC-PI-138 | M5 | BC |
 | FR-125 | M | — | TC-CON-004, TC-AFS-004 | M4 | BC |
 | FR-126 | M | ADR-020 | TC-REC-037 | M4 | BC |
 | FR-140 | M | ADR-006, ADR-008 | TC-INT-007, TC-INT-027, TC-SBX-002, TC-SEC-140, TC-SEC-141 | M5 | BC |
 | FR-141 | S | — | TC-UNIT-041 | M5 | BC |
-| FR-142 | M | ADR-009, ADR-014 | TC-UNIT-042, TC-SBX-002, TC-E2E-019, TC-SEC-014 | M5 / M6 | BC |
+| FR-142 | M | ADR-009, ADR-014 | TC-UNIT-042, TC-SBX-002, TC-E2E-019, TC-SEC-153 | M5 / M6 | BC |
 | FR-143 | M | — | TC-DUP-004, TC-NET-002, TC-REC-001 | M5 | BC |
 | FR-144 | M | ADR-014 | TC-E2E-005, TC-INT-002, TC-INT-029 | M6 | BC |
-| FR-145 | M | ADR-014 | TC-OPS-016, P0-312 | P0c / M9a | BC |
+| FR-145 | M | ADR-014 | TC-OPS-016, P0-071 | P0c / M9a | BC |
 | FR-160 | M | ADR-004, ADR-017 | TC-CON-003, TC-E2E-004 | M6 | BC |
 | FR-161 | M | — | TC-E2E-012 | M6 | BC |
-| FR-162 | M | ADR-014 | TC-SBX-003, TC-CON-012, TC-GOV-010 | M6 | BC |
+| FR-162 | M | ADR-014 | TC-SBX-003, TC-CON-012, TC-GOV-118 | M6 | BC |
 | FR-163 | M | — | TC-E2E-004, TC-E2E-018, TC-SM-008, TC-SM-020 | M6 | BC |
 | FR-164 | M | ADR-019 | TC-SBX-006 | M6 | BC |
 | FR-165 | M | — | TC-E2E-013, TC-SM-025 | M6 | BC |
-| FR-166 | M | ADR-014 | TC-GOV-009, TC-E2E-019, P0-303 | M6 | BC |
-| FR-167 | M | ADR-014, ADR-019 | TC-GOV-013, TC-SM-016, TC-SEC-009 | M5 | BC |
-| FR-168 | M | — | TC-SEC-021 | M6 | BC |
-| FR-180 | M | ADR-014 | TC-GOV-005, TC-GOV-111, TC-GOV-012 | M5 | BC |
+| FR-166 | M | ADR-014 | TC-GOV-117, TC-E2E-019, P0-062 | M6 | BC |
+| FR-167 | M | ADR-014, ADR-019 | TC-PI-138, TC-SM-016, TC-SEC-145 | M5 | BC |
+| FR-168 | M | — | TC-SEC-154 | M6 | BC |
+| FR-180 | M | ADR-014 | TC-GOV-005, TC-GOV-111, TC-GOV-112 | M5 | BC |
 | FR-181 | M | ADR-014 | TC-UNIT-052, TC-SBX-004, TC-CON-006 | M7 | BC |
 | FR-182 | M | ADR-014 | TC-GOV-004, TC-SM-017, TC-SM-018 | M7 | BC |
 | FR-183 | M | ADR-009 | TC-E2E-015, TC-E2E-016, TC-SBX-004, TC-SBX-009 | M7 | BC |
 | FR-184 | S | ADR-016 | TC-INT-006, TC-SEC-143 | M7 | BC |
 | FR-185 | S | — | TC-E2E-009 | M7 | BC |
 | FR-200 | M | ADR-009 | TC-UNIT-050 | M7 | BC |
-| FR-201 | M | ADR-008 | TC-SBX-005, P0-302 | P0c / M7 | BC |
+| FR-201 | M | ADR-008 | TC-SBX-005, P0-061 | P0c / M7 | BC |
 | FR-202 | M | — | TC-NET-003, TC-DUP-001, TC-UNIT-070 | M7 | BC |
 | FR-203 | M | ADR-011 | TC-GOV-006, TC-PI-131 | M3 | BC |
 | FR-220 | M | ADR-019 | TC-SBX-006 | M7 | BC |
 | FR-221 | M | — | TC-UNIT-051, TC-DUP-005 | M7 | BC |
 | FR-222 | S | — | TC-REC-009 | M7 | BC |
 | FR-223 | M | — | TC-NET-003 | M7 | BC |
-| FR-224 | M | ADR-019 | TC-SEC-016 | M7 | BC |
+| FR-224 | M | ADR-019 | TC-SEC-190 | M7 | BC |
 | FR-240 | M | — | TC-INT-010 | M1 | BC |
 | FR-241 | M | ADR-019 | TC-INT-010, TC-GOV-006 | M7 | BC |
-| FR-242 | M | ADR-019 | TC-SEC-009 | M5 | BC |
-| FR-243 | M | ADR-015 | TC-SEC-017 | M1 / M5 | BC |
+| FR-242 | M | ADR-019 | TC-SEC-145 | M5 | BC |
+| FR-243 | M | ADR-015 | TC-SEC-191 | M1 / M5 | BC |
 | FR-260 | M | — | TC-E2E-010 | M7 | BC |
 | FR-261 | M | — | TC-SM-003, TC-E2E-010 | M1 | BC |
-| FR-262 | M | ADR-018 | TC-SEC-018, TC-SEC-161 | M1 / M7 | BC |
-| FR-263 | M | ADR-018 | TC-SEC-019, TC-SEC-163 | M7 | BC |
+| FR-262 | M | ADR-018 | TC-SEC-161 | M1 / M7 | BC |
+| FR-263 | M | ADR-018 | TC-SEC-163 | M7 | BC |
 | FR-264 | M | ADR-018 | TC-REC-019, TC-SM-022 | M7 | BC |
 | FR-280 | M | ADR-020 | TC-REC-001, TC-REC-004, TC-REC-035 | M1 | BC |
 | FR-281 | M | ADR-013 | TC-REC-005 | M1 | BC |
 | FR-282 | M | ADR-010, ADR-020 | TC-UNIT-062, TC-SM-009, TC-REC-031, TC-REC-003, TC-NET-004 | M1 / M8 | BC |
 | FR-283 | M | — | TC-NET-001, TC-NET-002, TC-NET-003, TC-NET-006, TC-NET-008 | M2 | BC |
-| FR-300 | M | ADR-012 | TC-PIL-002, P0-314 | M9a | BC |
+| FR-300 | M | ADR-012 | TC-PIL-002, P0-073 | M9a | BC |
 | FR-301 | M | ADR-012 | TC-PIL-003 | M9c | BC |
 | FR-900 | W | ADR-019 | TC-SEC-008 | M8 | BC |
 | FR-901 | W | ADR-007 | TC-SEC-008 | M8 | BC |
@@ -839,13 +843,13 @@ Columns: requirement → ADR(s) → test case(s) → milestone where first verif
 | NFR-095 | S | — | TC-INT-013 | M1 | BC |
 | NFR-100 | S | — | TC-UNIT-011, TC-UNIT-012 | M1 | BC |
 | NFR-101 | M | — | TC-SM-005, TC-SM-009 | M1 | BC |
-| OPS-001 | M | — | P0-001…032, P0-101…113 | P0a / P0b | BC |
-| OPS-002 | M | ADR-008 | P0-301, P0-302, TC-GOV-008, TC-GOV-112 | P0c | BC |
-| OPS-003 | M | ADR-014 | TC-GOV-014, TC-GOV-115, TC-OPS-005 | M2 / M5 | BC |
+| OPS-001 | M | — | P0-001…052 | P0a / P0b | BC |
+| OPS-002 | M | ADR-008 | P0-060, P0-061, TC-GOV-008, TC-GOV-112 | P0c | BC |
+| OPS-003 | M | ADR-014 | TC-GOV-115, TC-OPS-005 | M2 / M5 | BC |
 | OPS-004 | M | — | TC-OPS-009, TC-SBX-001 | P0c | BC |
 | OPS-005 | M | — | TC-OPS-007 | M8 | BC |
 | OPS-006 | S | — | TC-OPS-006 | M8 | BC |
-| OPS-007 | M | — | P0-103, TC-SEC-020 | M1 | BC |
+| OPS-007 | M | — | P0-035, TC-SEC-020 | M1 | BC |
 | OPS-008 | M | ADR-012 | TC-PIL-001, TC-PIL-002 | M9a / M9b | BC |
 | OPS-009 | M | ADR-012 | TC-PIL-003 | M9c | BC |
 | OPS-010 | M | — | TC-OPS-004 | M8 | BC |
@@ -856,103 +860,118 @@ Columns: requirement → ADR(s) → test case(s) → milestone where first verif
 | OPS-015 | M | ADR-013 | P0-032, TC-INT-028, TC-OPS-013 | M5 | BC |
 | OPS-016 | M | ADR-014 | TC-OPS-016, TC-GOV-110 | P0c / M9a | BC |
 | OPS-017 | M | ADR-014 | TC-E2E-021, TC-OPS-005 | M5 / M9c | BC |
-| OPS-018 | M | ADR-019 | TC-OPS-012, TC-SEC-009 | M5 / M7 | BC |
-| OPS-019 | M | — | P0-316 | P0c | BC |
+| OPS-018 | M | ADR-019 | TC-OPS-012, TC-SEC-145 | M5 / M7 | BC |
+| OPS-019 | M | — | P0-074 | P0c | BC |
 
 ### 6.2 SEC (E's statements; F's traceability)
 
-TC aliases of E's `SEC-T-nn` follow §8.3 (TC-SEC-1nn, TC-GOV-11n, TC-PI-13n). "Gate" names the security gate (`planning/roadmap.md` §4) that requires the SEC to pass.
+TC aliases of E's `SEC-T-nn` follow §8.3 (TC-SEC-1nn, TC-GOV-11n, TC-PI-13n). "Gate" is E's gate (G-S1…G-S5, `security/threat-model.md` §8.10) that requires the SEC, with the SAC that measures it.
 
 | SEC | Pri | ADR(s) | Test case(s) | Milestone | Gate |
 |---|---|---|---|---|---|
-| SEC-100 | M | ADR-014 | TC-GOV-110, TC-GOV-116, TC-OPS-016 | P0c (sandbox) / M9a (targets) | G-SEC-0 |
-| SEC-101 | M | ADR-008 | TC-GOV-112, TC-GOV-008 | P0c | G-SEC-0 |
-| SEC-102 | M | ADR-014 | TC-GOV-111, TC-CON-012, TC-GOV-012 | M5 | G-SEC-2 |
-| SEC-103 | M | ADR-013 | TC-SEC-113, TC-SEC-120 | P0b | G-SEC-1 |
-| SEC-104 | M | ADR-014 | TC-GOV-110 | P0c | G-SEC-0 |
-| SEC-105 | M | ADR-014 | TC-SEC-114 | P0c | G-SEC-0 |
-| SEC-106 | M | — | P0-316 | P0c | G-SEC-0 |
-| SEC-107 | M | — | TC-UNIT-053 | M5 | G-SEC-2 |
-| SEC-108 | M | ADR-014 | TC-GOV-115, TC-GOV-014 | M2 (read) / M5 (halt) | G-SEC-2 |
-| SEC-109 | M | ADR-014 | TC-GOV-116, TC-GOV-004, TC-E2E-021 | M7 / M9c | G-ORG |
+| SEC-100 | M | ADR-014 | TC-GOV-110, TC-GOV-116, TC-OPS-016 | P0c (sandbox) / M9a (targets) | G-S3 |
+| SEC-101 | M | ADR-008 | TC-GOV-112, TC-GOV-008, P0-060 | P0c | G-S3 (SAC-02) |
+| SEC-102 | M | ADR-014 | TC-GOV-111, TC-CON-012 | M5 | G-S3 |
+| SEC-103 | M | ADR-013 | TC-SEC-113, TC-SEC-120 | P0b | G-S2 |
+| SEC-104 | M | ADR-014 | TC-GOV-110 | P0c | G-S3 |
+| SEC-105 | M | ADR-014 | TC-SEC-114 | P0c | G-S3 |
+| SEC-106 | M | — | P0-074 | P0c | G-S1 |
+| SEC-107 | M | — | TC-UNIT-053 | M5 | G-S3 |
+| SEC-108 | M | ADR-014 | TC-GOV-115 | M2 (read) / M5 (halt) | G-S4 (SAC-09) |
+| SEC-109 | M | ADR-014 | TC-GOV-116, TC-GOV-004, TC-E2E-021 | M7 / M9c | G-S4 (mode), G-S5 (G-ORG) |
 | SEC-110 | S | ADR-008 | TC-GOV-112 | M8 | — |
-| SEC-111 | M | — | TC-UNIT-041 | M5 | G-SEC-2 |
+| SEC-111 | M | — | TC-UNIT-041 | M5 | G-S3 |
 | SEC-112 | S | — | TC-GOV-110 | M8 | — |
-| SEC-201 | M | ADR-013 | TC-SEC-120, P0-026…031, TC-SEC-010 | P0b / M4 | G-SEC-1 |
-| SEC-202 | M | ADR-013 | TC-SEC-121 | M3 | G-SEC-1 |
-| SEC-203 | M | ADR-005 | TC-INT-026 | M4 | G-SEC-1 |
-| SEC-204 | M | ADR-004 | TC-SEC-103, TC-SEC-123, TC-SEC-006 | M3 | G-SEC-1 |
-| SEC-205 | M | ADR-017 | TC-SEC-124 | M3 | G-SEC-2 |
-| SEC-206 | S | ADR-013 | TC-SEC-125 | M8 | — |
-| SEC-207 | M | ADR-013 | TC-INT-025 | M3 | G-SEC-1 |
-| SEC-208 | M | ADR-005 | TC-SEC-122 | M4 | G-SEC-1 |
-| SEC-209 | M | ADR-005 | TC-SEC-126 | M4 | G-SEC-1 |
-| SEC-210 | M | ADR-004, ADR-005 | TC-SEC-127 | M3 | G-SEC-1 |
+| SEC-113 | M | ADR-014 | TC-GOV-117, TC-PI-138, TC-E2E-019 | M5 (policy) / M6 (claude-review) | G-S3 (SAC-16, SAC-17) |
+| SEC-114 | M | ADR-014 | TC-E2E-019 | M6 | G-S3 |
+| SEC-115 | M | ADR-019 | TC-SEC-145, P0-045 | M5 | G-S4 (SAC-15) |
+| SEC-201 | M | ADR-013 | TC-SEC-120, P0-026…032 | P0b / M4 | G-S2 (SAC-05) |
+| SEC-202 | M | ADR-013 | TC-SEC-121 | M3 | G-S2 (SAC-13) |
+| SEC-203 | M | ADR-005 | TC-INT-026, TC-SEC-122 | M4 | G-S1 |
+| SEC-204 | M | ADR-004 | TC-SEC-103, TC-SEC-123, TC-SEC-006 | M3 | G-S1 (SAC-03) |
+| SEC-205 | M | ADR-017 | TC-SEC-124 | M3 | G-S3 |
+| SEC-206 | S | ADR-013 | TC-SEC-125, P0-049 | M8 | — |
+| SEC-207 | M | ADR-013 | TC-INT-025 | M3 | G-S2 |
+| SEC-208 | M | ADR-005 | TC-SEC-122, P0-048 | M4 | G-S1 |
+| SEC-209 | M | ADR-005 | TC-SEC-126 | M4 | G-S1 |
+| SEC-210 | M | ADR-004, ADR-005 | TC-SEC-127 | M3 | G-S2 |
 | SEC-211 | S | ADR-005 | TC-SEC-003 | M5 | — |
-| SEC-301 | M | ADR-003 | TC-PI-130, TC-UNIT-073 | M3 | G-SEC-4 |
-| SEC-302 | M | ADR-011 | TC-GOV-006, TC-PI-131 | M3 | G-SEC-4 |
-| SEC-303 | M | ADR-003 | TC-CON-001, TC-CON-014 | M3 | G-SEC-1 |
-| SEC-304 | M | — | TC-SEC-014 | M5 | G-SEC-2 |
-| SEC-305 | M | ADR-011 | TC-UNIT-011, TC-PI-132 | M3 | G-SEC-4 |
-| SEC-306 | M | ADR-011 | TC-SM-007 | M4 | G-SEC-4 |
-| SEC-307 | M | ADR-011 | TC-SM-015, TC-E2E-008 | M3 | G-SEC-4 |
-| SEC-308 | M | ADR-014 | TC-SM-025 | M6 | G-SEC-4 |
-| SEC-309 | M | ADR-014 | TC-UNIT-043, TC-GOV-013 | M5 | G-SEC-2 |
-| SEC-310 | M | ADR-014 | TC-GOV-013, TC-PI-138 | M5 | G-SEC-2 |
-| SEC-311 | M | — | TC-PI-130…139 | M8 | G-SEC-4 (SAC-04) |
-| SEC-312 | M | — | TC-PI-139 | M5 | G-SEC-2 |
-| SEC-313 | M | — | TC-SEC-015, TC-E2E-018 | M6 | G-SEC-4 |
-| SEC-314 | M | ADR-004 | TC-E2E-012 | M6 | G-SEC-4 |
-| SEC-315 | M | — | TC-SM-008 | M4 | G-SEC-4 |
-| SEC-401 | M | ADR-006 | TC-SEC-140, TC-SEC-141 | M5 | G-SEC-2 |
-| SEC-402 | M | ADR-006 | TC-SEC-141 | M5 | G-SEC-2 |
-| SEC-403 | M | ADR-006 | TC-SEC-142 | M5 | G-SEC-2 |
-| SEC-404 | M | ADR-006 | TC-SEC-142 | M5 | G-SEC-2 |
-| SEC-405 | M | ADR-016 | TC-SEC-120, TC-OPS-001 | M1 | G-SEC-1 |
-| SEC-406 | M | ADR-016 | TC-SEC-143 | M7 | G-SEC-3 |
-| SEC-501 | M | — | TC-SEC-150, TC-SEC-004 | M1 | G-SEC-2 (SAC-06) |
-| SEC-502 | M | ADR-006 | TC-SEC-151 | M5 | G-SEC-2 |
-| SEC-503 | M | — | TC-SEC-020, P0-103 | M1 | G-SEC-1 |
-| SEC-504 | M | — | TC-OPS-004 | M8 | G-SEC-4 |
-| SEC-505 | M | — | TC-SEC-152 | M3 | G-SEC-1 |
+| SEC-212 | M | ADR-013 | TC-SEC-128 | M1 | G-S2 (SAC-14) |
+| SEC-213 | M | ADR-013 | TC-SEC-194 | M4 | G-S2 |
+| SEC-214 | M | ADR-020 | TC-SEC-129, TC-REC-033 | M1 | G-S2 (SAC-19) |
+| SEC-215 | M | ADR-013 | TC-SEC-125, TC-SEC-171 | M5 | G-S2 (SAC-18) |
+| SEC-301 | M | ADR-003 | TC-PI-130, TC-UNIT-073 | M3 | G-S4 (SAC-04) |
+| SEC-302 | M | ADR-011 | TC-GOV-006, TC-PI-131 | M3 | G-S3 |
+| SEC-303 | M | ADR-003 | TC-CON-001, TC-CON-014, TC-PI-132 | M3 | G-S1 |
+| SEC-304 | M | — | TC-SEC-153 | M5 | G-S3 |
+| SEC-305 | M | ADR-011 | TC-UNIT-011, TC-PI-133 | M3 | G-S3 (SAC-11) |
+| SEC-306 | M | ADR-011 | TC-SM-007, TC-PI-134 | M4 | G-S3 (SAC-11) |
+| SEC-307 | M | ADR-011 | TC-SM-015, TC-E2E-008, TC-PI-135 | M3 | G-S3 (SAC-11) |
+| SEC-308 | M | ADR-014 | TC-SM-025, TC-PI-136 | M6 | G-S3 (SAC-11) |
+| SEC-309 | M | ADR-014 | TC-UNIT-043, TC-PI-137 | M5 | G-S3 |
+| SEC-310 | M | ADR-014 | TC-PI-138 | M5 | G-S3 (SAC-16) |
+| SEC-311 | M | — | TC-PI-130 | M8 | G-S4 (SAC-04) |
+| SEC-312 | M | — | TC-PI-139 | M5 | G-S3 |
+| SEC-313 | M | — | TC-PI-131, TC-E2E-018 | M6 | G-S3 |
+| SEC-314 | M | ADR-004 | TC-E2E-012 | M6 | G-S4 |
+| SEC-315 | M | — | TC-SM-008 | M4 | G-S3 |
+| SEC-316 | M | ADR-003 | TC-E2E-018, TC-PI-131 | M6 | G-S3 |
+| SEC-401 | M | ADR-006 | TC-SEC-140 | M5 | G-S3 (SAC-07) |
+| SEC-402 | M | ADR-006 | TC-SEC-141 | M5 | G-S3 (SAC-07) |
+| SEC-403 | M | ADR-006 | TC-SEC-142 | M5 | G-S3 |
+| SEC-404 | M | ADR-006 | TC-SEC-142 | M5 | G-S3 |
+| SEC-405 | M | ADR-016 | TC-SEC-120, TC-OPS-001 | M1 | G-S2 |
+| SEC-406 | M | ADR-016 | TC-SEC-143 | M7 | G-S5 |
+| SEC-407 | M | ADR-006 | TC-SEC-144, TC-INT-027 | M5 | G-S3 (SAC-07) |
+| SEC-501 | M | — | TC-SEC-150, TC-SEC-004 | M1 | G-S3 (SAC-06) |
+| SEC-502 | M | ADR-006 | TC-SEC-151 | M5 | G-S3 (SAC-06) |
+| SEC-503 | M | — | TC-SEC-020, TC-SEC-152, P0-035, P0-036 | M1 | G-S2 |
+| SEC-504 | M | — | TC-OPS-004 | M8 | G-S5 |
+| SEC-505 | M | — | TC-SEC-152, TC-OPS-008 | M3 | G-S3 |
 | SEC-506 | S | — | TC-SEC-114 | P0c | — |
-| SEC-601 | M | ADR-018 | TC-SM-003 | M1 | G-SEC-3 |
-| SEC-602 | M | ADR-018 | TC-SEC-161, TC-SEC-018 | M1 | G-SEC-3 (SAC-08) |
-| SEC-603 | S¹ | ADR-018 | TC-SEC-162 | M7 | — |
-| SEC-604 | M | ADR-018 | TC-SEC-163, TC-SEC-019 | M7 | G-SEC-3 |
-| SEC-605 | M | ADR-018 | TC-SEC-161 | M7 | G-SEC-3 |
+| SEC-507 | M | — | TC-SEC-154 | M6 | G-S4 (SAC-20) |
+| SEC-601 | M | ADR-018 | TC-SM-003, TC-SEC-160 | M1 | G-S5 |
+| SEC-602 | M | ADR-018 | TC-SEC-161 | M1 | G-S5 (SAC-08) |
+| SEC-603 | S | ADR-018 | TC-SEC-162 | M7 | — |
+| SEC-604 | M | ADR-018 | TC-SEC-163 | M7 | G-S5 |
+| SEC-605 | M | ADR-018 | TC-SEC-161 | M7 | G-S5 (SAC-08) |
 | SEC-606 | S | — | TC-OPS-008 | M8 | — |
-| SEC-701 | M | — | TC-SEC-127, TC-CON-008 | M1 | G-SEC-1 |
-| SEC-702 | M | ADR-014 | TC-SEC-170, TC-GOV-013 | M5 | G-SEC-2 |
-| SEC-703 | M | ADR-005 | TC-SEC-171, TC-SEC-012 | M5 | G-SEC-2 |
-| SEC-704 | M | ADR-013 | TC-SEC-172, TC-AFS-004 | M1 | G-SEC-1 |
-| SEC-705 | M | — | TC-SEC-173 | M5 | G-SEC-2 |
-| SEC-706 | M | — | TC-OPS-009 | P0d | G-SEC-0 |
+| SEC-607 | M | ADR-018 | TC-SEC-164, TC-REC-019 | M7 | G-S5 (SAC-08) |
+| SEC-701 | M | — | TC-SEC-127, TC-CON-008 | M1 | G-S2 |
+| SEC-702 | M | ADR-014 | TC-SEC-170, TC-PI-138 | M5 | G-S3 |
+| SEC-703 | M | ADR-005 | TC-SEC-171 | M5 | G-S2 (SAC-18) |
+| SEC-704 | M | ADR-013 | TC-SEC-172, TC-AFS-004 | M1 | G-S2 |
+| SEC-705 | M | — | TC-SEC-173 | M5 | G-S3 |
+| SEC-706 | M | — | TC-OPS-009 | P0d | G-S1 |
 | SEC-707 | S | — | TC-SEC-114 | M9a | — |
-| SEC-801 | M | ADR-008 | TC-SEC-180, TC-SBX-005 | P0c | G-SEC-0 |
-| SEC-802 | M | ADR-004 | TC-SEC-123, P0-209 | M3 | G-SEC-1 |
-| SEC-803 | M | — | TC-SEC-181, TC-E2E-014 | M2 | G-SEC-4 |
-| SEC-804 | M | — | P0-316 | P0c | G-SEC-0 |
-| SEC-805 | M | — | TC-UNIT-071 | M7 | G-SEC-3 |
+| SEC-708 | M | ADR-013 | TC-INT-028, P0-032 | M5 | G-S2 |
+| SEC-801 | M | ADR-008 | TC-SEC-180, TC-SBX-005, P0-061 | P0c | G-S3 |
+| SEC-802 | M | ADR-004 | TC-SEC-123, P0-042 | M3 | G-S1 |
+| SEC-803 | M | — | TC-SEC-181, TC-E2E-014 | M2 | G-S4 |
+| SEC-804 | M | — | P0-074 | P0c | G-S1 |
+| SEC-805 | M | — | TC-UNIT-071, TC-SEC-180 | M7 | G-S4 |
 | SEC-806 | M | ADR-012 | TC-PIL-003 | M9c | — |
-| SEC-901 | M | ADR-019 | TC-SEC-190 | M7 | G-SEC-3 |
-| SEC-902 | M | ADR-015 | TC-SEC-191, TC-SEC-017 | M1 / M5 | G-SEC-2 |
-| SEC-903 | M | — | TC-SEC-192 | M5 | G-SEC-2 |
-| SEC-904 | M | ADR-014 | TC-UNIT-054, TC-E2E-019 | M6 | G-SEC-4 |
-| SEC-905 | M | ADR-014 | TC-SEC-193, TC-GOV-004 | M7 | G-SEC-3 (SAC-10) |
+| SEC-901 | M | ADR-019 | TC-SEC-190 | M7 | G-S4 |
+| SEC-902 | M | ADR-015 | TC-SEC-191 | M1 / M5 | G-S3 |
+| SEC-903 | M | — | TC-SEC-192 | M5 | G-S3 |
+| SEC-904 | M | ADR-014 | TC-UNIT-054, TC-E2E-019 | M6 | G-S4 |
+| SEC-905 | M | ADR-014 | TC-SEC-193, TC-GOV-004 | M7 | G-S4 (SAC-10) |
+| SEC-906 | M | ADR-015 | TC-SEC-191, TC-SM-017 | M5 / M7 | G-S5 |
+| SEC-907 | M | ADR-019 | TC-SEC-190 | M7 | G-S4 |
+| SEC-908 | M | ADR-020 | TC-SEC-161, TC-REC-035 | M1 | G-S5 |
 
 ### 6.3 Coverage summary
 
-Counted from §3 and §4.1 (`Retired` rows excluded).
+Counted from §3 and §4.1 (`Retired` rows excluded; NFR-007 is retired).
 
 | Type | Count | M | S | C | W |
 |---|---|---|---|---|---|
 | CON | 18 | 18 | 0 | 0 | 0 |
-| FR | 103 | 89 | 7 | 1 | 6 |
-| NFR | 44 | 26 | 18 | 0 | 0 |
+| FR | 107 | 94 | 6 | 1 | 6 |
+| NFR | 47 | 28 | 19 | 0 | 0 |
 | OPS | 19 | 16 | 3 | 0 | 0 |
-| SEC (E) | 75 | 66 | 9 | 0 | 0 |
-| **Total** | **259** | **215** | **37** | **1** | **6** |
+| SEC (E) | 90 | 82 | 8 | 0 | 0 |
+| **Total** | **281** | **238** | **36** | **1** | **6** |
 
 Checks run while generating this file (repeatable by the ID lint, TC-OPS-010):
 - Every `TC-*` and `P0-*` cited in the RTM is defined in `testing/verification-plan.md` §8.
@@ -961,36 +980,26 @@ Checks run while generating this file (repeatable by the ID lint, TC-OPS-010):
 
 ---
 
-## 7. Operational parameter registry (names only; values in `operations/macos-service.md`)
+## 7. Operational parameter registry (names only; values in `operations/macos-service.md` §2)
 
-D's parameter table is the **single source of values** (RD-10, RD-21). This registry fixes the names that requirements and tests cite. A parameter not listed here may not be cited by a requirement. Changing a value is a D change plus a change note here if a requirement's pass/fail outcome changes.
+D's table is the **single source of values** (RD-10, Addendum B.4). This registry fixes which names requirements and tests cite. Names follow D's `mercury.toml` keys. A requirement may cite only a registered name; changing a value is a D change, plus a change note in §14 if a requirement's pass/fail outcome changes. Workflow policy is **not** an operational parameter: attempt counts and backoff (`architecture/state-machine.md` §7.1), revision budgets and authorization expiry (OD-08, state-machine §9), state reminder timers (state-machine §7.3), notification cadence (`architecture/components.md` §4.15), retry matrix (`integrations/github.md` §15).
 
-| Parameter (name) | Meaning | Cited by |
+| Parameter group (D §2) | Names cited | Cited by |
 |---|---|---|
-| `ThrottleInterval` | launchd restart throttle | NFR-002 |
-| `ExitTimeOut` | launchd SIGTERM → SIGKILL window | NFR-024 |
-| `shutdown_budget` | Internal shutdown budget inside `ExitTimeOut` | NFR-024 |
-| `restart_ready_max` | Crash → `ready` bound | NFR-002 |
-| `reconcile_complete_max` | Full reconcile after `ready` or wake + network | NFR-025 |
-| `first_poll_after_network_max` | First poll after network reachable | NFR-021, FR-282 |
-| `host_sleep_grace` | Wake grace before stall clocks resume | FR-082, FR-044 |
-| `sleep_gap_threshold` | Unexplained tick gap treated as sleep | FR-282 |
-| `network_stability_window` | Stable connectivity before resuming effects | FR-283 |
-| `connectivity_probe_window` | Probe failure window that classifies an error as network-class | FR-283 |
-| `downtime_notice_threshold` | Downtime that triggers the resume summary | FR-222 |
-| `watchdog_heartbeat_interval`, `watchdog_check_interval`, `watchdog_threshold_awake`, `watchdog_threshold_sleeping` | External watchdog cadence and thresholds | OPS-013 |
-| `disk_dispatch_hold`, `disk_interrupt_verify_deps`, `disk_interrupt_codex` | Disk guard thresholds | NFR-082 |
-| `lease_persist_interval` | Minimum lease persistence interval | FR-040, NFR-085 |
-| `stall_plan`, `stall_implement`, `stall_verify` | Stall thresholds per kind | FR-044, NFR-006 |
-| `run_deadline_*` (per kind) | Hard awake-time deadlines | FR-044, FR-055 |
-| `supervisor_lease_stale` | Coordinator-liveness staleness before `agent-exec` terminates a run | FR-055 |
-| `lost_by_host_cap` | Separate cap per step for `lost_by_host` | FR-053 |
-| `dispatch_min_awake_after_wake` | Continuous credited awake time required before dispatch without a full-wake signal | FR-052 |
-| `hold_age_spec_changed`, `hold_age_dependency_unresolved`, `hold_age_deprioritized` | Hold ageing thresholds | FR-050 |
-| `crash_loop_starts`, `crash_loop_window` | Crash-loop containment | NFR-027 |
-| `cancel_grace_*` | SIGINT/SIGTERM grace in the kill ladder | FR-023, FR-044 |
+| Service (§2.1) | `svc.throttle_interval_s`, `svc.exit_timeout_s`, `svc.shutdown_budget_s`, `svc.start_to_ready_max_s`, `svc.restart_to_ready_max_s`, `svc.crash_loop_starts`, `svc.crash_loop_window_min` | NFR-002, NFR-024, NFR-027 |
+| Recovery (§2.1) | `recovery.reconcile_max_s`, `recovery.first_poll_max_s`, `recovery.downtime_notice_min` | NFR-021, NFR-025, FR-222, FR-282 |
+| Persistence (§2.1) | `db.lease_persist_s`, `db.progress_flush_s` | FR-040, NFR-085 |
+| Run supervision (§2.1–§2.2) | `run.liveness_poll_s`, `run.lost_by_host_cap`, `supervisor.alive_touch_s`, `supervisor.lease_stale_min`, `supervisor.kill_ladder_s`, `run.hard_deadline_margin_pct`, `wrapper.tick_s` | FR-023, FR-044, FR-053, FR-055, NFR-006 |
+| Deadlines and stalls (§2.3) | `run.<kind>.deadline`, `run.<kind>.stall` for `claude_triage`, `claude_authorize`, `claude_plan_review`, `claude_revision_request`, `claude_code_review`, `claude_security_review`, `codex_plan`, `codex_implement`, `codex_revise`, `verify`, `deps_install`, `git_step`; `repo.test_timeout_min` | FR-044, FR-055, NFR-006, NFR-083 |
+| Clocks and wake (§2.4) | `clock.tick_active_ms`, `clock.tick_idle_ms`, `clock.sleep_gap_s`, `clock.wall_jump_s`, `wake.grace_s`, `wake.dark_wake_min_awake_s`, `power.will_sleep_budget_s`, `power.prevent_system_sleep_on_ac` | FR-052, FR-082, FR-282, NFR-085 |
+| Connectivity (§2.4) | `net.stability_s`, `net.probe_interval_offline_s`, `net.error_probe_window_s` | FR-283 |
+| Integration cadence (§2.5) | `github.poll_*`, `github.reconcile_open_prs_min`, `linear.poll_s`, `linear.poll_overlap_s`, `circuit.*`, `gov.drift_check_interval_min`, `audit.anchor_overdue_h` | NFR-040, NFR-041, NFR-081, OPS-003, FR-263 |
+| Concurrency and resources (§2.6) | `limits.max_codex_runs`, `limits.max_claude_runs`, `limits.max_runs`, `limits.max_runs_per_repo`, `limits.max_active_tasks`, `resources.*`, `run.stdout_cap_mib`, `deferral.notify_after_h` | FR-041, NFR-082 |
+| Disk (§2.6) | `disk.dispatch_hold_gib`, `disk.dispatch_hold_pct`, `disk.interrupt_local_gib`, `disk.interrupt_codex_gib`, `disk.ballast_mib` | NFR-082 |
+| Observability and backups (§2.7) | `heartbeat.local_s`, `heartbeat.remote_min`, `watchdog.schedule`, `watchdog.stale_awake_min`, `watchdog.stale_sleeping_h`, `watchdog.renotify_h`, `credentials.*`, `backup.due_after_h`, `backup.retention`, `logs.*`, `runs.retention_d` | OPS-013, NFR-022, NFR-061, OPS-011 |
+| Hold ageing (§2.7) | `hold_age.spec_changed_h`, `hold_age.dependency_unresolved_d`, `hold_age.deprioritized_d` | FR-050 |
 
-Workflow budgets (revision limits, authorization expiry) are **not** operational parameters: their defaults are OD-08 values held in `architecture/state-machine.md` §9. Concurrency defaults are OD-07 values held in `operations/macos-service.md` §10.1.
+Security **bounds** (drift detection ≤ 60 min awake, merge-verification alert ≤ 5 min awake) are requirements (SEC-108, SEC-905, CON-014), not parameters; D's cadences must satisfy them.
 
 ---
 
@@ -1074,7 +1083,7 @@ C is asked to add INV-21 "replay determinism" (FR-084) and INV-22 "holds never c
 | Contributor IDs | Canonical TC | Rule |
 |---|---|---|
 | E `SEC-T-nn` (except below) | `TC-SEC-1nn` | Same two digits (SEC-T-20 → TC-SEC-120) |
-| E `SEC-T-10…16` | `TC-GOV-110…116` | Governance level |
+| E `SEC-T-10…18` | `TC-GOV-110…118` | Governance level |
 | E `SEC-T-30…39` | `TC-PI-130…139` | Prompt-injection level |
 | E `PI-01…15` | Variants inside TC-PI-130…139 | Corpus items |
 | C `SMT-01` | TC-SM-001, TC-SM-002 | |
@@ -1107,6 +1116,7 @@ C is asked to add INV-21 "replay determinism" (FR-084) and INV-22 "holds never c
 | D `T-REC-07` | TC-AFS-008 | |
 | D `T-REC-08` | TC-REC-007 | |
 | F `TC-P0-001…015` (Phase 2) | `P0-nnn` register | verification plan §8 `TC-P0` retired table |
+| F `TC-SEC-001`, `-002`, `-005`, `-007` (Phase 2 seeds) | TC-SEC-103, TC-SEC-121, TC-SEC-120, TC-SEC-122 | Superseded by E's tests |
 
 ### 8.4 Operator-decision aliases
 
@@ -1134,13 +1144,13 @@ One list. Defaults are the design's adopted defaults (binding where a reconcilia
 
 | OD | Decision | Aliases | Options | Recommended / adopted default | Needed by | Affects |
 |---|---|---|---|---|---|---|
-| OD-01 | Merge-actor governance mode per repository | OD-A-01, OQ-B-09, E Q1, SEC-109 | G-ORG; G-SPLIT; G-DETECT | Sandbox and supervised pilot: G-DETECT **with written risk acceptance**. **G-ORG required before any unattended or overnight operation on targets** (RD-5). G-SPLIT only if P0-305, P0-306 and P0-308 pass. F additionally recommends moving targets to an org before M9b. | P0c (sandbox acceptance); M9b (pilot acceptance); M9c (G-ORG) | CON-014, OPS-017, SEC-109 |
-| OD-02 | GitHub identity type | F OD-02 | GitHub Apps; machine user | Two GitHub Apps, `mercury-bot` and `mercury-ops` (RD-6); no machine user | P0c | OPS-002, ADR-008 |
-| OD-03 | Claude authentication and billing | OQ-B-01, OD-A-04 | Dedicated API key; `setup-token` | Dedicated Anthropic workspace API key with spend limit | P0a (needed for P0-201) | NFR-083, SEC-504 |
+| OD-01 | Merge-actor governance mode per repository (**required before unattended operation**, with OD-36) | OD-A-01, OQ-B-09, E Q1, SEC-109 | G-ORG; G-SPLIT; G-DETECT | Sandbox and supervised pilot: G-DETECT **with written risk acceptance**. **G-ORG required before any unattended or overnight operation on targets** (RD-5). G-SPLIT only if P0-064, P0-065 and P0-068 pass. F additionally recommends moving targets to an org before M9b. | P0c (sandbox acceptance); M9b (pilot acceptance); M9c (G-ORG) | CON-014, OPS-017, SEC-109 |
+| OD-02 | GitHub identity type | F OD-02 | GitHub Apps; machine user | Two GitHub Apps, `mercury-bot` (incl. `statuses:read`, Addendum B.1) and `mercury-ops` (RD-6); no machine user | P0c | OPS-002, ADR-008 |
+| OD-03 | Claude authentication and billing | OQ-B-01, OD-A-04 | Dedicated API key; `setup-token` | Dedicated Anthropic workspace API key with spend limit | P0a (needed for P0-042) | NFR-083, SEC-504 |
 | OD-04 | Codex authentication and billing | OQ-B-03, OD-A-04 | Dedicated project key; ChatGPT login | Dedicated OpenAI project key with spend limit | P0a | NFR-083 |
 | OD-05 | Linear identity | F OD-05, SEC-801 | OAuth `actor=app`; team-scoped key (sandbox only) | OAuth app `actor=app` (client credentials) | P0c | FR-201 |
 | OD-06 | Linear `Done` owner (Linear mode per team) | OD-A-03, OQ-B-06, RA-10 | `integration_owns_done`; `mercury_owns_all` | `integration_owns_done` for the pilot (RD-9); `mercury_owns_all` is the security-preferred alternative | M4 (branch naming, FR-120); M7 (projection) | FR-120, FR-142, FR-183, FR-200 |
-| OD-07 | Concurrency | F OD-07, D Q3 | — | Codex 1, Claude 2, 1 per repo; Codex 2 after P0-106 passes | M1 | FR-041 |
+| OD-07 | Concurrency | F OD-07, D Q3 | — | Codex 1, Claude 2, 1 per repo; Codex 2 after P0-038 passes | M1 | FR-041 |
 | OD-08 | Revision budgets, authorization expiry, spend caps | OD-A-05, OD-C-02, SEC-315 | — | Plan 3, PR review 3, CI/test fix 3, human change requests 5; authorization expiry 7 days; per-decision caps per `integrations/claude.md` §3.1; daily spend cap set from shadow data | M4 (budgets); M9a (daily cap) | CON-012, FR-104, FR-144, FR-163, NFR-084 |
 | OD-09 | Codex network; dependency lifecycle scripts | F OD-09, OQ-B-04, E Q4 | — | Codex never has network; `deps_install` with `--ignore-scripts`, registry allowlist, no per-repo override in v1 | M5 | FR-121, FR-123 |
 | OD-10 | Eligibility signal | OD-A-02 | — | `Todo`/`Backlog` + operator-added `mercury` label | M2 | FR-002, FR-300 |
@@ -1151,25 +1161,25 @@ One list. Defaults are the design's adopted defaults (binding where a reconcilia
 | OD-15 | Retention and raw logs | F OD-15, SEC-606, C §4.16 | — | Audit and artifacts ≥ 1 year; redacted transcripts 90 d; ops logs 90 d; debug 30 d; no raw unredacted agent output beyond run completion | M7 | NFR-061 |
 | OD-16 | Pilot scope and Slack shutdown | F OD-16, ADR-012, RA-25 | — | Shadow 10 working days; supervised ≥ 10 tasks, the first 5 at concurrency 1; cutover watch 30 days; Slack coordination off at cutover start | M9a | OPS-008, FR-301 |
 | OD-17 | Meaning of "Claude is the primary orchestrator" | A Q1, RA-1 | — | Accept RD-20: Claude holds decision authority; `mercuryd` holds the loop | P0c | CON-003 |
-| OD-18 | Agent process isolation | OQ-B-05, SEC-201, OD-C-07, E Q3, OD-D-01, OD-D-02, OD-D-03, OD-D-08 | — | Adopt RD-1: `_mercuryagent` via `agent-exec`/`agent-ctl` (sudoers); Claude via SDK custom spawn, falling back to ALT-B-1 if P0-111 fails; MERCURY-managed toolchains; supervisor lease while logged out per parameter table | P0b | CON-018, FR-051, OPS-014, OPS-015 |
+| OD-18 | Agent process isolation | OQ-B-05, SEC-201, OD-C-07, E Q3, OD-D-01, OD-D-02, OD-D-03, OD-D-08 | — | Adopt RD-1: `_mercuryagent` via `agent-exec`/`agent-ctl` (sudoers); Claude via SDK custom spawn, falling back to ALT-B-1 if P0-042 fails; MERCURY-managed toolchains; supervisor lease while logged out per parameter table | P0b | CON-018, FR-051, OPS-014, OPS-015 |
 | OD-19 | Root-owned managed settings (Claude) and `requirements.toml` (Codex) | OQ-B-02, D-SEC-4 | — | Yes, narrowly scoped (also affects the operator's interactive Claude) | M3 | SEC-204, SEC-208 |
 | OD-20 | Operations identity, audit anchoring and HMAC key escrow | E Q2, SEC-108, SEC-603/604, OD-D-07 | — | `mercury-ops` App with `issues:write` on `project-mercury`, `contents:write` on a private anchor repo, `metadata:read` on targets (RD-6); HMAC SHOULD; no `k_auth` escrow (re-authorize after a Mac change) | P0c | OPS-002, FR-263, FR-264 |
 | OD-21 | Security findings on public PRs | OQ-B-07 | — | Withhold critical/high and pre-existing details; generic line + local report ID | M6 | FR-168 |
-| OD-22 | Require review-thread resolution | OQ-B-08, SEC-100 | On; off | On | P0c | SEC-100 |
+| OD-22 | Require review-thread resolution | OQ-B-08, SEC-100, RB-20 | On; off | **Off** (bot `COMMENT` threads would otherwise block merges; E SEC-100 revised) | P0c | SEC-100 |
 | OD-23 | Security review on every PR, separate run | E Q5, A Q6 | — | Every PR, separate run | M6 | FR-161 |
-| OD-24 | Chain head in public artifacts | E Q6 | — | Chain head `(seq, hash)` only (no content) in the check-run summary per RD-4; no extra PR comment | M7 | FR-263 |
+| OD-24 | Chain head in public artifacts | E Q6 | Embed; do not embed | **No public chain-head embed**: carriers are the Linear completion comment and the private anchor repo; the check-run summary only on private repos (Addendum B.2) | M7 | FR-263 |
 | OD-25 | Automatic triage | OD-C-01 | — | On, debounced, shortlist-only; on in shadow mode | M3 | FR-020 |
 | OD-26 | Do operator review comments without `CHANGES_REQUESTED` start a revision? | OD-C-03, SEC-313 | — | No; only operator `CHANGES_REQUESTED` reviews; a `mercury:revise` label later (counts only when the label actor is the operator) | M6 | FR-163 |
 | OD-27 | `BLOCKED` TTL before `FAILED` | OD-C-04 | — | 30 days; reminders at 24 h, 72 h, then weekly | M1 | FR-050 |
 | OD-28 | Operator merges before the Claude review | OD-C-05 | — | `merged_unreviewed_head` policy notice, closed by `ack-merge` (RD-14) | M7 | FR-182 |
 | OD-29 | Claude failure-triage decision kind in v1 | OD-C-06, A R4 | — | Defer; failures escalate to the operator (RD-8 `revision_request` runs are separate) | M3 | FR-045 |
 | OD-30 | External liveness backstop and sleep helper | D Q1, OD-D-04, OD-D-06 | — | GitHub Actions watchdog via `mercury-ops` + signed sleep-notification helper; third-party heartbeat service off | M7 | OPS-013, OPS-018 |
-| OD-31 | Keychain `-T /usr/bin/security` ACL | D Q4 | — | Acceptable only together with OD-18; otherwise a signed helper | M1 | SEC-503, OPS-007 |
+| OD-31 | Keychain `-T /usr/bin/security` ACL | D Q4, RISK-29 | — | Not acceptable as the end state: if P0-036 shows MERCURY items must trust `/usr/bin/security`, the signed `mercury-keychain` helper is built in M1 (Addendum A) | M1 | SEC-503, OPS-007 |
 | OD-32 | Delete remote branches of cancelled tasks | D Q6 | — | No (v1) | M7 | FR-184 |
 | OD-33 | Re-authorize on every spec edit | A Q7 | — | Always on `spec_hash` change; Claude may confirm "no material change" (RD-13) | M3 | FR-024 |
 | OD-34 | Model per decision type | B tradeoffs | — | Opus for all types in the pilot; no `fallbackModel` for authority decisions; revisit triage after shadow cost data | M3 | FR-020, FR-261 |
 | OD-35 | Policy actions checklist (not choices) | SEC-105/106/804/806, E §7, OD-E-02 | — | Complete OPS-019 with evidence | P0c | OPS-019 |
-| OD-36 | Optional dedicated macOS account for the coordinator (U2) | E RE-01 (U2), RD-1 | Not in v1; adopt later | Not in v1 (RD-1); revisit after M9c as future hardening | M9c (review) | — |
+| OD-36 | Dedicated macOS account for the coordinator (U2), in addition to the agent uid | E RE-01 (U2), E 44 §3, RD-1, Addendum A | (a) stay in the operator uid and accept RISK-27 in writing; (b) move `mercuryd` to a dedicated account (Zone C separated from Zone H) | **Required decision before unattended operation (G-S5)**, alongside OD-01 (Addendum A). v1 build assumes (a); F recommends deciding at M8 exit with the pilot data, so (b) can be scheduled as MERC-807b without delaying M9c | M8 exit (decision); G-S5 / M9c (in force) | RISK-27, ADR-010, ADR-013 |
 
 Deduplication: the 60 raw items across A (5 + 2 questions), B (9), C (7), D (6 + 8 OD-D), E (6 + operator list) and F (16) reduce to 36. OD-35 is a checklist.
 
@@ -1182,59 +1192,68 @@ Deduplication: the 60 raw items across A (5 + 2 questions), B (9), C (7), D (6 +
 | ID | Assumption | Impact if false | Verified by |
 |---|---|---|---|
 | ASM-F-01 | Latency defaults fit the rate budgets | NFR-040/041/081 retuned | TC-SBX-008 |
-| ASM-F-02 | A sandbox Linear team can be created on the current plan | Separate workspace needed | P0-302 |
-| ASM-F-03 | GitHub Apps install on personal-account repositories with the RD-6 permission sets | Org move earlier (OD-01) | P0-301 |
-| ASM-F-04 | **Refuted** (RD-16): monotonic time continues during sleep on macOS | Requirements now state behaviour (FR-282) | P0-102 |
+| ASM-F-02 | A sandbox Linear team can be created on the current plan | Separate workspace needed | P0-061 |
+| ASM-F-03 | GitHub Apps install on personal-account repositories with the RD-6 permission sets | Org move earlier (OD-01) | P0-060 |
+| ASM-F-04 | **Refuted** (RD-16): monotonic time continues during sleep on macOS | Requirements now state behaviour (FR-282) | P0-034 |
 | ASM-F-05 | Fullfsync commit latency is acceptable on the Mac SSD | Batch writes; worker thread | TC-PERF-004 |
 | ASM-F-06 | Governance tests needing a human approval run with the operator in the loop | TC-GOV stay semi-manual | OD-13 |
 | ASM-F-07 | GitHub-hosted macOS runners are available for T1/T2 | Linux CI plus local runs before exits | CI spike (P0d) |
 | ASM-F-08 | Fake executables are accepted by the version self-test in test mode | Inject paths via config | M1 |
 | ASM-F-09 | A Linux fault filesystem suffices for SQLite logic tests (not durability) | Logic only; durability via the macOS VM (TC-REC-020) | M1 |
 | ASM-F-10 | Agent-assisted throughput reaches ~1.5 focused engineer-days per workday | Calendar plan stretches (roadmap §6) | Re-estimate at P0 exit |
-| ASM-F-11 | An Apple Silicon host can run a macOS guest VM (tart/UTM) for power-loss tests | Power-loss tested by inspection only | P0-114 |
+| ASM-F-11 | An Apple Silicon host can run a macOS guest VM (tart/UTM) for power-loss tests | Power-loss tested by inspection only | P0-047 |
 
-### 10.2 Gating assumption closure register
+### 10.2 Gating assumption closure register and Phase 0 ID allocation
 
-Each assumption below gates a milestone. Its procedure lives in the owner's document; its Phase 0 check is listed here so F can track closure (CON-015, OPS-001). Assumptions not listed here gate nothing; their owners still cite a `P0-nnn` or a test in their "Verified by" column.
+`P0-001…049` are D's Mac checks (procedures and gates in `operations/macos-service.md` §16). F allocates `P0-050…079` for agent-CLI, GitHub and Linear checks (procedures by B for integrations and E for governance; listed in verification plan §8 `TC-P0`). The table tracks closure of every assumption that gates a milestone (CON-015). Owners keep a "Verified by" column pointing here.
 
-| Assumption(s) | Phase 0 check | Gates | Status |
+| Assumption(s) | Phase 0 check | Gates (milestone / gate) | Status |
 |---|---|---|---|
-| ASM-E-04, ASM-E-15, ASM-E-16, ASM-D-30 (agent uid cannot read operator/coordinator secrets; `ps` argv across uids) | P0-026, P0-027, P0-029 | G-SEC-1 (M4) | Open |
-| ASM-D-31 (cross-uid kill only via `agent-ctl`) | P0-028 | M1 | Open |
-| ASM-E-13 (Codex works with read-only main `.git`) | P0-030 | M4 | Open |
-| ASM-D-32 (agent process survives logout; lease ends it) | P0-031 | M1 | Open |
-| ASM-D-12, RD-26 (target test suite runs as the agent uid with `toolchains/`) | P0-032 | M5 | Open |
-| ASM-D-03/04 (LaunchAgent bootstrap, `ExitTimeOut`) | P0-101 | M1 | Open |
-| ASM-A-04, ASM-C-02, ASM-D-13, ASM-D-14 (clock across sleep) | P0-102 | M1 | ASM-A-04/ASM-F-04 Refuted; others Open |
-| ASM-A-02, ASM-D-09 (Keychain from a LaunchAgent, screen locked) | P0-103 | M1 | Open |
-| ASM-D-11 (`caffeinate -i`) | P0-104 | M8 | Open |
-| ASM-D-21, ASM-B-19, RE-29 (Codex Seatbelt denies Keychain and `.git` writes) | P0-105, P0-113 | M4 | Open |
-| ASM-A-05, ASM-B-18 (concurrent `CODEX_HOME`) | P0-106 | Codex concurrency 2 | Open |
-| ASM-D-06 (local notifications) | P0-107 | M7 | Open |
-| RD-18 dark wake (Power Nap) | P0-109 | M1 (FR-052) | Open |
-| RA-09 presence helper from a LaunchAgent context | P0-110 | M5 | Open |
-| RD-25 / RD-1 Claude SDK custom spawn via `sudo agent-exec` | P0-111 | M3 (else ALT-B-1) | Open |
-| ASM-D-29 (git `core.fsync` uses full fsync on macOS) | P0-112 | M5 | Open |
-| ASM-F-11 (macOS guest VM for power loss) | P0-114 | M8 | Open |
-| ASM-B (Claude structured output under launchd and agent uid) | P0-201 | M3 | Open |
-| ASM-B (Codex flags on pinned version) | P0-202 | M4 | Open |
-| ASM-B (Codex output-schema failure behaviour) | P0-203 | M4 | Open |
-| ASM-E-17 (`disableAllHooks` vs SDK hooks) | P0-206 | M3 | Open |
-| ASM-E-10 (Codex `requirements.toml`) | P0-207 | M4 | Open |
-| RD-15 wire-copy schemas accepted by both providers | P0-208 | M3 | Open |
-| ASM-E-11, ASM-E-12 (no claude.ai connectors; non-essential traffic off) | P0-209, P0-210 | M3 | Open |
-| ASM-F-03, RD-6 (Apps and permission sets) | P0-301 | P0c exit | Open |
-| ASM-B-30, ASM-F-02 (Linear client-credentials app) | P0-302 | P0c exit | Open |
-| RB-05 (check-run pinning needs `statuses:write`?) | P0-303 | M6 | Open |
-| RB-03 (App `COMMENT` review never blocks merge) | P0-304 | M6 | Open |
-| RB-06a, ASM-E-01 (deploy-key push to `main` rejected) | P0-305 | G-SPLIT only | Open |
-| RB-06b, ASM-B-53 (App cannot enable auto-merge) | P0-306 | M5 | Open |
-| ASM-E-03, RB-16, ASM-B-51 (rulesets and `bypass_actors` readable with `metadata:read`) | P0-307 | M2 | Open |
-| ASM-E-02, ASM-E-07 (G-SPLIT viability) | P0-308 | G-SPLIT only | Open |
-| ASM-E-05 (Linear app actor cannot merge or diff-review) | P0-309 | P0c exit (else Linear writes paused) | Open |
-| ASM-A-07, RA-10 (closing behaviour of branch names / "Part of") | P0-311 | M4 (OD-06 option `mercury_owns_all`) | ASM-A-07 withdrawn by A; check retained for the alternative mode |
-| RD-18 (target CI runs on draft PRs) | P0-312 | M9a | Open |
-| SEC-T-16 on the sandbox | P0-313 | G-SEC-0 | Open |
+| ASM-E-04, ASM-E-15, ASM-E-16 (agent uid cannot read operator or MERCURY secrets) | P0-007, P0-027, P0-037 | G-S2 | Open |
+| ASM-E-20, ASM-D-36 (sudo fd 3 hand-off without TTY) | P0-026 | M1 | Open |
+| ASM-E-21 (cross-uid signalling only via `agent-ctl`) | P0-028 | M1 | Open |
+| ASM-E-22, ASM-D-30 (`ps` argv across uids) | P0-029 | M1 | Open |
+| ASM-E-13 (Codex with read-only mirror) | P0-030 | M1 | Open |
+| ASM-E-23, ASM-D-32 (lease ends runs after logout) | P0-031 | M1 | Open |
+| ASM-E-24, RD-26 (target tests as `_mercuryagent` with toolchains) | P0-032 | M1 (D) / G-S2 | Open |
+| ASM-D-03/04 (LaunchAgent, `ExitTimeOut`) | P0-033 | M1 | Open |
+| ASM-D-13/14, ASM-A-04, ASM-C-02 (clock across sleep) | P0-034 | M1 | ASM-A-04, ASM-F-04 **Refuted** (RD-16); rest Open |
+| ASM-D-09, ASM-A-02 (Keychain from LaunchAgent) | P0-035 | M1 | Open |
+| ASM-E-08, RE-29 (Keychain ACL trusts helper, not `/usr/bin/security`) — decides whether `mercury-keychain` is v1 | P0-036 | M1 | Open |
+| ASM-D-21, ASM-E-15, ASM-B-19 (Seatbelt denies Keychain, mirror writes, cross-run files) | P0-037 | M1 | Open |
+| ASM-A-05, ASM-B-18 (parallel per-task `CODEX_HOME`) | P0-038 | Codex concurrency 2 | Open |
+| ASM-D-11 (`caffeinate -i`) | P0-039 | M1 | Open |
+| ASM-D-06 (local notifications) | P0-040 | M1 | Open |
+| ASM-D-33, RD-25 (Claude SDK custom spawn via `sudo agent-exec`) | P0-042 | M3 (else ALT-B-1) | Open |
+| ASM-E-11, ASM-E-12 (no connectors; egress only to the API) | P0-042 (with egress log) | M3 | Open |
+| ASM-D-29 (git `core.fsync` uses full fsync) | P0-043 | M2 | Open |
+| ASM-D-31 (`WORK_ROOT` ACL inheritance) | P0-044 | M1 | Open |
+| ASM-D-34, ASM-E-19 (presence helper from a LaunchAgent) | P0-045 | M5 / G-S4 | Open |
+| ASM-D-35, RD-18 (dark-wake detection via power helper) | P0-046 | M5 (D) / M1 logic | Open |
+| ASM-F-11, RD-24 (macOS guest VM power-loss rig) | P0-047 | M8 | Open |
+| ASM-E-10 (managed settings, `requirements.toml`) | P0-048 | M3 | Open |
+| ASM-E-06 (agent-uid egress control) | P0-049 (E specifies) | SEC-206 (SHOULD); G-S2 if chosen for `deps_install` | Open |
+| ASM-B (Codex output-schema failure behaviour) | P0-050 | M4 | Open |
+| ASM-E-17 (`disableAllHooks` vs SDK hooks) | P0-051 | G-S1 | Open |
+| RD-15 (wire-copy schemas accepted by both providers) | P0-052 | M3 | Open |
+| ASM-E-18 (Seatbelt denies `process-info` of the Codex parent) | P0-053 | G-S2 | Open |
+| ASM-F-03, RD-6, Addendum B.1 (both Apps; exact permission sets incl. `statuses:read`) — SEC-T-12 part 1 | P0-060 | P0c / G-S3 | Open |
+| ASM-B-30, ASM-F-02 (Linear client-credentials app, sandbox team) | P0-061 | P0c | Open |
+| RB-05 (pinning requires `statuses:write`?) + SEC-T-17 forged same-name check | P0-062 | M6 / G-S3 | Open |
+| RB-03 (bot `COMMENT` review never blocks; SEC-T-18) | P0-063 | M6 | Open |
+| ASM-E-01, RB-06a (deploy-key push of an approved head to `main` rejected) | P0-064 | G-SPLIT only | Open |
+| ASM-E-02, RB-06b, ASM-B-53 (App cannot merge or enable auto-merge) | P0-065 | M5 / G-S3 | Open |
+| RB-16, ASM-B-51 (rulesets and `bypass_actors` readable with `metadata:read`) | P0-066 | M2 | Open |
+| ASM-E-03 (read-only credential reads Actions settings) | P0-067 | Optional (else POL check) | Open |
+| ASM-E-07 (branch workflows and deploy keys) | P0-068 | G-SPLIT only | Open |
+| ASM-E-05 (Linear app actor cannot merge or diff-review) | P0-069 | P0c (else Linear writes paused) | Open |
+| ASM-A-07 (withdrawn), RA-10 (branch-name closing behaviour for `mercury_owns_all`) | P0-070 | M4 if OD-06 = `mercury_owns_all` | Open |
+| RD-18 (target CI runs on draft PRs) | P0-071 | M9a | Open |
+| SEC-T-16 cases (a)–(g) on the sandbox | P0-072 | G-S3 (rerun at M5 exit) | Open |
+| MIG-0 legacy inventory of `network_monitor` | P0-073 | M9a | Open |
+| OD-35 policy checklist evidence (OPS-019) | P0-074 | G-S1 | Open |
+| ASM-E-09 (`fs.rm` symlinks) | unit test on macOS CI (TC-SEC-143) | M7 | Open |
+| ASM-E-14 (`uappnd`) | not gating | — | Optional |
 
 ---
 
@@ -1244,19 +1263,19 @@ Each assumption below gates a milestone. Its procedure lives in the owner's docu
 |---|---|---|
 | P0a | Mac and agent-CLI verification (read-only and experiments); legacy inventory (MIG-0) | — |
 | P0b | Agent-uid provisioning and verification | Agent uid probe evidence |
-| P0c | Identities, sandbox governance, operator decisions and policy actions | G-SEC-0 |
+| P0c | Identities, sandbox governance, operator decisions and policy actions | Prerequisites of G-S1 (governance, OPS-019) |
 | P0d | MERCURY repository bootstrap (CI, protections, ID lint) | — |
-| M1 | Core: DDL + invariants + audit chain, state engine + holds, derived queue, broker adapter, lifecycle, CLI, fakes, PROP suite | — |
+| M1 | Core: DDL + invariants + audit chain, state engine + holds, derived queue, broker adapter, lifecycle, CLI, fakes, PROP suite | G-S1 (before the first real agent run on the Mac) |
 | M2 | Read-only pollers, eligibility, drift monitor (read) | — |
 | M3 | Claude adapter under agent uid, snapshot builder, authorization records | — |
-| M4 | Codex planning, per-task `CODEX_HOME`, instruction integrity, plan review loop | G-SEC-1 |
-| M5 | Implementation, `verify`/`deps_install`, git hardening, pre-push gates, `MERCURY / policy`, presence tier, PR | G-SEC-2 |
+| M4 | Codex planning, per-task `CODEX_HOME`, instruction integrity, plan review loop | G-S2 evidence (SEC-T-20/21/28 with real agents; required before any non-sandbox write run) |
+| M5 | Implementation, `verify`/`deps_install`, git hardening, pre-push gates, `MERCURY / policy`, presence tier, PR | G-S3 |
 | M6 | Claude code + security review, `MERCURY / claude-review`, revision loops | — |
-| M7 | Merge verification, Linear modes, notifications, audit trace, anchoring, watchdog | G-SEC-3 |
-| M8 | Hardening on the real Mac; SAC-01…12 | G-SEC-4 |
+| M7 | Merge verification, Linear modes, notifications, audit trace, anchoring, watchdog | G-S5 controls built (E: "M7") |
+| M8 | Hardening on the real Mac; SAC-01…20 evidence | — |
 | M9a | Shadow (MIG-1) | — |
-| M9b | Supervised pilot (MIG-2) | G-DETECT-ACK or G-ORG at entry |
-| M9c | Cutover and watch (MIG-3, MIG-4) | G-ORG at entry |
+| M9b | Supervised pilot (MIG-2) | G-S4 at entry |
+| M9c | Cutover and watch (MIG-3, MIG-4) | G-S5 at entry (G-ORG, OD-36 decided, SAC-01…20 green) |
 
 ---
 
@@ -1302,7 +1321,7 @@ An issue in `planning/issue-breakdown.md` (or in MERCURY's own backlog once the 
 | Change | Cause |
 |---|---|
 | Unified ID registry (§1.1), alias tables (§8), parameter registry (§7) | RD-10; RF-02, RF-03, RF-04, RF-20, RF-36, RA-26, RC-20, RD-21, RE-26 |
-| `SEC-001…099` retired; E's 75 SEC IDs registered and traced | RD-10; RF-02; F-SEC-1 |
+| `SEC-001…099` retired; E's 90 SEC IDs registered and traced | RD-10; RF-02; F-SEC-1 |
 | ADR-P keys retired; ADR-001…020 | RD-10; RF-25, RF-36 |
 | New CON-018 (agent-uid gate), FR-051…055, OPS-014/015 | RD-1, RD-11; RF-01, RF-12 |
 | FR-024 (spec drift) rewritten | RD-13; RF-16 |

@@ -130,3 +130,9 @@ Each owner records a disposition for every finding addressed to them in `reviews
 3. **Supervisor alive file** = `WORK_ROOT/ctl/coordinator.alive` (operator-owned 0640, group-readable) (A objection 3, D objection 2). RD-11 clarified.
 4. **Parameter-table scope** (D objection 1): accepted as implemented — operational values in macos-service.md §2; workflow policy (attempt counts/backoff, revision budgets, authorization expiry, state reminder timers) stays in state-machine.md / OD-08, referenced by name. RD-10 clarified.
 5. **Restore-epoch confirmation is a presence-tier command** (D objection 3): confirmed. RD-12 list extended.
+
+## Addendum C (after B Phase 4 objections)
+1. **`mercury-ops` is not installed on target repositories** (B objection 1, SEC-110 least privilege). The ruleset drift monitor uses a `mercury-bot` installation token narrowed to `metadata:read`. RD-6 amended.
+2. **`MERCURY / policy` uses conclusion `action_required` (not `neutral`) while awaiting operator acknowledgement**, because GitHub treats `neutral` as passing for required checks. SEC-113 to be amended by E (Phase 5).
+3. **`actions:read` for `mercury-bot`** is registered as optional operator decision **OD-37** (default: not granted; CI evidence limited to check output and annotations).
+4. Open items routed: D — fd 0 = prompt file for Codex kinds; `claude` grammar allows `--add-dir runs/<run_id>/in`; register B's agent-config defaults. C — adopt B's dedup catalogue (§13), `github.check.upsert` with hold effects, M1–M8, wire-schema profiles. F — register P0-201…241 and OD-37.

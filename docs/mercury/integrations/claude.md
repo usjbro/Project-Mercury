@@ -18,7 +18,7 @@
 | SEC statements | Agent E: `security/threat-model.md` |
 | Requirement and test IDs | Agent F: `planning/traceability.md`, `testing/verification-plan.md` |
 
-Assumptions carry IDs `ASM-B-nn`; each is linked to a Phase 0 check in `github.md` §20.
+Assumptions carry IDs `ASM-B-nn`; each is linked to a Phase 0 check in `github.md` §19.
 
 ---
 
@@ -37,7 +37,7 @@ Claude is called only by the coordinator (`mercuryd`), and only to produce a **v
 | CL-2 | A Claude run cannot write files or run commands | Software: `tools`/`allowedTools` limited to `Read`, `Grep`, `Glob` (or none), explicit `disallowedTools`, `permissionMode: "dontAsk"`, deny-all `canUseTool`. OS: the process runs as `_mercuryagent`, whose only writable paths are its run's scratch directories |
 | CL-3 | A Claude run can read only the roots allowed for its decision type | Software: in-process `PreToolUse` hook (realpath confinement). OS (primary): `_mercuryagent` cannot read `MERCURY_HOME`, the operator's home or any Keychain (SEC-201, ADR-013) |
 | CL-4 | No verdict takes effect unless it validates against the canonical schema and the semantic rules, and is bound to the exact inputs it judged (`input_digest`) | Software: validation pipeline (§6) |
-| CL-5 | Claude output is posted to GitHub only as a `COMMENT` review. MERCURY never submits `APPROVE` or `REQUEST_CHANGES` and never dismisses a review | Software: GitHub endpoint allowlist (`github.md` §10.4, SEC-102). The merge gate is the `MERCURY / claude-review` check run (`github.md` §6), not the review state |
+| CL-5 | Claude output is posted to GitHub only as a `COMMENT` review. MERCURY never submits `APPROVE` or `REQUEST_CHANGES` and never dismisses a review | Software: GitHub endpoint allowlist (`github.md` §10.4, SEC-102). The merge gate is the `MERCURY / claude-review` check run (SEC-113, `github.md` §6), not the review state |
 | CL-6 | A Claude run never sees a credential other than its own model key, which reaches it only through `agent-exec` on fd 3 | Software + OS: `agent-exec` builds the environment from an allowlist (§7.2); no GitHub, Linear or OpenAI secret exists in the coordinator-to-agent channel |
 | CL-7 | Every tree Claude reads is a coordinator-built git-object snapshot (no `.git`, attributes not applied, symlinks as placeholders, read-only). Claude never runs inside a Codex worktree | Software: snapshot builder (ADR-017, SEC-205); `cwd` and readable roots are snapshot and inputs paths only |
 | CL-8 | Authority decisions are made by the pinned model only: no `fallbackModel`, and the model actually used is recorded and checked | Software: §2.1 options; V1 model check (§6) |
@@ -91,9 +91,13 @@ const q = query({
 
 `agentLauncher.spawnClaude(run, opts)` implements the SDK's spawn hook through the `AgentLauncher` port (Agent C) and the `agent-exec` wrapper (Agent D):
 
-1. The coordinator writes `runs/<run_id>/spec.json` (operator-owned, agent-readable) with `kind: "claude"`, the binary path and the argv the SDK supplied in `opts`. `agent-exec` validates the argv against its fixed grammar for `kind=claude`; a flag outside the grammar fails the run as `config_fatal`. A contract test captures the SDK's argv per pinned version so that an SDK upgrade cannot silently break the grammar.
-2. It spawns `sudo -n -C 4 -u _mercuryagent -g mercury /usr/local/libexec/mercury/agent-exec --kind claude --run-dir <WORK_ROOT>/runs/<run_id>` with stdio `[pipe, pipe, pipe, keyPipe]`. stdin and stdout stay the SDK's pipes (sudo passes them through); fd 3 carries the model key once, length-prefixed, and is closed by `agent-exec` after reading.
-3. `agent-exec` sets the environment (§7.2), calls `setsid()`, records `ctl/proc.json`, enforces the awake-time hard deadline and the supervisor lease, and writes `ctl/exit.json`.
+1. The coordinator writes `runs/<run_id>/spec.json` (spawn contract: `macos-service.md` §3.2) with `kind: "claude"`, `argv` = pinned binary plus the options the SDK supplied in `opts`, `cwd` = the run's snapshot, `env` per §7.2 and `secret_env: "ANTHROPIC_API_KEY"`. `agent-exec` validates the argv against the `claude` token table below (`macos-service.md` §3.5); a token outside it fails the run as `config_fatal`. A contract test captures the SDK's argv per pinned version so that an SDK upgrade cannot silently break the table.
+2. It spawns `sudo -n -C 4 -u _mercuryagent -g mercury /usr/local/libexec/mercury/agent-exec --run-dir <WORK_ROOT>/runs/<run_id>` (the only accepted command line) with stdio `[pipe, pipe, pipe, keyPipe]`. stdin and stdout stay the SDK's pipes (`!use_pty`); fd 3 carries the model key once, length-prefixed (`macos-service.md` §3.6).
+3. `agent-exec` builds the environment, calls `setsid()`, records `ctl/proc.json`, enforces the awake-time hard deadline and the supervisor lease (`WORK_ROOT/ctl/coordinator.alive`), and writes `ctl/exit.json`.
+
+**`claude` token table (B owns; compiled into `agent.conf`).** Allowed: the SDK's transport options (`--output-format stream-json`, `--input-format stream-json`, `--verbose`), `--model <pinned>`, `--max-turns <n>`, `--permission-mode dontAsk`, `--tools`/`--allowedTools`/`--disallowedTools` with the values of §2.1, `--setting-sources ""`, `--settings runs/<run_id>/in/settings.json` (containing only `{"disableAllHooks":true}`), `--strict-mcp-config`, `--session-id <uuid>`, `--json-schema`/structured-output options pointing under `runs/<run_id>/in/`, `--add-dir` limited to the run's allowed roots. Forbidden: `--dangerously-skip-permissions`, `--mcp-config`, `--plugin-dir`, `--fallback-model`, any non-empty `--setting-sources`. The exact token spelling is captured from the pinned SDK in Phase 0 (P0-213).
+
+**Grammar change requested from D (open item):** `macos-service.md` §3.5 currently allows `--add-dir` only equal to `cwd` and `cwd` only `snapshots/<tree_sha>`. Claude runs also need read access to `runs/<run_id>/in/` (diff, CI summaries, large inputs) and tool-less runs (`triage`) have no snapshot. Requested: `--add-dir runs/<run_id>/in` allowed for `claude`, and `cwd = runs/<run_id>/in` allowed when the spec has no snapshot.
 4. The SDK sees an ordinary child process. Signals go through `agent-ctl` (§9), because the coordinator uid cannot signal agent-uid processes.
 
 **Phase 0 gate (ASM-B-59, P0-213):** a decision run of each type, spawned exactly this way from a LaunchAgent context, returns `subtype: "success"` with `structured_output`, and the canary checks of §8 pass. If it fails and cannot be fixed by an `agent-exec` grammar change, MERCURY switches to ALT-B-1 for all decision types (configuration `claude.transport = "messages_api"`).
@@ -127,20 +131,19 @@ Six decision types (canonical list, ADR-004 as revised under RA-11). Each is a s
 | `authorization` (modes `initial`, `reauthorize`) | `claude_authorize` | `initial`: a task exists in `AWAITING_AUTHORIZATION` (SM T01). `reauthorize`: `spec_changed` hold, authorization expiry, or operator `mercury request reauth` (RD-13, RA-05). Claude never revokes unprompted | Snapshot of `base_sha` | Read, Grep, Glob | `mercury.output.task_authorization_decision.v1` (the `reauthorize` mode fields are C's) | New immutable authorization version, or a decline/defer/needs-human outcome per SM T02–T04 and the re-authorization transitions |
 | `plan_review` | `claude_plan_review` | Codex plan artifact received; also after a re-authorization, against the existing plan (plan approvals bind `spec_hash`, RA-05) | Snapshot of `base_sha` | Read, Grep, Glob | `mercury.output.plan_review.v1` | `approve` creates a plan approval bound to `plan_sha256`, authorization version and `spec_hash`. A plan outside the authorized scope is `reject` with finding code `scope_exceeded` (RA-29) |
 | `pr_code_review` | `claude_code_review` | PR head SHA pushed and non-MERCURY required checks concluded, or CI wait deadline passed (SM T22). One per head SHA | Snapshot of `head_sha` plus inputs dir | Read, Grep, Glob | `mercury.output.code_review.v1` | Findings stored; `COMMENT` review; check run per `github.md` §6 |
-| `pr_security_review` | `claude_security_review` | Same trigger, separate fresh session, **every PR** (RA-14); depth rises with the `Security` label and SEC-309/310 pre-check hits | Same as code review | Read, Grep, Glob | `mercury.output.security_review.v1` | Security findings stored; publication per `github.md` §6.4 |
+| `pr_security_review` | `claude_security_review` | Same trigger, separate fresh session, **every PR** (RA-14); depth rises with the `Security` label and SEC-309/310 pre-check hits | Same as code review | Read, Grep, Glob | `mercury.output.security_review.v1` | Security findings stored; publication per SEC-507 and `github.md` §6.4 |
 | `revision_request` | `claude_revision_request` | Every revision source **except** a validated Claude review bound to the current plan hash or head SHA (§3.3) | Snapshot of `head_sha` (or of `base_sha` for plan revisions) plus inputs dir | Read, Grep, Glob | `mercury.output.revision_request.v1` | Coordinator records `mercury.revision.request.v1` (`producer.kind = claude_run`) and dispatches Codex only when `action = revise` or `replan` and the budget remains (SM §9) |
 
 ### 3.1 Limits per decision type (parameter keys)
 
-Values live in the parameter table of `operations/macos-service.md`; this table fixes the keys and their meaning. They are starting points tuned from observed `modelUsage`.
+Deadlines and stall values live in `macos-service.md` §2.3. The remaining keys are agent configuration in `mercury.toml`; their proposed defaults are in `reviews/41-revision-B.md` §4 for registration in the parameter table. All are tuned from observed `modelUsage`.
 
 | Key (per `<type>` above) | Meaning |
 |---|---|
 | `claude.<type>.model` | Pinned model id. Downgrading a type is an **operator** decision recorded in config and in each run row |
 | `claude.<type>.max_turns` | SDK `maxTurns` (or the ALT-B-1 turn budget) |
 | `claude.<type>.max_budget_usd` | SDK `maxBudgetUsd` |
-| `claude.<type>.awake_deadline` | Hard deadline in credited awake time, enforced by the coordinator and by `agent-exec` |
-| `claude.<type>.stall` | Maximum credited awake time without an SDK message before the run is `stalled` |
+| `run.claude_<kind>.*` (deadline, stall) | Awake deadline and stall threshold; values in `macos-service.md` §2.3 |
 | `claude.<type>.max_input_tokens` | Envelope budget; larger parts go to the inputs dir (§5.2 rule 5) |
 | `claude.<type>.reasoning_effort` | If the pinned SDK exposes it (ASM-B-04) |
 | `claude.daily_budget_usd` | Global daily spend cap; exceeding it sets the `budget_exhausted` hold (SM §5) and notifies once |
@@ -149,7 +152,7 @@ Values live in the parameter table of `operations/macos-service.md`; this table 
 ### 3.2 Readable roots and confinement
 
 - **Snapshots (RD-7, ADR-017).** `WORK_ROOT/snapshots/<tree_sha>/` (layout: `macos-service.md` §7.1). Built by the coordinator's `SnapshotBuilder` (Agent C) from `git ls-tree -r -z` and `git cat-file` in the mirror: no `.git`, `.gitattributes` not applied (so `export-ignore` cannot hide files and `export-subst` cannot rewrite them), symlinks and submodules written as placeholder text files naming their target, files 0444 and directories 0555, readable by `_mercuryagent`. Snapshots are content-keyed and shared across runs of the same tree. The review binding records `snapshot_tree_sha`, which answers audit question "what exactly did Claude read".
-- **Inputs dir.** `runs/<run_id>/inputs/`, written by the coordinator before the run, files read-only to the agent. It holds `diff.patch`, CI check summaries, `test-report.json`, `plan.md` and `issue.md` when they are too large for the envelope.
+- **Inputs dir.** `runs/<run_id>/in/`, written by the coordinator before the run, files read-only to the agent. It holds `diff.patch`, CI check summaries, `test-report.json`, `plan.md` and `issue.md` when they are too large for the envelope.
 - **`confineToRoots` hook** (software, defence in depth behind the OS boundary). For `Read`, `Grep` and `Glob`: resolve the argument with `fs.realpath`; deny if it is outside the run's roots or matches the deny list (`**/.env*`, `**/*.pem`, `**/id_*`, `**/.npmrc`, `**/.netrc`). Every allowed and denied call is written to the run's tool audit. Path-escape denials above `claude.max_path_denials` raise a security event (SEC-903).
 - The agent uid can technically read other `WORK_ROOT` content that is group-readable (mirrors, other tasks' worktrees). These hold no credentials; the hook keeps Claude to its roots.
 
@@ -209,7 +212,7 @@ All inputs are assembled by the coordinator from its own durable state (Linear s
 …
 </untrusted nonce="k7Qz3w…">
 <file_inputs>
-  inputs/diff.patch sha256=… (read with the Read tool)
+  in/diff.patch sha256=… (read with the Read tool)
 </file_inputs>
 </mercury_envelope>
 ```
@@ -257,22 +260,23 @@ A schema rejected by the provider at request time is `config_fatal` for that dec
 
 ### 7.1 Model key
 
-- **Default (OD-03): an Anthropic Console API key** in a dedicated workspace with a workspace spend limit. Stored in the operator's login Keychain under the single prefix `com.usjbro.mercury.*` (item name: inventory in `macos-service.md` §9.1).
+- **Default (OD-03): an Anthropic Console API key** in a dedicated workspace with a workspace spend limit. Stored in the operator's login Keychain as `com.usjbro.mercury.anthropic` (inventory: `macos-service.md` §9.1, SEC-503).
 - `mercuryd` reads it once at start and on `mercury reload-credentials`, and holds it in memory (RD-18). It is passed to each run **only on fd 3** to `agent-exec` (or, under ALT-B-1, used in-process). It is never written to disk, argv, logs or the run's `spec.json`.
-- The subscription `setup-token` alternative is not supported in v1: it cannot be used under ALT-B-1 and would need its own expiry tracking.
+- Alternative under OD-03: a `claude setup-token` subscription token (`com.usjbro.mercury.claude-oauth`, delivered on fd 3 as `CLAUDE_CODE_OAUTH_TOKEN`; expiry alert per `macos-service.md` §9.1). It works only on the SDK transport, so choosing it removes ALT-B-1 as a fallback.
 
 ### 7.2 Agent process environment (built by `agent-exec`; nothing inherited)
 
 | Variable | Value |
 |---|---|
-| `PATH` | `/usr/bin:/bin` plus the pinned Claude binary directory under `WORK_ROOT/toolchains/` |
+| `PATH` | `/usr/bin:/bin` (the binary is started by absolute pinned path) |
 | `HOME` | `/Users/_mercuryagent` (caches only; `mercury doctor` scans it for credential files) |
-| `CLAUDE_CONFIG_DIR` | `WORK_ROOT/runs/<run_id>/claude-config/` (agent-writable; transcripts collected into artifacts after the run) |
-| `ANTHROPIC_API_KEY` | From fd 3 |
+| `CLAUDE_CONFIG_DIR` | `runs/<run_id>/claude-config/` (agent-writable; transcripts collected into artifacts after the run) |
+| `ANTHROPIC_API_KEY` (or `CLAUDE_CODE_OAUTH_TOKEN`) | From fd 3 |
 | `DISABLE_AUTOUPDATER` | `1` |
 | `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` | `1` (**ASM-B-06**) |
-| `TMPDIR` | `WORK_ROOT/runs/<run_id>/tmp/` |
-| `LANG` | `en_US.UTF-8` |
+| `TMPDIR` | `runs/<run_id>/tmp/` |
+| `LANG`, `LC_ALL` | `en_US.UTF-8` |
+| `MERCURY_RUN_ID` | The run id (non-secret) |
 
 `GITHUB_TOKEN`, `GH_TOKEN`, `LINEAR_*`, `CODEX_API_KEY`, `OPENAI_API_KEY` and `SSH_AUTH_SOCK` are never present (SEC-202).
 
@@ -284,7 +288,7 @@ The operator installs a root-owned `/Library/Application Support/ClaudeCode/mana
 
 ## 8. Version pinning and startup self-test
 
-- **Pins.** `@anthropic-ai/claude-agent-sdk` at an exact version (lockfile); the bundled `darwin-arm64` binary is copied by `mercury toolchain sync` into `WORK_ROOT/toolchains/claude/<version>/` (agent read/execute only) and its SHA-256 is recorded in `pins.json` and checked at every start and before every spawn (SEC-210). The operator's global `claude` is never used.
+- **Pins.** `@anthropic-ai/claude-agent-sdk` at an exact version (lockfile); the bundled `darwin-arm64` binary is installed by `mercury toolchain sync` under `WORK_ROOT/toolchains/agents/` (agent read/execute only); its SHA-256 is pinned in `agent.conf` and checked by `agent-exec` at every spawn and by `mercury doctor` at start (SEC-210, `macos-service.md` §3.4–§3.5). The operator's global `claude` is never used.
 - **Minimum versions:** the versions on which discovery was done (`github.md` §17).
 - **Startup self-test (hard dispatch gate).** Claude dispatch stays held (`config_fatal`) until it passes, at coordinator start and after any version or pin change. It runs through the production path (§2.2, as `_mercuryagent`) against a **snapshot** of a bundled fixture repository containing: `.claude/settings.json` with `SessionStart` and `PreToolUse` hooks that would touch a canary file; `.mcp.json` with a stdio server that would touch a canary; a symlink `docs/link -> ~/.ssh` (rendered as a placeholder by the snapshot builder); a `CLAUDE.md` containing an injection string; and a planted file outside the roots. Pass criteria:
   1. one run per decision type with the exact isolation profile returns `success` with schema-valid `structured_output` (RB-18; ASM-B-60);
@@ -300,8 +304,8 @@ The operator installs a root-owned `/Library/Application Support/ClaudeCode/mana
 ## 9. Process supervision
 
 - The Claude process runs as `_mercuryagent` in its own session (`agent-exec` calls `setsid()`). `ctl/proc.json` records pid, pgid, start time and the run marker; the coordinator stores them in `runs`.
-- **Signals go through `agent-ctl`** (`agent-ctl signal <run_id> INT|TERM|KILL`), which verifies pid, start time and marker first. `EPERM` from a direct probe is never read as "dead".
-- **Deadlines** use credited awake time (C §10.10, RD-16). Sequence on deadline or cancel: SDK `interrupt()` / abort first; after `claude.kill.grace_int` SIGTERM the group via `agent-ctl`; after `claude.kill.grace_term` SIGKILL. `agent-exec` independently enforces the hard deadline and the supervisor lease (RD-11).
+- **Signals go through `agent-ctl`** (`agent-ctl signal --run <run_id> --sig INT|TERM|KILL`), which verifies pid, start time and marker first. `EPERM` from a direct probe is never read as "dead".
+- **Deadlines** use credited awake time (C §10.10, RD-16). Sequence on deadline or cancel: SDK `interrupt()` / abort first; then the `supervisor.kill_ladder_s` ladder through `agent-ctl signal`. `agent-exec` independently enforces the hard deadline and the supervisor lease (RD-11).
 - **Coordinator restart (RD-11).** Claude runs use pipes and are **not adoptable**: on restart, any `running` Claude run is killed through `agent-ctl` (identity triple verified) and re-run with the same `input_digest`. This consumes no attempt. A decision is a pure function of its inputs, so re-running is safe; §10's dedup key accepts at most one verdict.
 - **Host loss.** A boot-session change or supervisor-lease expiry classifies the run `lost_by_host` (no attempt consumed; separate cap per step, ops alert, not `BLOCKED`).
 
@@ -326,7 +330,7 @@ Failure classes use the unified vocabulary and accounting of `github.md` §15.1.
 | `input_too_large` | §5.2 rule 5 | — | No run; `needs_human` |
 | `config_fatal` | Self-test failed, pin mismatch, `agent-exec` grammar rejection, provider schema rejection | No | `config_fatal` hold for Claude dispatch |
 
-Decision idempotency: dedup key `claude:<task_id>:<decision_type>:<input_digest>` (catalogue `github.md` §14). At most one verdict per key is accepted (the first that passes V1–V4); a late output from a superseded run is stored as `superseded`. Retries are new `run_id`s under the same key.
+Decision idempotency: dedup key `claude:<task_id>:<decision_type>:<input_digest>` (catalogue `github.md` §13). At most one verdict per key is accepted (the first that passes V1–V4); a late output from a superseded run is stored as `superseded`. Retries are new `run_id`s under the same key.
 
 ---
 

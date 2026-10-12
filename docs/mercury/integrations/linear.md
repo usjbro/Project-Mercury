@@ -3,7 +3,7 @@
 **Owner:** Agent B. **Status:** Phase 4 revision. Implements RD-3, RD-9, RD-13, RD-14 and RD-18 (`reviews/30-reconciliation.md`).
 **Builds on:** `reviews/01-discovery-integrations.md` (**DI**), `reviews/02-discovery-platform.md` §3 (**DP**), and the Linear SDK GraphQL schema checked in Phase 3 (`reviews/21-review-B-interfaces.md`, tagged [V-src]).
 
-**Single sources referenced, not restated here:** task states, holds and transitions (Agent C, `architecture/state-machine.md`); DDL (`components.md` §6.3: `linear_issues`, `cursors`, `events_inbox`, `outbox`); dedup-key catalogue and retry matrix (`github.md` §14, §15); parameter values (D's parameter table in `operations/macos-service.md`); credential inventory (`macos-service.md` §9.1); SEC statements (`security/threat-model.md`).
+**Single sources referenced, not restated here:** task states, holds and transitions (Agent C, `architecture/state-machine.md`); DDL (`components.md` §6.3: `linear_issues`, `cursors`, `events_inbox`, `outbox`); dedup-key catalogue and retry matrix (`github.md` §13, §15); parameter values (D's parameter table in `operations/macos-service.md`); credential inventory (`macos-service.md` §9.1); SEC statements (`security/threat-model.md`).
 
 The workspace observed during discovery has one team, `JAM`, with seven default states, no agent identities, and Linear's GitHub integration active (DI). MERCURY must not hard-code `JAM`.
 
@@ -35,10 +35,10 @@ Linear's OAuth docs describe client-credentials tokens as `app`-actor, valid for
 |---|---|
 | App name / avatar | "MERCURY" with a distinct avatar |
 | Scopes | `read`, `write` (`write` is needed for `issueUpdate`; there is no narrower state-only scope). Not requested: `admin`, `app:assignable`, `app:mentionable` (MERCURY must not be delegatable, §9) |
-| Secret storage | `client_id` in config; `client_secret` in the login Keychain under `com.usjbro.mercury.*` (item name: `macos-service.md` §9.1) |
+| Secret storage | `client_id` in config; `client_secret` in the login Keychain as `com.usjbro.mercury.linear-client-secret` (`macos-service.md` §9.1) |
 | Credential reads | The client secret is read once at start and on `mercury reload-credentials` and held in memory (RD-18) |
-| Token lifecycle | Minted at startup and when less than `linear.token.renew_before` remains; memory only. On a 401: re-mint once, then set the `integration_auth_failed{linear}` hold |
-| Fallback | One-time authorization-code install with `actor=app` (docs disagree on `app` vs `application`, ASM-B-31); refresh token in the Keychain |
+| Token lifecycle | Minted at startup and re-minted before expiry; memory only. On a 401: re-mint once, then set the `integration_auth_failed{linear}` hold |
+| Fallback | One-time authorization-code install with `actor=app` (docs disagree on `app` vs `application`, ASM-B-31); refresh token in the Keychain as `com.usjbro.mercury.linear-refresh-token` |
 | Rejected | A personal API key: it acts as the human (DI: comments appear as the operator), breaking LN-3 and the audit |
 
 MERCURY records its own app user id (`viewer { id }`) at startup and identifies its own comments and state changes **by actor id**, never by body markers.
@@ -53,7 +53,7 @@ MERCURY records its own app user id (`viewer { id }`) at startup and identifies 
 
 ### 3.1 Polling queries (GraphQL, `https://api.linear.app/graphql`)
 
-**Q1, incremental team sweep** (every `linear.poll.interval` while awake). Q1 deliberately does not filter on the label, so label removals and state changes are seen.
+**Q1, incremental team sweep** (every `linear.poll_s` while awake; `linear.poll_idle_s` with no active tasks). Q1 deliberately does not filter on the label, so label removals and state changes are seen.
 
 ```graphql
 query TeamSweep($teamId: ID!, $since: DateTimeOrDuration!, $after: String) {
@@ -103,19 +103,19 @@ query IssueSnapshot($id: String!) {
 
 - Field existence verified against the SDK schema [V-src] (RB-25): `Issue.delegate`, `User.app`, `Comment.botActor`/`externalUser`, `IssueHistory` actor, label and state fields, `IssueUpdateInput.addedLabelIds`/`removedLabelIds`, `AgentSession`, `Query.rateLimitStatus`. ASM-B-32/33/34/38/39 are reduced to runtime permission checks.
 - Dependencies use `relations` and `inverseRelations` with `type: blocks` (DP §3). Relation **ids** are captured so that a removed and re-added relation is a new fact (RB-11).
-- **Q3, reconciliation sweep** every `linear.reconcile.interval`, and after every wake or restart: Q1 with `$since = now − linear.reconcile.lookback`, plus Q2 for every non-terminal MERCURY task.
+- **Q3, reconciliation sweep** every `linear.relation_refresh_min`, and after every wake or restart: Q1 over a 7-day lookback, plus Q2 for every non-terminal MERCURY task.
 
 ### 3.2 Cursor, overlap and dedup
 
-- Cursor row in `cursors` (Agent C DDL), keyed by team: `since` = max `updatedAt` seen. The next Q1 uses `since − linear.poll.overlap` in steady state and `since − linear.poll.overlap_after_wake` after a restart or wake (RB-12).
-- Facts go to `events_inbox` with dedup keys from the single catalogue (`github.md` §14): issue versions by `updatedAt`, comments by `updatedAt`, relations by relation id and presence, value-keyed facts with an observation sequence.
+- Cursor row in `cursors` (Agent C DDL), keyed by team: `since` = max `updatedAt` seen. The next Q1 subtracts `linear.poll_overlap_s` (steady-state and after-restart/wake values, `macos-service.md` §2.5; RB-12).
+- Facts go to `events_inbox` with dedup keys from the single catalogue (`github.md` §13): issue versions by `updatedAt`, comments by `updatedAt`, relations by relation id and presence, value-keyed facts with an observation sequence.
 - **Paging stop rule:** stop at the first page whose last `updatedAt` is older than the overlap boundary. `PaginationOrderBy` has no direction field [V-src]; **ASM-B-35** (descending order) stays open, with the fallback of paging to the end.
 
 ### 3.3 Rate limits
 
 Published figures (DP §3): OAuth app 5,000 requests/h and about 2,000,000 complexity points/h, per user or app user. Budget at the default cadence: Q1 one per team per poll; Q2 about one per changed issue; Q3 two per hour plus one per active task; writes bounded by the SEC-705 mutation budget. The expected total is under 10 % of the quota.
 
-Handling: read `X-RateLimit-Requests-Remaining` and `X-RateLimit-Complexity-Remaining`; below `linear.ratelimit.low_watermark` widen the poll interval to `linear.poll.interval_slow`. On `extensions.code == "RATELIMITED"` or HTTP 429 (**ASM-B-36**) set the `rate_limited{linear}` hold until the reset time plus jitter. Keep `first:` and nested connections at 50 or below.
+Handling: read `X-RateLimit-Requests-Remaining` and `X-RateLimit-Complexity-Remaining`; below 10 % widen the poll interval to `linear.poll_idle_s`. On `extensions.code == "RATELIMITED"` or HTTP 429 (**ASM-B-36**) set the `rate_limited{linear}` hold until the reset time plus jitter. Keep `first:` and nested connections at 50 or below.
 
 ---
 
@@ -146,7 +146,7 @@ Changes after a task exists (all only stop or suspend work, the fail-safe direct
 | State moved to Canceled or Duplicate | Cancel (SM G1c) |
 | Delegation or coding session appears | §9 |
 
-Holds age per RD-3: a hold active longer than its threshold escalates once to `BLOCKED(needs_human_decision)` or a digest notification (thresholds in the parameter table).
+Holds age per RD-3: a hold active longer than its threshold (`hold_age.*`, `macos-service.md` §2.7) escalates once to `BLOCKED(needs_human_decision)` or a digest notification.
 
 ---
 
@@ -221,11 +221,11 @@ SM T34 in this mode requires the completion comment to be `done` and Linear `Don
 | Label add/remove | `issueUpdate(id, input: { addedLabelIds / removedLabelIds })` | Set semantics |
 | PR link | Not written in `integration_owns_done` (the integration attaches PRs). In `mercury_owns_all`: `attachmentLinkGitHubPR` / `attachmentCreate(url)` | Keyed on (issue, url) |
 
-All writes go through the outbox (`outbox` table) with the retry matrix of `github.md` §15 and the per-repo mutation budget (SEC-705).
+All writes go through the outbox (`outbox` table) with the retry matrix of `github.md` §15 and the per-repo mutation budget (SEC-705). Allowed writes are exactly those of SEC-805: own comments, `mercury:*` labels, attachments, and states per the OD-06 mode; never descriptions, titles, relations or delegation.
 
 ### 7.2 Comment catalogue
 
-Comments are low-volume and change-only. Each starts with a one-line headline, then a compact details block, then a hidden marker `<!-- mercury:v1 {"kind":"…","task":"tsk_…","dedup":"…"} -->` carrying ids only. All agent-authored text in a comment passes the public-sink renderer (SEC-304, C-SEC-7): quoted, redacted (SEC-501), `@mentions` neutralised, GitHub closing keywords and **Linear magic words** ("Fixes JAM-77", "Closes …", "Part of …") neutralised so that agent text cannot link or close any issue (RE-12), HTML comments and `<details>` stripped, length-capped.
+Comments are low-volume and change-only. Each starts with a one-line headline, then a compact details block, then a hidden marker `<!-- mercury:v1 {"kind":"…","task":"tsk_…","dedup":"…"} -->` carrying ids only. All agent-authored text in a comment passes the public-sink renderer (SEC-304): quoted, redacted (SEC-501), `@mentions` neutralised, GitHub closing keywords and **Linear magic words** ("Fixes JAM-77", "Closes …", "Part of …") neutralised so that agent text cannot link or close any issue (RE-12), HTML comments and `<details>` stripped, length-capped.
 
 | Kind | When | Content |
 |---|---|---|
@@ -236,7 +236,7 @@ Comments are low-volume and change-only. Each starts with a one-line headline, t
 | `spec_drift` | `spec_changed` hold set (§8) | Changed fields (names only), what is suspended |
 | `reauthorized` | Re-authorization accepted | New authorization version; whether scope changed |
 | `pr_ready` | SM T24 | PR link (GitHub also notifies) |
-| `completed` | SM T34 | Merge SHA, approver, verification result, audit chain head `(seq, hash)` (off-host anchor, RD-4 / SEC-604) |
+| `completed` | SM T34 | Merge SHA, approver, verification result, audit chain head `(seq, hash)` (off-host anchor carrier, RD-4 as amended by Addendum B, SEC-604) |
 | `merge_verification_failed` | SM T35 | Facts only; which checks failed |
 | `foreign_agent_detected` | §9 | Delegation, coding session or foreign PR found; MERCURY suspended |
 

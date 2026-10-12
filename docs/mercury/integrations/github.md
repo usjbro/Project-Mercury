@@ -37,7 +37,7 @@ The **operator** is the only identity that can satisfy required approval and the
 | Identity | Kind | Installed on | Used for | Never used for |
 |---|---|---|---|---|
 | `mercury-bot` | GitHub App | Target repositories only (selected repositories) | Push `mercury/*`, open and update PRs, `COMMENT` reviews, the two MERCURY check runs, reads for polling and merge verification | Approve, merge, update-branch, auto-merge, settings, workflows, Actions |
-| `mercury-ops` | GitHub App | `project-mercury`, the private anchor repository, and target repositories (metadata only, see §2.3) | Ops/heartbeat issue and SECURITY alerts in `project-mercury`; daily audit anchor commits; governance drift reads on targets | Anything on target repositories beyond metadata reads |
+| `mercury-ops` | GitHub App | `project-mercury` and the private anchor repository **only** (see §2.3) | Ops/heartbeat issue and SECURITY alerts in `project-mercury`; daily audit anchor commits | Anything on target repositories |
 | Operator | Human owner | — | Approve and merge PRs; repository settings and rulesets; `CODEOWNERS` owner | Any MERCURY automation. MERCURY never reads `gh` auth, PATs or browser sessions (SEC-103) |
 | `github-actions[bot]` | Repo CI | — | Required CI checks | Approvals ("Allow GitHub Actions to create and approve pull requests" off, SEC-105) |
 | Third-party bots (e.g. `chatgpt-codex-connector`, DI) | — | — | Ignored | Never counted as anything |
@@ -54,7 +54,7 @@ Linear (OAuth app, `actor=app`) and the model keys are covered in `linear.md` §
 | Contents | **write** | Push `mercury/*` branches from the mirror; read trees, files (`CODEOWNERS`), commits and compare; delete MERCURY branches after completion |
 | Pull requests | **write** | Create and update PRs; draft/ready (GraphQL); request reviewers; `COMMENT` reviews and inline comments; PR conversation comments and labels |
 | Checks | **write** | Create and update the two MERCURY check runs; read CI check runs and annotations |
-| Commit statuses | **write only if Phase 0 requires it** | GitHub's docs state the ruleset's expected-source App "must be installed … with the `statuses:write` permission" (RB-05, [V-doc-src]). Phase 0 check **ASM-B-57** (pin `MERCURY / claude-review` to the App with and without `statuses:write`) decides; if granted, MERCURY still creates no commit statuses (§10.4). Without it, legacy status-based CI contexts cannot be read |
+| Commit statuses | **read** (Addendum B); **write only if Phase 0 requires it** | `read`: a target repo's required context may be a commit status. `write`: GitHub's docs state the ruleset's expected-source App "must be installed … with the `statuses:write` permission" (RB-05, [V-doc-src]); Phase 0 check **ASM-B-57** decides. Even if granted, MERCURY creates no commit statuses (§10.4) |
 | Actions, Workflows, Administration, Issues, Members, Secrets, Environments, Deployments, Pages | **none** | Least privilege (SEC-101). Consequence: CI-failure evidence is the check run's output and annotations, not raw job logs |
 | Webhook | inactive (no URL) | No inbound access to the Mac |
 
@@ -62,14 +62,16 @@ Linear (OAuth app, `actor=app`) and the model keys are covered in `linear.md` §
 
 ### 2.3 `mercury-ops` permissions
 
-GitHub App permissions are App-wide: an installation grants the full set on every selected repository. The per-repository column shows what tokens are **narrowed** to at mint; the drift monitor checks the installations' repository selections.
+GitHub App permissions are App-wide: an installation grants the App's full permission set on every selected repository, and on a personal account an App has one installation per account. Installing `mercury-ops` on target repositories would therefore give it `issues:write` and `contents:write` there, which SEC-110 forbids. **Design: `mercury-ops` is installed only on `project-mercury` and the anchor repository; the governance drift monitor reads target repositories with a `mercury-bot` `audit` token narrowed to `metadata:read`** (the permission RD-6 intended for this read). This deviates from RD-6's wording and is recorded as an objection in `reviews/41-revision-B.md` §3.
 
-| Permission (App level) | `project-mercury` | Private anchor repo | Target repos |
-|---|---|---|---|
-| Metadata: read | read | read | read (rulesets, branch rules, collaborators, repository settings) |
-| Issues: write | write (heartbeat issue edits, ops and SECURITY alerts) | — | never requested |
-| Contents: write | — | write (anchor commits) | never requested |
-| Everything else | none | none | none |
+| Permission (App level) | `project-mercury` | Private anchor repo |
+|---|---|---|
+| Metadata: read | read | read |
+| Issues: write | write (heartbeat issue edits, ops and SECURITY alerts) | narrowed away at mint |
+| Contents: write | narrowed away at mint | write (anchor commits) |
+| Everything else | none | none |
+
+`mercury-bot` is never installed on `project-mercury` or the anchor repository (SEC-110).
 
 ### 2.4 Per-purpose installation tokens
 
@@ -77,19 +79,19 @@ Tokens are minted with a narrowed body `{"repositories":["<repo>"],"permissions"
 
 | App | Purpose | Permissions requested | Used by |
 |---|---|---|---|
-| `mercury-bot` | `read` | `metadata:read, contents:read, pull_requests:read, checks:read` | All polling and merge verification. One long-lived token per installation, re-minted before expiry, so that ETag caches stay warm (§14) |
+| `mercury-bot` | `read` | `metadata:read, contents:read, pull_requests:read, checks:read, statuses:read` | All polling and merge verification. One long-lived token per installation, re-minted before expiry, so that ETag caches stay warm (§14) |
 | `mercury-bot` | `push` | `contents:write` | `git push` from the mirror via the askpass fd (§4.3); MERCURY branch deletion |
 | `mercury-bot` | `pr` | `pull_requests:write` | PR create/update, draft/ready, reviewers, `COMMENT` reviews, PR comments, labels |
 | `mercury-bot` | `check` | `checks:write` (+ `statuses:write` only if granted per §2.2) | The two MERCURY check runs |
 | `mercury-ops` | `ops` | `issues:write` on `project-mercury` | Heartbeat, ops and SECURITY alerts |
 | `mercury-ops` | `anchor` | `contents:write` on the anchor repo | Daily audit-chain anchor (RD-4) |
-| `mercury-ops` | `audit` | `metadata:read` on one target repo | Governance drift monitor (§9.6) |
+| `mercury-bot` | `audit` | `metadata:read` | Governance drift monitor (§9.6): rulesets, branch rules, collaborators, repository settings |
 
 ## 3. Token minting and private-key custody
 
 - **Private keys.** One PEM per App, generated by the operator, imported into the login Keychain under the single prefix `com.usjbro.mercury.*` (item names and ACLs: `macos-service.md` §9.1); the downloaded files are deleted (checked in Phase 0).
 - **Reads (RD-18).** `mercuryd` reads every credential once at start and on `mercury reload-credentials`, and holds it in memory as a `Secret` value. No on-demand Keychain reads, so a locked Keychain after wake cannot stall a run.
-- **Minting.** The `github-auth` module signs an RS256 JWT (`iss` = App client id, `iat = now − 60 s`, `exp = now + 9 min`) and calls `POST /app/installations/{installation_id}/access_tokens` with the narrowed body (§2.4). Tokens are cached until `github.token.renew_before` before expiry.
+- **Minting.** The `github-auth` module signs an RS256 JWT (`iss` = App client id, `iat = now − 60 s`, `exp = now + 9 min`) and calls `POST /app/installations/{installation_id}/access_tokens` with the narrowed body (§2.4). Tokens are re-minted `github.token_refresh_before_expiry_min` before expiry.
 - **Git push credential (RD-17, single mechanism).** `git push` runs with `GIT_ASKPASS=<mercury-askpass>`; the helper reads the `push` token from an inherited file descriptor and prints it once. The token never appears in argv, environment, `.git/config` or the control socket.
 - **Rotation.** App keys yearly or on suspicion (create new key, update Keychain, `reload-credentials`, delete old key); procedure in `operations/recovery.md`. Installation tokens may be revoked with `DELETE /installation/token` at shutdown.
 
@@ -150,7 +152,7 @@ git -c core.hooksPath=/dev/null -c protocol.allow=never -c protocol.https.allow=
 
 ### 5.2 Draft policy (RD-18)
 
-- Every PR opens as a **draft** and stays draft until `MERCURY / claude-review` **and** `MERCURY / policy` both succeed on the head (SM T24 plus the policy guard). MERCURY then marks it ready (`markPullRequestReadyForReview`) and requests the operator's review (`POST /pulls/{n}/requested_reviewers`); the code-owner request follows automatically. The operator is notified only when there is something to decide.
+- Every PR opens as a **draft** (SEC-114) and stays draft until `MERCURY / claude-review` **and** `MERCURY / policy` both succeed on the head (SM T24 plus the policy guard). MERCURY then marks it ready (`markPullRequestReadyForReview`) and requests the operator's review (`POST /pulls/{n}/requested_reviewers`); the code-owner request follows automatically. The operator is notified only when there is something to decide.
 - **Target-repo onboarding requires CI to run on draft PRs** (§9.4). Otherwise T22 would wait for CI that never starts.
 - MERCURY converts the PR back to draft when the task is blocked for a security reason or a `spec_changed` hold is set (`linear.md` §8). MERCURY never closes a PR.
 
@@ -195,9 +197,9 @@ MERCURY rewrites the body on each revision (`PATCH /pulls/{n}`, key `out:gh:pr:b
 
 ## 6. Gates: MERCURY check runs and Claude reviews (RD-5)
 
-Both gates are **check runs** created by `mercury-bot` on the PR's head SHA. Check runs are per SHA, so every new head starts without MERCURY checks and is unmergeable until MERCURY concludes them. `external_id = <task_id>:<head_sha>:<gate>` (`gate ∈ {claude_review, policy}`) gives idempotent lookup through `GET /commits/{sha}/check-runs?check_name=<name>&app_id=<mercury_bot_app_id>`.
+Both gates are **check runs** created by `mercury-bot` on the PR's head SHA (SEC-113). Check runs are per SHA, so every new head starts without MERCURY checks and is unmergeable until MERCURY concludes them. `external_id = <task_id>:<head_sha>:<gate>` (`gate ∈ {claude_review, policy}`) gives idempotent lookup through `GET /commits/{sha}/check-runs?check_name=<name>&app_id=<mercury_bot_app_id>`.
 
-**Conclusions:** only `success`, `failure` and `action_required` are used. **`neutral` and `skipped` are never used for a MERCURY gate, because GitHub treats them as passing for required checks.** `action_required` carries `details_url` = the PR URL and an output text that says which local command clears it.
+**Conclusions:** only `success`, `failure` and `action_required` are used. **`neutral` and `skipped` are never used for a MERCURY gate, because GitHub treats them as passing for required checks.** SEC-113 and RD-5 mention `neutral` for `MERCURY / policy`; this design uses `action_required` instead (objection recorded in `reviews/41-revision-B.md` §3). `action_required` carries `details_url` = the PR URL and an output text that says which local command clears it.
 
 **Updates:** a check run is updated with `PATCH /check-runs/{id}`. If GitHub refuses to change the conclusion of a completed run, the handler creates a new check run with the same name and an `external_id` suffix `:<n>`. Phase 0 verifies which behaviour applies and that the required-check evaluation uses the most recent run of that name from the App (**ASM-B-56**).
 
@@ -209,7 +211,7 @@ The outbox op `github.check.upsert{gate, head_sha, status, conclusion, output}` 
 |---|---|---|
 | Push and PR upsert done (T20 effects) | `queued` | "Waiting for CI, then Claude review" |
 | Review runs claimed in `CLAUDE_PR_REVIEW` | `in_progress` | Run ids |
-| T24: code and security reviews both `approve` for this exact head, spec hash current | `success` | Verdict summaries, findings table (per §6.4), review ids and sha256, audit-chain head `(seq, hash)` (off-host anchor, RD-4) |
+| T24: code and security reviews both `approve` for this exact head, spec hash current | `success` | Verdict summaries, findings table (per §6.4), review ids and sha256. **Private repositories only:** the audit-chain head `(seq, hash)` as an extra anchor carrier; never on public repositories (Addendum B, OD-24) |
 | T25: revise | `failure` | Required changes (Claude's words, rendered) |
 | T26 escalation; `BLOCKED` with a PR; `spec_changed` hold set; repo `integrity_alert` or global `security_halt` while the PR is open | `action_required` | Reason code and the clearing command |
 | Hold cleared and a fresh review passes | new `success` | — |
@@ -234,35 +236,35 @@ T22 waits only on **non-MERCURY** required contexts (§7.2), so the MERCURY chec
 - Idempotency: list reviews, keep only those with `user.id == mercury_bot_user_id`, then match the marker `<!-- mercury:review=<review_id> -->`. Key `out:gh:review:<task_id>:<head_sha>`.
 - **Never `APPROVE` or `REQUEST_CHANGES` (GH-2).** A bot `REQUEST_CHANGES` would leave a blocking review that only dismissal clears, and MERCURY has no dismissal path; a bot `APPROVE` is meaningless under GH-1 and confusing. The gate is the check run. Phase 0 confirms that a `COMMENT` review by the App never blocks the merge box (**ASM-B-58**).
 
-### 6.4 Security findings publication policy (RD-18, OD-21)
+### 6.4 Security findings publication policy (RD-18, OD-21, SEC-507)
 
 | Finding | Public repository | Private repository (default) |
 |---|---|---|
 | Introduced by the PR, severity `medium`, `low`, `info` | Full details in the review body, inline comment and check output | Full details |
 | Introduced by the PR, severity `critical` or `high` | **Withheld:** generic line "Security finding withheld (severity high): local report `fnd_…`" | Full details (`github.security_findings.private_full = true`; the operator may set it to the public policy) |
-| Pre-existing (present at `base_sha`, not introduced by the PR), any severity | **Withheld** (generic line) | Withheld (generic line) |
+| Located outside the PR diff (pre-existing code), any severity | **Withheld** (generic line) | Withheld (generic line) |
 
-Withheld findings are delivered through the local SECURITY notification and `mercury show` (RD-19). The same policy applies to check-run output, PR comments and Linear comments.
+Withheld findings still fail `MERCURY / claude-review`. They are stored in the local report store and shown through `mercury show` and the local SECURITY notification (RD-19). No finding ever contains secret values or exploit payloads. The same policy applies to check-run output, PR comments and Linear comments.
 
 ## 7. Polling and event derivation
 
-All polling uses the `read` token with `If-None-Match`; an authorized `304` does not count against the primary rate limit [V-doc-src]. Mutations are serialised per installation with at least `github.mutation.min_spacing` between them.
+All polling uses the `read` token with `If-None-Match`; an authorized `304` does not count against the primary rate limit [V-doc-src]. Mutations are serialised per installation with at least `github.mutation_spacing_s` between them.
 
 ### 7.1 Endpoints and cadence (keys; values in the parameter table)
 
 | Resource | Endpoint | When | Cadence key |
 |---|---|---|---|
-| PR state | `GET /repos/{o}/{r}/pulls/{n}` | `PR_OPEN` … `AWAITING_HUMAN_APPROVAL`, `BLOCKED` with PR | `github.poll.ci_fast` for the first `github.poll.ci_fast_window` after a push, then `github.poll.ci`; `github.poll.human_wait`, then `github.poll.human_wait_slow` after `github.poll.human_wait_slow_after` |
+| PR state | `GET /repos/{o}/{r}/pulls/{n}` | `PR_OPEN` … `AWAITING_HUMAN_APPROVAL`, `BLOCKED` with PR | `github.poll_pr_s` |
 | Reviews | `GET /pulls/{n}/reviews?per_page=100` | same | same |
 | Review comments | `GET /pulls/{n}/comments?sort=created&direction=asc&since=<cursor>` | When an operator review appears | on demand |
-| Check runs | `GET /commits/{head_sha}/check-runs?per_page=100` | After push until the required non-MERCURY checks conclude | `github.poll.ci_fast` / `github.poll.ci` |
+| Check runs (and `GET /commits/{head_sha}/status` for status-based contexts) | `GET /commits/{head_sha}/check-runs?per_page=100` | After push until the required non-MERCURY checks conclude | `github.poll_checks_s` |
 | Check annotations | `GET /check-runs/{id}/annotations` | On a required check failure | once |
 | Branch rules | `GET /repos/{o}/{r}/rules/branches/{base}` | At each T22 and T34 evaluation | on demand (ETag) |
-| Base branch head | `GET /repos/{o}/{r}/branches/{base}` | While a PR is open | `github.poll.base` |
+| Base branch head | `GET /repos/{o}/{r}/branches/{base}` | While a PR is open | `github.poll_base_branch_s` |
 | Issue events | `GET /issues/{n}/events` | When the PR is observed closed | once |
-| Reconciliation | `GET /pulls?state=all&head=<owner>:<branch>` per known branch | Startup, wake, every `github.reconcile.interval` | — |
+| Reconciliation | `GET /pulls?state=all&head=<owner>:<branch>` per known branch | Startup, wake, every `github.reconcile_open_prs_min` | — |
 
-CI wait behaviour (deadline, `ci_status = timed_out`, then Claude review) is defined by SM T22 and §7.3 of the state machine; the deadline key is `github.ci_wait.deadline`.
+CI wait behaviour (deadline, `ci_status = timed_out`, then Claude review) is workflow policy defined by SM T22 and state-machine §7.3.
 
 ### 7.2 Required contexts (RD-18, RB-17)
 
@@ -299,7 +301,7 @@ Closed by an operator id (from `GET /issues/{n}/events`, `actor.id`) → SM T33 
 
 ## 8. Merge verification (single definition, RD-14)
 
-When the PR poll shows `merged == true`, the coordinator fetches fresh data (no cache) and evaluates M1–M8. SM §8.5 references this list. All identities are compared by **numeric id**; the configuration holds `operator.github_user_ids`. A check whose data is not yet available (for example a 404 shortly after merge) is retried later and causes no transition.
+When the PR poll shows `merged == true`, the coordinator fetches fresh data (no cache) and evaluates M1–M8. SM §8.5 and SEC-905 reference this list; halt scoping follows SEC-906. All identities are compared by **numeric id**; the configuration holds `operator.github_user_ids`. A check whose data is not yet available (for example a 404 shortly after merge) is retried later and causes no transition.
 
 | # | Check | Source | Failure code | Scope on failure |
 |---|---|---|---|---|
@@ -418,7 +420,7 @@ Onboarding refuses the repository until every item passes; the result is stored 
 
 ### 9.6 Governance drift monitor and base-commit audit
 
-- **Cadence:** at startup, after every wake, and every `governance.drift.interval` (SEC-108 bound).
+- **Cadence:** at startup, after every wake, and every `gov.drift_check_interval_min` (SEC-108 bound).
 - **Reads:** rulesets and their details, branch rules, repository settings (`allow_auto_merge`, merge methods), collaborators, `CODEOWNERS` blob SHA, both Apps' installation permissions and repository selections. Actions settings are not readable without `administration:read` and stay a periodic operator attestation (ASM-E-03).
 - **Base-commit audit (RE-16):** every commit on the default branch since the last audit (`GET /commits?sha=<base>&since=<cursor>`) must be the merge commit of a verified PR or authored by an operator id; otherwise `unexpected_base_commit`.
 - **On any deviation:** global `security_halt` (dispatch stops; polling and verification continue) plus one SECURITY notification (RE-17, RE-25). It clears only through the human-presence tier after the operator restores or re-baselines the settings.
@@ -456,13 +458,13 @@ The GitHub adapter is an allowlist of (method, path template, App, token purpose
 |---|---|---|
 | `GET /repos/{o}/{r}`, `/branches/{b}`, `/rules/branches/{b}`, `/compare/{base}...{head}`, `/git/commits/{sha}`, `/contents/.github/CODEOWNERS`, `/commits?sha=&since=` | bot `read` | Polling, merge verification, onboarding, base-commit audit |
 | `GET /pulls?head=&state=all`, `/pulls/{n}`, `/pulls/{n}/reviews`, `/pulls/{n}/comments`, `/issues/{n}/comments`, `/issues/{n}/events` | bot `read` | PR, reviews, human comments, closed-by |
-| `GET /commits/{sha}/check-runs`, `/check-runs/{id}/annotations` (`/commits/{sha}/status` only if `statuses` is granted) | bot `read` | CI and MERCURY gate state |
+| `GET /commits/{sha}/check-runs`, `/check-runs/{id}/annotations`, `/commits/{sha}/status` | bot `read` | CI and MERCURY gate state |
 | git smart-HTTP `receive-pack` to `refs/heads/mercury/**` only; `DELETE /git/refs/heads/mercury/{…}` | bot `push` | Push from the mirror; cleanup |
 | `POST /pulls`; `PATCH /pulls/{n}` (title, body; `state: open` only to reopen per SM); GraphQL `markPullRequestReadyForReview`, `convertPullRequestToDraft` | bot `pr` | PR lifecycle |
 | `POST /pulls/{n}/requested_reviewers` (operator only); `POST /issues/{n}/comments`; `POST /issues/{n}/labels`, `DELETE /issues/{n}/labels/{name}` (MERCURY labels only) | bot `pr` | Review request, comments, labels |
 | `POST /pulls/{n}/reviews` with `event: "COMMENT"` only | bot `pr` | Claude reviews |
 | `POST /check-runs`, `PATCH /check-runs/{id}` with `name ∈ {MERCURY / claude-review, MERCURY / policy}` only | bot `check` | MERCURY gates |
-| `GET /repos/{o}/{r}/rulesets`, `/rulesets/{id}`, `/collaborators` | ops `audit` | Drift monitor |
+| `GET /repos/{o}/{r}/rulesets`, `/rulesets/{id}`, `/collaborators` | bot `audit` | Drift monitor |
 | `POST /repos/{o}/project-mercury/issues`, `PATCH /issues/{n}`, `POST /issues/{n}/comments` | ops `ops` | Heartbeat, ops and SECURITY alerts |
 | `PUT /repos/{o}/{anchor}/contents/{path}` | ops `anchor` | Daily audit anchor |
 | `POST /app/installations/{id}/access_tokens`, `GET /app/installations/{id}` | App JWT | Token minting, permission self-check |
@@ -488,14 +490,14 @@ Latency targets are requirements (`planning/traceability.md`), measured from the
 
 ### 11.2 Connectivity probe (RD-18, RB-10)
 
-- **Passive first:** an integration is "up" if an authenticated request to it succeeded within `net.probe.passive_window`.
+- **Passive first:** an integration is "up" if an authenticated request to it succeeded within `net.error_probe_window_s`.
 - **Active probe** (only when no recent success exists): GitHub — an **authenticated, ETag-conditional** `GET /repos/{o}/{r}` for a managed repository with the `read` token (a 304 is free); Linear — `query { viewer { id } }` with the app token. **Never unauthenticated** (GitHub allows 60 unauthenticated requests per hour per IP, shared with the operator's own tools).
-- A network-class error counts as `network_down` if the probe fails at the time of the error or within `net.probe_window` after it (§15.1).
+- A network-class error counts as `network_down` if the probe fails at the time of the error or within `net.error_probe_window_s` after it (§15.1). While offline the probe repeats every `net.probe_interval_offline_s`; `network_down` clears after `net.stability_s` of continuous success.
 - `network_down` (global hold) is set when both GitHub and Linear probes fail; a single failing integration opens `circuit_open{integration}` instead.
 
 ### 11.3 Wake and restart
 
-On coordinator start or detected wake: wait for full wake (RD-16: a full-wake signal or `host.dark_wake_min_awake` of continuous credited awake time), then the connectivity probe, then the Linear Q3 reconciliation, GitHub reconciliation for every non-terminal task and the drift monitor, then the normal cadence. Due reminders and expiries are coalesced into one summary notification (RD-14 timer rule). Polling stops while asleep.
+On coordinator start or detected wake: wait for full wake (RD-16: a full-wake signal or `wake.dark_wake_min_awake_s` of continuous credited awake time), then the connectivity probe, then the Linear Q3 reconciliation, GitHub reconciliation for every non-terminal task and the drift monitor, then the normal cadence. Due reminders and expiries are coalesced into one summary notification (RD-14 timer rule). Polling stops while asleep.
 
 ## 12. Sequence diagrams
 
@@ -572,7 +574,7 @@ sequenceDiagram
         M->>AX: pr_security_review over head_sha snapshot
     end
     AX-->>M: both verdicts approve for head_sha
-    M->>G: COMMENT review and check claude-review success with chain head
+    M->>G: COMMENT review and check claude-review success
     alt policy check is action_required
         M->>M: BLOCKED policy_ack_required until mercury policy ack
         Op->>M: mercury policy ack with presence confirmation
@@ -584,7 +586,7 @@ sequenceDiagram
     G-->>L: integration moves issue to Done in default mode
     M->>G: poll PR merged, fresh reads, checks M1 to M8
     alt verification passes
-        M->>L: comment completed with merge sha and chain head
+        M->>L: comment completed with merge sha and audit chain head
         M->>M: COMPLETED, cleanup worktree, archive sessions
     else verification fails
         M->>M: BLOCKED merge_verification_failed with scope per check
@@ -746,18 +748,18 @@ The sequence is updated in the same transaction as the inbox insert, so it is cr
 
 Facts used [V-doc-src]: installation limit 5,000 requests/h (scaling to at most 12,500); authorized 304s and `GET /rate_limit` do not count; secondary limits of 100 concurrent requests, 900 points/min per endpoint, 80 content-creating requests/min and 500/h.
 
-Counted requests per hour, **worst case with no 304s**, computed with the proposed defaults of the parameter table (`github.poll.*`; recompute if they change), at WIP `limits.max_active_tasks` = 4 with one PR in CI wait and three awaiting the human:
+Counted requests per hour, **worst case with no 304s**, computed with the values of `macos-service.md` §2.5 (`github.poll_pr_s`, `github.poll_checks_s`, `github.poll_base_branch_s`; recompute if they change), at WIP `limits.max_active_tasks` = 4 with one PR in CI wait and three awaiting the human:
 
 | Item | Formula | Requests/h |
 |---|---|---|
-| PR in CI wait (pull, reviews, check runs) | 3 × 3600 / `github.poll.ci_fast` | 360 |
-| PRs awaiting the human, first hour (pull, reviews) | 3 × 2 × 3600 / `github.poll.human_wait` | 360 (72 after `human_wait_slow_after`) |
-| Base branch heads | repos × 3600 / `github.poll.base` | ≤ 24 |
+| PR in CI wait (pull, reviews, check runs, at the 30 s check cadence; pull and reviews are slower in practice) | 3 × 3600 / 30 | ≤ 360 |
+| PRs awaiting the human (pull, reviews) | 3 × 2 × 3600 / 120 | 180 (36 after 24 h) |
+| Base branch heads | repos × 3600 / 300 | ≤ 24 |
 | Reconciliation, drift monitor, base-commit audit | per repo and task | ≤ 40 |
 | Writes (bounded by SEC-705) | `budget.github_mutations_per_hour` | ≤ 60 |
-| **Total** | | **≤ 850 (17 % of 5,000)**, under the 1,000 non-304/h budget |
+| **Total** | | **≤ 670 (13 % of 5,000)**, under the 1,000 non-304/h budget |
 
-Content-creating writes stay far below the secondary 80/min and 500/h. ETags are kept warm by one long-lived `read` token per installation; whether GitHub varies ETags by token, and the resulting 304 ratio across hourly re-mints, is measured in M2 (**ASM-B-65**). When `x-ratelimit-remaining` falls below `github.ratelimit.low_watermark`, cadences move to their slow values.
+Content-creating writes stay far below the secondary 80/min and 500/h. ETags are kept warm by one long-lived `read` token per installation; whether GitHub varies ETags by token, and the resulting 304 ratio across hourly re-mints, is measured in M2 (**ASM-B-65**). When `x-ratelimit-remaining` falls below 10 % of the limit, cadences move to their slow values.
 
 ## 15. Retry matrix (single source, RD-18)
 
@@ -767,11 +769,11 @@ SM §7.1 references this table for accounting; per-run-kind attempt caps and bac
 
 | Class | Applies to | Consumes run attempt | Counts toward outbox `dead` | Consumes revision budget | Hold or escalation |
 |---|---|---|---|---|---|
-| `network_down` (network-class error while the probe fails at the error or within `net.probe_window`) | API calls, agent runs | No | No | No | `network_down` (global) or `circuit_open{integration}`; never `BLOCKED` |
+| `network_down` (network-class error while the probe fails at the error or within `net.error_probe_window_s`) | API calls, agent runs | No | No | No | `network_down` (global) or `circuit_open{integration}`; never `BLOCKED` |
 | `rate_limited` (429, secondary limit, `RATELIMITED`) | API | No | No | No | `rate_limited{integration}` until reset |
 | `transient_api` (5xx, timeouts, model overload) | API, model calls | No | No | No | Backoff `backoff.api` / `backoff.model_api`; repeated failures open `circuit_open{integration}` instead of dead-lettering |
 | `host_sleep`, `lost_by_coordinator_crash`, `cancelled_by_coordinator` | Runs | No | — | No | Re-dispatch |
-| `lost_by_host` (boot session changed, supervisor lease lost) | Runs | No; separate cap `runs.lost_by_host_cap` per step | — | No | Ops alert at the cap, not `BLOCKED` |
+| `lost_by_host` (boot session changed, supervisor lease lost) | Runs | No; separate cap `run.lost_by_host_cap` per step | — | No | Ops alert at the cap, not `BLOCKED` |
 | `integration_auth_failed` (401 after one re-mint) | API | No | No | No | `integration_auth_failed{github|linear}` hold; one notification |
 | `agent_auth_failed` | Agent runs | No | — | No | `agent_auth_failed{claude|codex}` hold |
 | `config_fatal` (self-test, pins, grammar, schema rejection, contract drift, allowlist refusal) | All | No | Item `dead` | No | `config_fatal` hold (global or agent); notification |
@@ -796,15 +798,15 @@ SM §7.1 references this table for accounting; per-run-kind attempt caps and bac
 
 ### 15.3 Circuit breakers and mutation budgets
 
-- A breaker opens after `circuit.failures` consecutive non-auth failures within `circuit.window`, or immediately on an auth failure, by setting `circuit_open{integration}`. Half-open probe every `circuit.half_open_interval`. While open, no new work that needs the integration is dispatched; in-flight work that does not need it continues (for example Codex continues while Linear is down).
+- A breaker opens after `circuit.open_after_failures` consecutive non-auth failures within `circuit.window_min`, or immediately on an auth failure, by setting `circuit_open{integration}`. Half-open probe every `circuit.half_open_probe_min`. While open, no new work that needs the integration is dispatched; in-flight work that does not need it continues (for example Codex continues while Linear is down).
 - **Mutation budgets (SEC-705):** per repository and integration, `budget.github_mutations_per_hour` and `budget.linear_mutations_per_hour`. Exceeding one stops that integration's writes (`circuit_open{integration_writes}`) and raises an ops alert, which protects against comment or check loops.
 
 ## 16. Credential boundary
 
 | Credential | Held by (memory) | At rest | Scope | Never available to |
 |---|---|---|---|---|
-| `mercury-bot` private key | `github-auth` in `mercuryd` | Login Keychain (`com.usjbro.mercury.*`) | Mints narrowed tokens for target repos | Agents, `verify`, `deps_install`, logs, DB |
-| `mercury-ops` private key | `github-auth` | Login Keychain | Mints ops, anchor and audit tokens | Same |
+| `mercury-bot` private key | `github-auth` in `mercuryd` | `com.usjbro.mercury.github-bot-key` | Mints narrowed tokens for target repos | Agents, `verify`, `deps_install`, logs, DB |
+| `mercury-ops` private key | `github-auth` | `com.usjbro.mercury.github-ops-key` | Mints ops and anchor tokens | Same |
 | Installation tokens | `mercuryd`; the `push` token also briefly to `git push` via the askpass fd | Not stored (≤ 1 h) | Narrowed per §2.4 | Agents |
 | Linear client secret and app token | `linear-auth` in `mercuryd` | Secret in Keychain; token memory only | `read`, `write`, app actor | Agents |
 | Anthropic API key | `mercuryd` → fd 3 → `agent-exec` → Claude process env (agent uid); in-process under ALT-B-1 | Login Keychain | Model calls, dedicated workspace with spend cap | Codex, `verify`, `deps_install`, git |
@@ -865,7 +867,7 @@ The control socket token and the human-presence helper are D's and E's (`macos-s
 | P0-209 | ASM-B-21 | Codex behaviour on an output-schema mismatch | Failure mapping |
 | P0-210 | ASM-B-22 | Exact list of files Codex writes in `CODEX_HOME` | Per-task home ACLs |
 | P0-211 | ASM-B-61 | Each `codex-strict` wire schema is accepted by the pinned Codex and provider | Codex dispatch |
-| P0-213 | ASM-B-59 | SDK `spawnClaudeCodeProcess` through `sudo … agent-exec --kind claude` from a LaunchAgent: pipes, fd-3 key, result with `structured_output` | Claude transport choice (else ALT-B-1) |
+| P0-213 | ASM-B-59 | SDK `spawnClaudeCodeProcess` through `sudo … agent-exec --run-dir` with spec `kind: claude` from a LaunchAgent: pipes, fd-3 key, result with `structured_output` | Claude transport choice (else ALT-B-1) |
 | P0-214 | ASM-B-60 | Every decision type with the exact isolation profile returns `success` with `structured_output` (RB-18) | Claude dispatch |
 | P0-220 | ASM-B-30, ASM-B-31 | Linear client-credentials grant, `actor=app`, token lifetime and team reach | Linear writes |
 | P0-221 | ASM-B-32/33/34/38/39 [V-src] | Field permissions at runtime for the app token | Linear polling |
@@ -874,7 +876,7 @@ The control socket token and the human-presence helper are D's and E's (`macos-s
 | P0-224 | ASM-B-55 | Which Linear link types close an issue (branch, PR title, commit body) | `mercury_owns_all` mode |
 | P0-225 | ASM-B-64 (ASM-E-05, ASM-E-11) | The app token cannot use diff review or merge; Linear app/MCP merge paths | Linear writes |
 | P0-230 | ASM-B-50 | GitHub rejects App pushes touching `.github/workflows/**` without `workflows` | GH-6 |
-| P0-231 | ASM-B-51 [V-doc-src], ASM-B-66 | `rules/branches` and rulesets with `metadata:read`; `bypass_actors` visible to a metadata reader | Drift monitor |
+| P0-231 | ASM-B-51 [V-doc-src], ASM-B-66 | `rules/branches`, rulesets and collaborators with a `mercury-bot` token narrowed to `metadata:read`; `bypass_actors` visible to it | Drift monitor |
 | P0-232 | ASM-B-52 | GitHub Actions integration id | Ruleset JSON |
 | P0-233 | ASM-B-53 | App without `contents` calling `enablePullRequestAutoMerge` gets `FORBIDDEN` | G-SPLIT |
 | P0-234 | ASM-B-54 | Org "restrict updates" blocks PR merges by non-bypass Apps | G-ORG |

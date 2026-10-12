@@ -10,7 +10,7 @@ What this document does **not** restate (single source of truth elsewhere):
 |---|---|
 | SQL DDL for every table named here | [`components.md` §6](components.md#6-persistent-data-model) |
 | Message and agent-output schemas | [`../protocols/messages.md`](../protocols/messages.md), [`../protocols/schemas/`](../protocols/schemas/) |
-| Operational parameter values (wake grace, stall thresholds, lease interval, disk thresholds, watchdog, shutdown budget, dark-wake threshold) | Parameter table, [`../operations/macos-service.md` §2](../operations/macos-service.md#2-operational-parameter-table-normative), cited here as **MS-PARAM** (parameter names such as `wake.grace_s`) |
+| Operational parameter values (run deadlines and stall thresholds `run.<kind>.*`, wake grace, lease interval, disk thresholds, watchdog, shutdown budget, dark-wake threshold). Workflow policy (attempts, backoff, revision budgets, reminder timers) stays here (Addendum B) | Parameter table, [`../operations/macos-service.md` §2](../operations/macos-service.md#2-operational-parameter-table-normative), cited here as **MS-PARAM** (parameter names such as `wake.grace_s`) |
 | Filesystem layout (`MERCURY_HOME`, `WORK_ROOT`, run directories) | `operations/macos-service.md` §7.1 |
 | API retry matrix and failure-class accounting for external calls | `integrations/github.md` Part B §15 (**GH §15**) |
 | Dedup key formats | `integrations/github.md` Part B, dedup key catalogue (**GH-DEDUP**) |
@@ -352,7 +352,7 @@ Rules (RD-3):
 | `agent_auth_failed` | agent | Run classified `auth_failed`/billing | Self-test success | No | notification | — |
 | `budget_exhausted` | agent or task | Daily spend cap or task token cap | Next day / ★ grant | No | — | — |
 | `config_fatal` | global or agent | Self-test failure, schema/wire-copy mismatch, `invalid_json_schema` rejection (RD-15), `doctor` failure of the agent-uid setup | Successful self-test | Yes (no new runs; running ones finish) | ops alert | — |
-| `low_disk` | global | Free space below the dispatch threshold (MS-PARAM) | Recovered | No (lower thresholds interrupt runs, MS-PARAM) | ops alert | — |
+| `low_disk` | global | Free space below `disk.dispatch_hold_gib` / `disk.dispatch_hold_pct` | Recovered | No (`disk.interrupt_*` thresholds interrupt runs) | ops alert | — |
 | `integrity_check_failed` | global (**safe mode**) | Startup `quick_check`/`integrity_check` failure, audit-chain verification failure (RD-4), schema newer than code | ★ `mercury unpause --safe-mode` after verify/restore | **Yes** (adopted runs are not kept, RD-11) | SECURITY notification once | — |
 | `security_halt` | global or repo | Merge verification M2/M5 failure (§8.5), governance drift, secret-scan hit at push, git-config tamper, sandbox violation, any SEC-902 trigger (E owns the list) | ★ `mercury security unhalt [--repo R]` only (INV-26) | **Yes** (interrupt all agent runs in scope; adopted runs not kept) | SECURITY notification; ops issue | — |
 | `integrity_alert` | repo | Merge verification M3/M6/M7 failure (§8.5) | ★ `ack-merge` of the failing task (T40) or a successful re-verify | No | SECURITY notification | — |
@@ -452,22 +452,24 @@ The **failure-class accounting for external calls is defined once in GH §15** (
 
 Revision budgets (§9) are consumed **only** by T12 and T28; run retries never touch them.
 
-| Run kind | Executor (uid) | Lane | Max attempts | On exhaustion |
-|---|---|---|---|---|
-| `claude_triage` | Claude (`_mercuryagent`) | read-only | 2 per cycle | Skip cycle; notify after 3 consecutive failed cycles |
-| `claude_authorize` | Claude | read-only | 3 | T04 (initial) or `BLOCKED(needs_human_decision)` (reauthorize) |
-| `codex_plan` | Codex (`_mercuryagent`) | mutating | 3 | T08 |
-| `claude_plan_review` | Claude | read-only | 3 | T11 |
-| `claude_revision_request` | Claude | read-only | 3 | T13 / T29 |
-| `deps_install` | agent uid, Seatbelt, `--ignore-scripts`, registry allowlist (RD-17) | mutating | 2 | T19 (`run_exhausted`) |
-| `codex_implement` / `codex_revise` | Codex | mutating | 2 (resume thread after `stalled` only if no reset; fresh after `crash`) | T19 (`run_exhausted`) |
-| `verify` | agent uid, Seatbelt, **no network** (RD-17) | mutating | 2 for infra failures; a test failure is a result | T19 (`run_exhausted`) |
-| `claude_code_review` / `claude_security_review` | Claude | read-only | 3 | T26 |
-| `git_step` (commit, merge-base, reset, snapshot build) | coordinator (no repo code executed) | mutating | 5 | `BLOCKED(run_exhausted)` |
+Attempt counts and backoff are workflow policy and are defined here (Addendum B §4); deadlines and stall thresholds are operational values cited by their MS-PARAM names.
 
-Deadlines and backoff values per agent kind are B's (CL §10, CX §11–§12); stall thresholds are MS-PARAM. **Stall** requires both no stdout growth **and** no process-group CPU-time progress (`agent-ctl stats`) for the stall threshold, and the threshold while a command is running is at least the repo's test timeout (RD-15).
+| Run kind | Executor (uid) | Lane | Max attempts | Backoff | Deadline / stall (MS-PARAM) | On exhaustion |
+|---|---|---|---|---|---|---|
+| `claude_triage` | Claude (`_mercuryagent`) | read-only | 2 per cycle | 5 min | `run.claude_triage.*` | Skip cycle; notify after 3 consecutive failed cycles |
+| `claude_authorize` | Claude | read-only | 3 | 2, 10 min | `run.claude_authorize.*` | T04 (initial) or `BLOCKED(needs_human_decision)` (reauthorize) |
+| `codex_plan` | Codex (`_mercuryagent`) | mutating | 3 | 2, 10, 30 min | `run.codex_plan.*` | T08 |
+| `claude_plan_review` | Claude | read-only | 3 | 2, 10 min | `run.claude_plan_review.*` | T11 |
+| `claude_revision_request` | Claude | read-only | 3 | 2, 10 min | `run.claude_revision_request.*` | T13 / T29 |
+| `deps_install` | agent uid, Seatbelt, ignore-scripts, registry allowlist (RD-17) | mutating | 2 | 5 min | `run.deps_install.*` | T19 (`run_exhausted`) |
+| `codex_implement` / `codex_revise` | Codex | mutating | 2 (resume thread after `stalled` only if no reset; fresh after `crash`) | 5, 20 min | `run.codex_implement.*` / `run.codex_revise.*` (authorization may lower) | T19 (`run_exhausted`) |
+| `verify` | agent uid, Seatbelt, **no network** (RD-17) | mutating | 2 for infra failures; a test failure is a result | 2 min | `run.verify.*` | T19 (`run_exhausted`) |
+| `claude_code_review` / `claude_security_review` | Claude | read-only | 3 | 2, 10 min | `run.claude_code_review.*` / `run.claude_security_review.*` | T26 |
+| `git_step` (commit, merge-base, reset, snapshot build) | coordinator (no repo code executed) | mutating | 5 | 30 s exponential | `run.git_step.*` | `BLOCKED(run_exhausted)` |
 
-**No-progress detector.** A task whose current step accumulated less than the no-progress threshold of credited time across its last N environment-class interruptions raises one `decision_needed` notification without changing state (thresholds in MS-PARAM).
+Backoff: `delay = min(base × 2^(attempt−1), max) × U(0.8, 1.2)`; non-consuming classes use the same schedule without counting. Adapter-internal API retries before a class is assigned follow GH §15 and CL/CX. **Stall** requires both no stdout growth **and** no process-group CPU-time progress (`agent-ctl stats`) for the stall value; while a command runs inside a Codex turn the effective stall value is at least `repo.test_timeout_min` (RD-15).
+
+**No-progress detector.** A task whose current step accumulated less than the no-progress threshold of credited time across its last N environment-class interruptions raises one `decision_needed` notification without changing state (policy defaults: < 5 min credited across the last 5 interruptions).
 
 ### 7.2 Awake time versus wall time
 
@@ -479,17 +481,17 @@ The credited-time algorithm is normative in [`components.md` §10.10](components
 
 ### 7.3 State-level timers
 
-All timers obey INV-20 (fire only after an attempt made after the latest wake or start; measured from first observation; coalesced on wake). Durations not stated here are OD-08 (authorization expiry) or MS-PARAM.
+All timers obey INV-20 (fire only after an attempt made after the latest wake or start; measured from first observation; coalesced on wake). These durations are workflow policy owned here (authorization expiry is OD-08, default 7 d).
 
 | State | Timer | Measured from | Action when it fires |
 |---|---|---|---|
-| `AWAITING_AUTHORIZATION` | No decision within the decision-wait threshold | state entry | Notification `decision_needed` (once) |
+| `AWAITING_AUTHORIZATION` | No decision within 24 h (wall) | state entry | Notification `decision_needed` (once) |
 | `AUTHORIZED` … `AWAITING_HUMAN_APPROVAL` | Authorization `expires_at` (OD-08) | authorization creation | `authorization_expired` hold + reauthorize run (§5.1); never directly `BLOCKED` |
-| `PR_OPEN` | CI wait `repo.ci_wait` | first observation of the pushed head | T22 with `ci_status = timed_out` (required checks still gate the merge) |
+| `PR_OPEN` | CI wait `repo.ci_wait_minutes` (default 90 min) | first observation of the pushed head | T22 with `ci_status = timed_out` (required checks still gate the merge) |
 | `PR_OPEN` | PR-chain outbox item `dead` (non-network error only) | — | `BLOCKED(run_exhausted)` |
-| `AWAITING_HUMAN_APPROVAL` | reminder schedule | state entry | Reminder notification only; never a transition |
-| `MERGED` | Verification incomplete after the verification deadline | **first observation of the merge** (not `merged_at`) and only after ≥ 1 verification attempt since the latest wake | `BLOCKED(external_state_conflict)` (RD-16 scenario: merged from the iPhone while the Mac slept → verified on wake, not blocked) |
-| `BLOCKED` | reminders; `blocked_ttl` | block entry | Reminder; T39 at TTL |
+| `AWAITING_HUMAN_APPROVAL` | Reminders at 24 h, 72 h, then every 7 d | state entry | Reminder notification only; never a transition |
+| `MERGED` | Verification incomplete 24 h after | **first observation of the merge** (not `merged_at`) and only after ≥ 1 verification attempt since the latest wake | `BLOCKED(external_state_conflict)` (RD-16 scenario: merged from the iPhone while the Mac slept → verified on wake, not blocked) |
+| `BLOCKED` | Reminders at 24 h, 72 h, then weekly; `blocked_ttl` 30 d | block entry | Reminder; T39 at TTL |
 
 ---
 
@@ -664,7 +666,7 @@ Executed by the Recovery Manager at startup and after a wake gap, after the run 
 
 Additional startup rules:
 
-- **Downtime notice** when the previous heartbeat is older than the downtime threshold (MS-PARAM).
+- **Downtime notice** when the previous heartbeat is older than `recovery.downtime_notice_min`.
 - **Durability check** (INV-25): for each non-terminal task with `last_commit_sha`, `git cat-file -e` in the mirror; missing → the step's run is `lost_by_host`, WorktreeResetPolicy to the last durable commit, step re-run.
 - **DB restored from backup** (operator-initiated `audit.restore_epoch`, RD-4): every non-terminal task whose latest authority rows cannot be verified, or whose artifacts are missing, goes to `BLOCKED(reauthorization_required)`; never `guard_integrity_failure`.
 - **Orphan remote objects** (RC-07): `mercury/*` branches or MERCURY-authored PRs whose marker task id is unknown are recorded in `orphan_remote_objects` with one notification. They are never adopted automatically; `mercury orphan adopt <pr>` ★ creates a new task in `AWAITING_AUTHORIZATION` (`proposal_source = orphan_adoption`), and `mercury orphan close` closes them.
