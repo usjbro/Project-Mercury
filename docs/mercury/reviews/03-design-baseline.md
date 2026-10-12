@@ -39,3 +39,18 @@ Node.js (LTS) + TypeScript coordinator, SQLite (WAL) as the durable local store 
 | D DevOps/Platform | `operations/macos-service.md`, `operations/recovery.md`, `reviews/13-agent-D-report.md` |
 | E Security | `security/threat-model.md`, `reviews/14-agent-E-report.md` (initial assessment; `security/security-review.md` is written in Phase 5) |
 | F TPM | `planning/traceability.md` (requirements + RTM), `testing/verification-plan.md` (acceptance criteria skeleton; other agents contribute in later phases), `reviews/15-agent-F-report.md` |
+
+## Discovery facts every Phase 2 agent must account for (added after Phase 1)
+Sources: `01-discovery-local.md`, `01-discovery-integrations.md`, `02-discovery-agent-runtimes.md`, `02-discovery-platform.md`.
+1. The Mac was not observable; all Mac facts are assumptions → Phase 0 verification milestone required.
+2. The workflow MERCURY replaces exists in `usjbro/network_monitor` (Linear team `JAM`, Slack `#network-monitor`) using shell scripts, gate files, `.ai/` state and `.worktrees/<slug>`. MERCURY must coordinate work on **target repositories** such as `network_monitor`; `project-mercury` holds MERCURY itself.
+3. Today agents act under the **human's own identities** (GitHub `usjbro` admin, Linear user, Slack user). Separate agent identities are a prerequisite for the approval boundary.
+4. Target repos are on a **personal GitHub account** (public): every collaborator has write; bypass lists/push restrictions are org-only → "human approves" is enforceable (CODEOWNERS=human + required code-owner review + require approval of most recent push + dismiss stale), but "only human clicks merge" is detect-after-the-fact unless repos move to an organization. Needs an ADR + operator decision.
+5. Linear: one team (`JAM-n`), 7 default states, specs in issue descriptions with AC checkboxes, heavy blocks/blocked-by usage, Linear GitHub integration auto-moves status on PR events, Linear "coding sessions" can start Claude/Codex on delegated issues (a second, unauthorized start path to detect/refuse). Agents today use "next Todo" as the queue (conflicts with constraint).
+6. Claude headless/Agent SDK runs execute repo-provided hooks / `.mcp.json` unless isolated (`settingSources: []` / `--bare`, `--strict-mcp-config`, explicit tool allowlist, hooks disabled). Claude Agent SDK offers `canUseTool`, hooks, structured output, interrupt, budgets.
+7. Codex `exec` runs with approval policy `never`; sandbox mode is the real control. `workspace-write` blocks network by default and protects `.git` → Codex likely **cannot commit** in a worktree (verify). `codex mcp-server` removed in 0.162.x; app-server experimental. `--output-schema` gives structured final output.
+8. Neither agent CLI enforces a whole-run timeout; coordinator must enforce deadlines and kill process groups.
+9. No inbound: poll GitHub REST with ETags (304s are free); Events/Notifications APIs too laggy for control flow; poll Linear by `updatedAt`. Self-hosted runner on public repo discouraged.
+10. launchd LaunchAgent (runs only while user logged in); SIGTERM then SIGKILL after ExitTimeOut; caffeinate only prevents idle sleep; keep files out of TCC-protected folders; detached children escape launchd cleanup.
+11. SQLite WAL + `synchronous=FULL` + `fullfsync` on macOS; single writer; Node 24 LTS target; wrap `node:sqlite`/`better-sqlite3` behind an interface.
+12. Slack pain points: missed replies, unnoticed stalls (14h), human relays, decisions not recorded, leaked bot token, monitoring only while a chat session is open.
