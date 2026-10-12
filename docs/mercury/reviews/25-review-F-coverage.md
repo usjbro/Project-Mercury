@@ -74,8 +74,8 @@ I did not run anything against any external system.
 | Severity | Count |
 |---|---|
 | Critical | 1 |
-| High | 12 |
-| Medium | 19 |
+| High | 11 |
+| Medium | 20 |
 | Low | 5 |
 | **Total** | **37** |
 
@@ -426,7 +426,7 @@ All 14 are **C** in VP §3. The test IDs of C (SMT/DBT/CT/RT), D (T-REC-01…08)
 | RF-36 | Low | other | TR §5 ADR-P keys; OV §15 | **Provisional ADR keys are still cited.** | Apply the mapping in §6.5 and retire ADR-Pnn. | F |
 | RF-37 | Low | ambiguous-contract | ADR-005 (implementation "resume or fresh, B decides"); CX §3.3 (fresh thread) | **ADR-005 is not updated to B's decision.** | A amends ADR-005. | A |
 
-Counts: Critical 1 (RF-01); High 12 (RF-02…RF-12); Medium 19; Low 5.
+Counts: Critical 1 (RF-01); High 11 (RF-02…RF-12); Medium 20; Low 5 (RF-29, RF-30, RF-35, RF-36, RF-37).
 
 ---
 
