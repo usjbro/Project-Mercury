@@ -63,11 +63,16 @@
               "adopt",
               "reset",
               "reopen",
+              "discard_worktree_changes",
               "request_reauth",
               "ack_merge",
+              "policy_ack",
+              "policy_reject",
+              "security_unhalt",
               "cancel",
               "abandon"
-            ]
+            ],
+            "type": "string"
           },
           "minItems": 0,
           "maxItems": 10
@@ -77,6 +82,31 @@
             "string",
             "null"
           ]
+        },
+        "presence_required_actions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "resume",
+              "retry",
+              "grant",
+              "adopt",
+              "reset",
+              "reopen",
+              "discard_worktree_changes",
+              "request_reauth",
+              "ack_merge",
+              "policy_ack",
+              "policy_reject",
+              "security_unhalt",
+              "cancel",
+              "abandon"
+            ]
+          },
+          "minItems": 0,
+          "maxItems": 14,
+          "description": "Subset of allowed_actions that need the operator-presence tier (RD-12)."
         }
       },
       "required": [
@@ -88,7 +118,8 @@
         "failed_run_ids",
         "operator_action_required",
         "allowed_actions",
-        "notification_kind"
+        "notification_kind",
+        "presence_required_actions"
       ]
     }
   },

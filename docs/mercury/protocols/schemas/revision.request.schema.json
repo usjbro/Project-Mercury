@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schemas.mercury.local/v1/revision.request.schema.json",
   "title": "Code revision request to Codex",
-  "description": "T18, T21, T23, T25, T32.",
+  "description": "T18, T21, T23, T25, T25c, T32, T43 (after the instruction exists).",
   "allOf": [
     {
       "$ref": "envelope.schema.json"
@@ -96,14 +96,20 @@
           "$ref": "common.schema.json#/$defs/artifact_ref"
         },
         "source": {
+          "type": "string",
           "enum": [
             "claude_code_review",
             "claude_security_review",
+            "conflicting_reviews",
+            "review_needs_plan_change",
             "local_tests",
             "ci",
             "diff_gate",
             "merge_conflict",
-            "human_review"
+            "human_review",
+            "codex_deviation",
+            "codex_incomplete",
+            "policy_rejected"
           ]
         },
         "plan": {
@@ -121,6 +127,61 @@
         },
         "approval_id": {
           "$ref": "common.schema.json#/$defs/approval_id"
+        },
+        "producer": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "RD-8 provenance: verbatim_render = Claude review required_change items rendered through a fixed hashed template; claude_revision_request = output of a Claude revision_request run.",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "verbatim_render",
+                "claude_revision_request"
+              ]
+            },
+            "template_sha256": {
+              "oneOf": [
+                {
+                  "$ref": "common.schema.json#/$defs/sha256"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "instruction_run_id": {
+              "oneOf": [
+                {
+                  "$ref": "common.schema.json#/$defs/run_id"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "template_sha256",
+            "instruction_run_id"
+          ]
+        },
+        "source_review_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "common.schema.json#/$defs/review_id"
+          },
+          "minItems": 0,
+          "maxItems": 10
+        },
+        "source_sha256s": {
+          "type": "array",
+          "items": {
+            "$ref": "common.schema.json#/$defs/sha256"
+          },
+          "minItems": 0,
+          "maxItems": 20
         }
       },
       "required": [
@@ -136,7 +197,10 @@
         "source",
         "plan",
         "head_sha",
-        "approval_id"
+        "approval_id",
+        "producer",
+        "source_review_ids",
+        "source_sha256s"
       ]
     }
   },

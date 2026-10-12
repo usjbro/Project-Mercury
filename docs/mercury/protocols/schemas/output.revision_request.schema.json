@@ -54,6 +54,7 @@
       ]
     },
     "source": {
+      "type": "string",
       "enum": [
         "local_tests",
         "ci",
@@ -61,6 +62,10 @@
         "merge_conflict",
         "human_review",
         "codex_deviation",
+        "codex_incomplete",
+        "conflicting_reviews",
+        "review_needs_plan_change",
+        "policy_rejected",
         "authorization_amended"
       ]
     },
@@ -76,7 +81,8 @@
         "revise",
         "replan",
         "escalate"
-      ]
+      ],
+      "type": "string"
     },
     "instructions": {
       "type": "array",

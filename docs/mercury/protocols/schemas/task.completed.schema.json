@@ -76,6 +76,28 @@
             },
             "artifact": {
               "$ref": "common.schema.json#/$defs/artifact_ref"
+            },
+            "result": {
+              "type": "string",
+              "enum": [
+                "passed",
+                "waived"
+              ]
+            },
+            "scope_action": {
+              "type": "string",
+              "enum": [
+                "none",
+                "repo_integrity_alert",
+                "global_security_halt"
+              ]
+            },
+            "control_kind": {
+              "type": "string",
+              "enum": [
+                "preventive",
+                "detective"
+              ]
             }
           },
           "required": [
@@ -86,7 +108,10 @@
             "required_checks_passed",
             "claude_reviews_valid_for_head",
             "waived_by_operator",
-            "artifact"
+            "artifact",
+            "result",
+            "scope_action",
+            "control_kind"
           ]
         },
         "authorization": {

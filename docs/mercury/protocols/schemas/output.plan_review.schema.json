@@ -74,7 +74,8 @@
         "revise",
         "reject",
         "needs_human"
-      ]
+      ],
+      "type": "string"
     },
     "criteria": {
       "type": "array",
@@ -93,7 +94,8 @@
               "scope",
               "feasibility",
               "maintainability"
-            ]
+            ],
+            "type": "string"
           },
           "result": {
             "enum": [
@@ -101,7 +103,8 @@
               "fail",
               "concern",
               "not_applicable"
-            ]
+            ],
+            "type": "string"
           },
           "notes": {
             "type": "string",
@@ -168,7 +171,8 @@
               "dependency",
               "prompt_injection_attempt",
               "other"
-            ]
+            ],
+            "type": "string"
           },
           "severity": {
             "enum": [
@@ -178,7 +182,8 @@
               "medium",
               "low",
               "info"
-            ]
+            ],
+            "type": "string"
           },
           "title": {
             "type": "string",
@@ -261,7 +266,8 @@
               "unresolved",
               "partially_resolved",
               "disputed"
-            ]
+            ],
+            "type": "string"
           },
           "note": {
             "type": [

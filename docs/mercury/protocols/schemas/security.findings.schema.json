@@ -82,6 +82,10 @@
         },
         "body": {
           "$ref": "output.security_review.schema.json"
+        },
+        "snapshot_tree_sha": {
+          "$ref": "common.schema.json#/$defs/git_sha",
+          "description": "Tree SHA of the snapshot Claude read (RD-7)."
         }
       },
       "required": [
@@ -95,7 +99,8 @@
         "validation",
         "pr",
         "authorization",
-        "body"
+        "body",
+        "snapshot_tree_sha"
       ]
     }
   },

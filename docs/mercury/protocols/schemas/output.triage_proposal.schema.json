@@ -55,7 +55,8 @@
               "defer",
               "skip",
               "needs_spec"
-            ]
+            ],
+            "type": "string"
           },
           "rationale": {
             "type": "string",

@@ -72,8 +72,13 @@
           ]
         },
         "amendment_kind": {
+          "type": [
+            "string",
+            "null"
+          ],
           "enum": [
             "limits",
+            "spec_confirm",
             "scope",
             null
           ]
@@ -380,6 +385,38 @@
             "null"
           ],
           "maxLength": 128
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "initial",
+            "reauthorize"
+          ]
+        },
+        "trigger": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "spec_changed",
+            "authorization_expired",
+            "restore",
+            "operator_request",
+            "claude_session_request",
+            null
+          ]
+        },
+        "models_used": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "minItems": 1,
+          "maxItems": 4,
+          "description": "Models that actually produced the decision (RD-18; no fallback model)."
         }
       },
       "required": [
@@ -399,7 +436,10 @@
         "issued_by",
         "input_digest",
         "source_output",
-        "record_mac"
+        "record_mac",
+        "mode",
+        "trigger",
+        "models_used"
       ]
     }
   },

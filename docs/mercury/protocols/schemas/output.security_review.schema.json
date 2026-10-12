@@ -54,6 +54,18 @@
         "diff_sha256": {
           "type": "string",
           "pattern": "^[0-9a-f]{64}$"
+        },
+        "spec_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "pln_id": {
+          "type": "string",
+          "pattern": "^pln_[0-9A-HJKMNP-TV-Z]{26}$"
+        },
+        "plan_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
         }
       },
       "required": [
@@ -65,7 +77,10 @@
         "auth_id",
         "head_sha",
         "base_sha",
-        "diff_sha256"
+        "diff_sha256",
+        "spec_sha256",
+        "pln_id",
+        "plan_sha256"
       ]
     },
     "decision": {
@@ -74,7 +89,8 @@
         "revise",
         "reject",
         "needs_human"
-      ]
+      ],
+      "type": "string"
     },
     "checked_areas": {
       "type": "array",
@@ -95,7 +111,8 @@
           "configuration",
           "ci_workflows",
           "prompt_injection"
-        ]
+        ],
+        "type": "string"
       },
       "minItems": 1,
       "maxItems": 15
@@ -138,7 +155,8 @@
               "ci_workflows",
               "prompt_injection_attempt",
               "other"
-            ]
+            ],
+            "type": "string"
           },
           "severity": {
             "enum": [
@@ -147,7 +165,8 @@
               "medium",
               "low",
               "info"
-            ]
+            ],
+            "type": "string"
           },
           "cwe": {
             "type": [
@@ -234,7 +253,8 @@
               "unresolved",
               "partially_resolved",
               "disputed"
-            ]
+            ],
+            "type": "string"
           },
           "note": {
             "type": [

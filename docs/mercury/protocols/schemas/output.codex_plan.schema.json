@@ -47,7 +47,8 @@
       "enum": [
         "ready",
         "needs_clarification"
-      ]
+      ],
+      "type": "string"
     },
     "summary": {
       "type": "string",
@@ -74,7 +75,8 @@
               "full",
               "partial",
               "none"
-            ]
+            ],
+            "type": "string"
           },
           "how": {
             "type": "string",
@@ -160,7 +162,8 @@
               "modify",
               "delete",
               "rename"
-            ]
+            ],
+            "type": "string"
           },
           "reason": {
             "type": "string",
@@ -195,7 +198,8 @@
               "e2e",
               "manual",
               "other"
-            ]
+            ],
+            "type": "string"
           },
           "path": {
             "type": [
@@ -250,7 +254,8 @@
               "add",
               "upgrade",
               "remove"
-            ]
+            ],
+            "type": "string"
           },
           "justification": {
             "type": "string",
@@ -295,7 +300,8 @@
               "low",
               "medium",
               "high"
-            ]
+            ],
+            "type": "string"
           },
           "mitigation": {
             "type": "string",
@@ -358,7 +364,8 @@
               "addressed",
               "disputed",
               "not_applicable"
-            ]
+            ],
+            "type": "string"
           },
           "response": {
             "type": "string",
@@ -381,7 +388,8 @@
         "M",
         "L",
         "XL"
-      ]
+      ],
+      "type": "string"
     }
   },
   "required": [

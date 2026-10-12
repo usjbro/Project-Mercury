@@ -42,6 +42,20 @@
         "spec_sha256": {
           "type": "string",
           "pattern": "^[0-9a-f]{64}$"
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "initial",
+            "reauthorize"
+          ]
+        },
+        "prior_auth_payload_sha256": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9a-f]{64}$"
         }
       },
       "required": [
@@ -50,17 +64,24 @@
         "input_digest",
         "issue_id",
         "repo",
-        "spec_sha256"
+        "spec_sha256",
+        "mode",
+        "prior_auth_payload_sha256"
       ]
     },
     "decision": {
+      "type": "string",
       "enum": [
         "authorize",
         "decline",
         "defer",
         "needs_spec",
-        "needs_human"
-      ]
+        "needs_human",
+        "reauthorize_same_scope",
+        "amend_scope",
+        "revoke"
+      ],
+      "description": "V4: mode=initial allows authorize|decline|defer|needs_spec|needs_human; mode=reauthorize allows reauthorize_same_scope|amend_scope|revoke|needs_human (state-machine §8.1.1)."
     },
     "scope": {
       "type": [
@@ -165,6 +186,10 @@
           "enum": [
             false,
             "escalate"
+          ],
+          "type": [
+            "boolean",
+            "string"
           ]
         },
         "ask_first_categories": {
@@ -221,7 +246,8 @@
           "enum": [
             "none",
             "deps_only"
-          ]
+          ],
+          "type": "string"
         },
         "expires_in_hours": {
           "type": "integer",

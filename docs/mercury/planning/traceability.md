@@ -32,10 +32,10 @@
 | Test cases | `TC-<LEVEL>-nnn` | F (IDs, levels, gates); C, D, E contribute content | `testing/verification-plan.md` §4, §8 | Only test-ID scheme. Contributor IDs are aliases (§8.3) |
 | Security acceptance criteria | `SAC-01…20` | E | `security/threat-model.md` §10.1 | Each SAC names its gate G-S1…G-S5 (verification plan §7) |
 | Security test procedures | `SEC-T-nn` | E | `security/threat-model.md` §10.2 | Registered as TC aliases (§8.3) |
-| Phase 0 checks | `P0-nnn` | D (Mac procedures), B/E (integration and governance procedures), F (closure tracking) | Procedures: `operations/macos-service.md` Phase 0 checklist; register: verification plan §8 `TC-P0` | `TC-P0-nnn` ≡ `P0-nnn`. `P0-001…049` Mac items (D, `operations/macos-service.md` §16); `P0-050…079` agent-CLI, GitHub and Linear items (F allocates, §10.2). Phase 2 `P0-nn` and `E1…E9` are D's aliases |
+| Phase 0 checks | `P0-nnn` | D (Mac procedures), B/E (integration and governance procedures), F (closure tracking) | Procedures: `operations/macos-service.md` Phase 0 checklist; register: verification plan §8 `TC-P0` | `TC-P0-nnn` ≡ `P0-nnn`. `P0-001…049` Mac items (D, `operations/macos-service.md` §16); `P0-201…241` agent-CLI, GitHub and Linear items (B, `integrations/github.md` Phase 0 table); `P0-050…079` governance and programme items (F allocates for E and the operator, §10.2). Phase 2 `P0-nn` and `E1…E9` are D's aliases |
 | Assumptions | `ASM-<agent>-nn` | each agent | the agent's own document | Each gating ASM is linked to a `P0-nnn` check (§10.2) |
 | ADRs | `ADR-001…020` | A | `architecture/decisions/` | `ADR-Pnn` retired (§5.2) |
-| Operator decisions | `OD-01…36` | F (register), operator (decision) | this file §9 | One list; contributor IDs (OD-A/OQ-B/OD-C/OD-D/OD-E, E Qn) are aliases |
+| Operator decisions | `OD-01…37` | F (register), operator (decision) | this file §9 | One list; contributor IDs (OD-A/OQ-B/OD-C/OD-D/OD-E, E Qn) are aliases |
 | Risks | `RISK-01…99` | E (`RISK-01…34`, security, `security/threat-model.md` §9); F (`RISK-41…`, delivery and schedule, `planning/roadmap.md` §8) | as listed | Aliases: E `R-01…26`; F `PR-01…12`. `RISK-35…40` reserved for D/C additions |
 | Milestones | `P0a…P0d`, `M1…M8`, `M9a…M9c` | F | `planning/roadmap.md` | A's migration stages are `MIG-0…MIG-4` (§8.5) |
 | Security gates | `G-S1…G-S5` | E (controls and SAC per gate, `security/threat-model.md` §8.10, §10.1); F (placement in the roadmap) | `planning/roadmap.md` §4 | Gate IDs, not requirements. `G-ORG`/`G-SPLIT`/`G-DETECT` are governance **modes** (ADR-014), not gates |
@@ -341,7 +341,7 @@ Each brief item and discovery pain point maps to at least one requirement. Phase
 | **FR-164** | On a passing review the task enters `AWAITING_HUMAN_APPROVAL` and the operator is notified through the GitHub review request per the channel matrix. | Step 12 | M | Sandbox: review request within NFR-043. | Test | TDD §11, §15 · `integrations/github.md` §6 |
 | **FR-165** | Any new commit on the PR head after a Claude pass invalidates the pass (check reset) and triggers re-review. | Last-push rule | M | E2E: human push → re-review on the new SHA; check not successful meanwhile. | Test | TDD §11 · `architecture/state-machine.md` §8.3 |
 | **FR-166** | `MERCURY / claude-review` is a required check run created by `mercury-bot` and pinned to it by integration id in the ruleset; it is `success` only when the code and security reviews pass for the exact head SHA, otherwise neutral/failure; hold changes update it through the outbox. | RD-5; RB-04/05 | M | TC-GOV-117: same-named check from another identity does not satisfy the ruleset; TC-E2E-019: success only for the reviewed head. | Test | TDD §15 · `integrations/github.md` §6, §9; `ADR-014` |
-| **FR-167** | `MERCURY / policy` is a required check run (deterministic pre-checks) that stays neutral/failure while protected-path, dependency or build-script changes await operator acknowledgement; the task is `BLOCKED(policy_ack_required)` until `mercury policy ack` (presence tier) concludes the check `success` for that head SHA. | RD-5; RD-14; RF-07 | M | TC-PI-138: merge impossible until acknowledgement; acknowledgement without presence rejected (TC-SEC-145); TC-SM-016 passes. | Test | TDD §15, §19 · `integrations/github.md` §6; `architecture/state-machine.md` §6 |
+| **FR-167** | `MERCURY / policy` is a required check run (deterministic pre-checks) that concludes `action_required` (never `neutral`, which GitHub treats as passing; Addendum C.2) while protected-path, dependency or build-script changes await operator acknowledgement, and `failure` for block-class findings; the task is `BLOCKED(policy_ack_required)` until `mercury policy ack` (presence tier) concludes the check `success` for that head SHA. | RD-5; RD-14; RF-07 | M | TC-PI-138: merge impossible until acknowledgement; acknowledgement without presence rejected (TC-SEC-145); TC-SM-016 passes. | Test | TDD §15, §19 · `integrations/github.md` §6; `architecture/state-machine.md` §6 |
 | **FR-168** | Security findings on public PRs: details for medium and below; critical/high and pre-existing findings are withheld (generic line plus local report ID) per OD-21. | RD-18 | M | TC-SEC-154: seeded high finding never appears in PR text; report ID resolves locally. | Test | TDD §14, §19 · `integrations/github.md` §6 |
 
 ### FR — Merge verification and post-merge (operating model 13–14)
@@ -518,8 +518,8 @@ Each brief item and discovery pain point maps to at least one requirement. Phase
 | ID | Requirement | Rationale / source | Pri | Acceptance criterion (pass/fail) | Verification | Owning design |
 |---|---|---|---|---|---|---|
 | **OPS-001** | The Phase 0 register (`P0-nnn`) is executed and recorded before each milestone it gates. | Fact 1 | M | Phase 0 report with every check Pass/Fail/Accepted and evidence; §10.2 closure 0 Open at milestone entry. | Inspection | TDD §18, §27 · `operations/macos-service.md` Phase 0 checklist |
-| **OPS-002** | Identities exist before any write integration: GitHub Apps `mercury-bot` (target repos: `contents:write`, `pull_requests:write`, `checks:write`, `statuses:read`, `metadata:read`, plus `statuses:write` only if P0-062 requires it; Addendum B.1) and `mercury-ops` (`issues:write` on `project-mercury`, `contents:write` on the private anchor repo, `metadata:read` on targets); Linear OAuth app `actor=app`; dedicated Anthropic and OpenAI keys with spend limits. Installation tokens are narrowed per purpose. | RD-6; RF-11 | M | Identity inventory equals this list (SAC-02, TC-GOV-112); no human credential anywhere. | Inspection + Test | TDD §15, §19 · `integrations/github.md` §2; `ADR-008` |
-| **OPS-003** | Repository governance uses **rulesets** (not classic protection) per ADR-014 and is checked by the drift monitor at start, at every wake and at least every 60 min (SEC-108); drift raises a SECURITY alert and a global `security_halt`. | RB-16; RE-17; RF-11 | M | TC-GOV-115/115: relaxed rule detected ≤ 60 min, dispatch halted (SAC-09). | Test | TDD §15, §19 · `integrations/github.md` §9 |
+| **OPS-002** | Identities exist before any write integration: GitHub Apps `mercury-bot` (target repos: `contents:write`, `pull_requests:write`, `checks:write`, `statuses:read`, `metadata:read`, plus `statuses:write` only if P0-235 requires it; Addendum B.1) and `mercury-ops` (`issues:write` on `project-mercury`, `contents:write` on the private anchor repo; **not installed on target repositories**, Addendum C.1); `actions:read` for `mercury-bot` only if OD-37 grants it; Linear OAuth app `actor=app`; dedicated Anthropic and OpenAI keys with spend limits. Installation tokens are narrowed per purpose. | RD-6; RF-11 | M | Identity inventory equals this list (SAC-02, TC-GOV-112); no human credential anywhere. | Inspection + Test | TDD §15, §19 · `integrations/github.md` §2; `ADR-008` |
+| **OPS-003** | Repository governance uses **rulesets** (not classic protection) per ADR-014 and is checked by the drift monitor (a `mercury-bot` token narrowed to `metadata:read`, Addendum C.1) at start, at every wake and at least every 60 min (SEC-108); drift raises a SECURITY alert and a global `security_halt`. | RB-16; RE-17; RF-11 | M | TC-GOV-115/115: relaxed rule detected ≤ 60 min, dispatch halted (SAC-09). | Test | TDD §15, §19 · `integrations/github.md` §9 |
 | **OPS-004** | A dedicated sandbox GitHub repository and Linear team exist; no automated test may write to production repos or teams. | JAM-160 | M | Test allow-list contains only sandbox targets; CI guard fails on any other (TC-OPS-009). | Inspection + Test | TDD §22 · `testing/verification-plan.md` §2.3 |
 | **OPS-005** | Upgrades (coordinator, Node, agent CLIs, wrappers, helpers) follow the documented procedure with backup, contract tests and rollback. | Version churn | M | Upgrade + rollback demo (TC-OPS-007). | Demo | TDD §24 · `operations/macos-service.md` §13 |
 | **OPS-006** | Backup and restore procedures are documented and drilled at least quarterly. | Platform P2 | S | Drill log (TC-OPS-006). | Demo | TDD §20, §24 · `operations/recovery.md` |
@@ -719,7 +719,7 @@ Columns: requirement → ADR(s) → test case(s) → milestone where first verif
 | FR-055 | M | ADR-020 | TC-REC-033 | M1 | BC |
 | FR-060 | M | ADR-003 | TC-UNIT-030, TC-CON-001 | M1 | BC |
 | FR-061 | M | ADR-003 | TC-CON-001 | M1 | BC |
-| FR-062 | M | ADR-004, ADR-005 | TC-CON-003, TC-CON-005, TC-CON-014, TC-AFS-005, TC-AFS-011, P0-050 | M3 | BC |
+| FR-062 | M | ADR-004, ADR-005 | TC-CON-003, TC-CON-005, TC-CON-014, TC-AFS-005, TC-AFS-011, P0-209 | M3 | BC |
 | FR-063 | M | ADR-002, ADR-003 | TC-INT-003, TC-DUP-003 | M1 | BC |
 | FR-064 | M | ADR-003, ADR-016 | TC-UNIT-031 | M1 | BC |
 | FR-065 | S | — | TC-CON-002 | M8 | BC |
@@ -749,14 +749,14 @@ Columns: requirement → ADR(s) → test case(s) → milestone where first verif
 | FR-142 | M | ADR-009, ADR-014 | TC-UNIT-042, TC-SBX-002, TC-E2E-019, TC-SEC-153 | M5 / M6 | BC |
 | FR-143 | M | — | TC-DUP-004, TC-NET-002, TC-REC-001 | M5 | BC |
 | FR-144 | M | ADR-014 | TC-E2E-005, TC-INT-002, TC-INT-029 | M6 | BC |
-| FR-145 | M | ADR-014 | TC-OPS-016, P0-071 | P0c / M9a | BC |
+| FR-145 | M | ADR-014 | TC-OPS-016, P0-240 | P0c / M9a | BC |
 | FR-160 | M | ADR-004, ADR-017 | TC-CON-003, TC-E2E-004 | M6 | BC |
 | FR-161 | M | — | TC-E2E-012 | M6 | BC |
 | FR-162 | M | ADR-014 | TC-SBX-003, TC-CON-012, TC-GOV-118 | M6 | BC |
 | FR-163 | M | — | TC-E2E-004, TC-E2E-018, TC-SM-008, TC-SM-020 | M6 | BC |
 | FR-164 | M | ADR-019 | TC-SBX-006 | M6 | BC |
 | FR-165 | M | — | TC-E2E-013, TC-SM-025 | M6 | BC |
-| FR-166 | M | ADR-014 | TC-GOV-117, TC-E2E-019, P0-062 | M6 | BC |
+| FR-166 | M | ADR-014 | TC-GOV-117, TC-E2E-019, P0-235 | M6 | BC |
 | FR-167 | M | ADR-014, ADR-019 | TC-PI-138, TC-SM-016, TC-SEC-145 | M5 | BC |
 | FR-168 | M | — | TC-SEC-154 | M6 | BC |
 | FR-180 | M | ADR-014 | TC-GOV-005, TC-GOV-111, TC-GOV-112 | M5 | BC |
@@ -766,7 +766,7 @@ Columns: requirement → ADR(s) → test case(s) → milestone where first verif
 | FR-184 | S | ADR-016 | TC-INT-006, TC-SEC-143 | M7 | BC |
 | FR-185 | S | — | TC-E2E-009 | M7 | BC |
 | FR-200 | M | ADR-009 | TC-UNIT-050 | M7 | BC |
-| FR-201 | M | ADR-008 | TC-SBX-005, P0-061 | P0c / M7 | BC |
+| FR-201 | M | ADR-008 | TC-SBX-005, P0-220 | P0c / M7 | BC |
 | FR-202 | M | — | TC-NET-003, TC-DUP-001, TC-UNIT-070 | M7 | BC |
 | FR-203 | M | ADR-011 | TC-GOV-006, TC-PI-131 | M3 | BC |
 | FR-220 | M | ADR-019 | TC-SBX-006 | M7 | BC |
@@ -844,7 +844,7 @@ Columns: requirement → ADR(s) → test case(s) → milestone where first verif
 | NFR-100 | S | — | TC-UNIT-011, TC-UNIT-012 | M1 | BC |
 | NFR-101 | M | — | TC-SM-005, TC-SM-009 | M1 | BC |
 | OPS-001 | M | — | P0-001…052 | P0a / P0b | BC |
-| OPS-002 | M | ADR-008 | P0-060, P0-061, TC-GOV-008, TC-GOV-112 | P0c | BC |
+| OPS-002 | M | ADR-008 | P0-060, P0-220, TC-GOV-008, TC-GOV-112 | P0c | BC |
 | OPS-003 | M | ADR-014 | TC-GOV-115, TC-OPS-005 | M2 / M5 | BC |
 | OPS-004 | M | — | TC-OPS-009, TC-SBX-001 | P0c | BC |
 | OPS-005 | M | — | TC-OPS-007 | M8 | BC |
@@ -945,7 +945,7 @@ TC aliases of E's `SEC-T-nn` follow §8.3 (TC-SEC-1nn, TC-GOV-11n, TC-PI-13n). "
 | SEC-706 | M | — | TC-OPS-009 | P0d | G-S1 |
 | SEC-707 | S | — | TC-SEC-114 | M9a | — |
 | SEC-708 | M | ADR-013 | TC-INT-028, P0-032 | M5 | G-S2 |
-| SEC-801 | M | ADR-008 | TC-SEC-180, TC-SBX-005, P0-061 | P0c | G-S3 |
+| SEC-801 | M | ADR-008 | TC-SEC-180, TC-SBX-005, P0-220 | P0c | G-S3 |
 | SEC-802 | M | ADR-004 | TC-SEC-123, P0-042 | M3 | G-S1 |
 | SEC-803 | M | — | TC-SEC-181, TC-E2E-014 | M2 | G-S4 |
 | SEC-804 | M | — | P0-074 | P0c | G-S1 |
@@ -1138,13 +1138,13 @@ See the "Aliases" column of §9.
 
 ---
 
-## 9. Operator decision register (OD-01…OD-36)
+## 9. Operator decision register (OD-01…OD-37)
 
 One list. Defaults are the design's adopted defaults (binding where a reconciliation decision fixed them); only the operator decides. "Needed by" uses the milestones of `planning/roadmap.md`. The design works under every listed option unless the row says otherwise.
 
 | OD | Decision | Aliases | Options | Recommended / adopted default | Needed by | Affects |
 |---|---|---|---|---|---|---|
-| OD-01 | Merge-actor governance mode per repository (**required before unattended operation**, with OD-36) | OD-A-01, OQ-B-09, E Q1, SEC-109 | G-ORG; G-SPLIT; G-DETECT | Sandbox and supervised pilot: G-DETECT **with written risk acceptance**. **G-ORG required before any unattended or overnight operation on targets** (RD-5). G-SPLIT only if P0-064, P0-065 and P0-068 pass. F additionally recommends moving targets to an org before M9b. | P0c (sandbox acceptance); M9b (pilot acceptance); M9c (G-ORG) | CON-014, OPS-017, SEC-109 |
+| OD-01 | Merge-actor governance mode per repository (**required before unattended operation**, with OD-36) | OD-A-01, OQ-B-09, E Q1, SEC-109 | G-ORG; G-SPLIT; G-DETECT | Sandbox and supervised pilot: G-DETECT **with written risk acceptance**. **G-ORG required before any unattended or overnight operation on targets** (RD-5). G-SPLIT only if P0-238, P0-233 and P0-068 pass. F additionally recommends moving targets to an org before M9b. | P0c (sandbox acceptance); M9b (pilot acceptance); M9c (G-ORG) | CON-014, OPS-017, SEC-109 |
 | OD-02 | GitHub identity type | F OD-02 | GitHub Apps; machine user | Two GitHub Apps, `mercury-bot` (incl. `statuses:read`, Addendum B.1) and `mercury-ops` (RD-6); no machine user | P0c | OPS-002, ADR-008 |
 | OD-03 | Claude authentication and billing | OQ-B-01, OD-A-04 | Dedicated API key; `setup-token` | Dedicated Anthropic workspace API key with spend limit | P0a (needed for P0-042) | NFR-083, SEC-504 |
 | OD-04 | Codex authentication and billing | OQ-B-03, OD-A-04 | Dedicated project key; ChatGPT login | Dedicated OpenAI project key with spend limit | P0a | NFR-083 |
@@ -1163,7 +1163,7 @@ One list. Defaults are the design's adopted defaults (binding where a reconcilia
 | OD-17 | Meaning of "Claude is the primary orchestrator" | A Q1, RA-1 | — | Accept RD-20: Claude holds decision authority; `mercuryd` holds the loop | P0c | CON-003 |
 | OD-18 | Agent process isolation | OQ-B-05, SEC-201, OD-C-07, E Q3, OD-D-01, OD-D-02, OD-D-03, OD-D-08 | — | Adopt RD-1: `_mercuryagent` via `agent-exec`/`agent-ctl` (sudoers); Claude via SDK custom spawn, falling back to ALT-B-1 if P0-042 fails; MERCURY-managed toolchains; supervisor lease while logged out per parameter table | P0b | CON-018, FR-051, OPS-014, OPS-015 |
 | OD-19 | Root-owned managed settings (Claude) and `requirements.toml` (Codex) | OQ-B-02, D-SEC-4 | — | Yes, narrowly scoped (also affects the operator's interactive Claude) | M3 | SEC-204, SEC-208 |
-| OD-20 | Operations identity, audit anchoring and HMAC key escrow | E Q2, SEC-108, SEC-603/604, OD-D-07 | — | `mercury-ops` App with `issues:write` on `project-mercury`, `contents:write` on a private anchor repo, `metadata:read` on targets (RD-6); HMAC SHOULD; no `k_auth` escrow (re-authorize after a Mac change) | P0c | OPS-002, FR-263, FR-264 |
+| OD-20 | Operations identity, audit anchoring and HMAC key escrow | E Q2, SEC-108, SEC-603/604, OD-D-07 | — | `mercury-ops` App with `issues:write` on `project-mercury` and `contents:write` on a private anchor repo, not installed on targets (RD-6, Addendum C.1); HMAC SHOULD; no `k_auth` escrow (re-authorize after a Mac change) | P0c | OPS-002, FR-263, FR-264 |
 | OD-21 | Security findings on public PRs | OQ-B-07 | — | Withhold critical/high and pre-existing details; generic line + local report ID | M6 | FR-168 |
 | OD-22 | Require review-thread resolution | OQ-B-08, SEC-100, RB-20 | On; off | **Off** (bot `COMMENT` threads would otherwise block merges; E SEC-100 revised) | P0c | SEC-100 |
 | OD-23 | Security review on every PR, separate run | E Q5, A Q6 | — | Every PR, separate run | M6 | FR-161 |
@@ -1180,8 +1180,9 @@ One list. Defaults are the design's adopted defaults (binding where a reconcilia
 | OD-34 | Model per decision type | B tradeoffs | — | Opus for all types in the pilot; no `fallbackModel` for authority decisions; revisit triage after shadow cost data | M3 | FR-020, FR-261 |
 | OD-35 | Policy actions checklist (not choices) | SEC-105/106/804/806, E §7, OD-E-02 | — | Complete OPS-019 with evidence | P0c | OPS-019 |
 | OD-36 | Dedicated macOS account for the coordinator (U2), in addition to the agent uid | E RE-01 (U2), E 44 §3, RD-1, Addendum A | (a) stay in the operator uid and accept RISK-27 in writing; (b) move `mercuryd` to a dedicated account (Zone C separated from Zone H) | **Required decision before unattended operation (G-S5)**, alongside OD-01 (Addendum A). v1 build assumes (a); F recommends deciding at M8 exit with the pilot data, so (b) can be scheduled as MERC-807b without delaying M9c | M8 exit (decision); G-S5 / M9c (in force) | RISK-27, ADR-010, ADR-013 |
+| OD-37 | `actions:read` for `mercury-bot` (CI evidence beyond check output and annotations) | B objection, Addendum C.3 | Grant; do not grant | **Not granted**: CI evidence for Claude revision requests is limited to check-run output and annotations | M6 | FR-144, SEC-101 |
 
-Deduplication: the 60 raw items across A (5 + 2 questions), B (9), C (7), D (6 + 8 OD-D), E (6 + operator list) and F (16) reduce to 36. OD-35 is a checklist.
+OD-37 was added by Addendum C. Deduplication: the 60 raw items across A (5 + 2 questions), B (9), C (7), D (6 + 8 OD-D), E (6 + operator list) and F (16) reduce to 36. OD-35 is a checklist.
 
 ---
 
@@ -1192,7 +1193,7 @@ Deduplication: the 60 raw items across A (5 + 2 questions), B (9), C (7), D (6 +
 | ID | Assumption | Impact if false | Verified by |
 |---|---|---|---|
 | ASM-F-01 | Latency defaults fit the rate budgets | NFR-040/041/081 retuned | TC-SBX-008 |
-| ASM-F-02 | A sandbox Linear team can be created on the current plan | Separate workspace needed | P0-061 |
+| ASM-F-02 | A sandbox Linear team can be created on the current plan | Separate workspace needed | P0-220 |
 | ASM-F-03 | GitHub Apps install on personal-account repositories with the RD-6 permission sets | Org move earlier (OD-01) | P0-060 |
 | ASM-F-04 | **Refuted** (RD-16): monotonic time continues during sleep on macOS | Requirements now state behaviour (FR-282) | P0-034 |
 | ASM-F-05 | Fullfsync commit latency is acceptable on the Mac SSD | Batch writes; worker thread | TC-PERF-004 |
@@ -1205,7 +1206,7 @@ Deduplication: the 60 raw items across A (5 + 2 questions), B (9), C (7), D (6 +
 
 ### 10.2 Gating assumption closure register and Phase 0 ID allocation
 
-`P0-001…049` are D's Mac checks (procedures and gates in `operations/macos-service.md` §16). F allocates `P0-050…079` for agent-CLI, GitHub and Linear checks (procedures by B for integrations and E for governance; listed in verification plan §8 `TC-P0`). The table tracks closure of every assumption that gates a milestone (CON-015). Owners keep a "Verified by" column pointing here.
+`P0-001…049` are D's Mac checks (procedures and gates in `operations/macos-service.md` §16). F allocates `P0-050…079` for governance and programme checks (procedures by E and the operator); B owns `P0-201…241` for agent-CLI, GitHub and Linear checks (`integrations/github.md` Phase 0 table; listed in verification plan §8 `TC-P0`). The table tracks closure of every assumption that gates a milestone (CON-015). Owners keep a "Verified by" column pointing here.
 
 | Assumption(s) | Phase 0 check | Gates (milestone / gate) | Status |
 |---|---|---|---|
@@ -1233,22 +1234,23 @@ Deduplication: the 60 raw items across A (5 + 2 questions), B (9), C (7), D (6 +
 | ASM-F-11, RD-24 (macOS guest VM power-loss rig) | P0-047 | M8 | Open |
 | ASM-E-10 (managed settings, `requirements.toml`) | P0-048 | M3 | Open |
 | ASM-E-06 (agent-uid egress control) | P0-049 (E specifies) | SEC-206 (SHOULD); G-S2 if chosen for `deps_install` | Open |
-| ASM-B (Codex output-schema failure behaviour) | P0-050 | M4 | Open |
-| ASM-E-17 (`disableAllHooks` vs SDK hooks) | P0-051 | G-S1 | Open |
-| RD-15 (wire-copy schemas accepted by both providers) | P0-052 | M3 | Open |
-| ASM-E-18 (Seatbelt denies `process-info` of the Codex parent) | P0-053 | G-S2 | Open |
+| ASM-B (Codex output-schema failure behaviour) | P0-209 | M4 | Open |
+| ASM-E-17 (`disableAllHooks` vs SDK hooks) | P0-201 | G-S1 | Open |
+| RD-15 (wire-copy schemas accepted by both providers) | P0-211 | M3 | Open |
+| ASM-E-18 (Seatbelt denies `process-info` of the Codex parent) | P0-207 | G-S2 | Open |
 | ASM-F-03, RD-6, Addendum B.1 (both Apps; exact permission sets incl. `statuses:read`) — SEC-T-12 part 1 | P0-060 | P0c / G-S3 | Open |
-| ASM-B-30, ASM-F-02 (Linear client-credentials app, sandbox team) | P0-061 | P0c | Open |
-| RB-05 (pinning requires `statuses:write`?) + SEC-T-17 forged same-name check | P0-062 | M6 / G-S3 | Open |
-| RB-03 (bot `COMMENT` review never blocks; SEC-T-18) | P0-063 | M6 | Open |
-| ASM-E-01, RB-06a (deploy-key push of an approved head to `main` rejected) | P0-064 | G-SPLIT only | Open |
-| ASM-E-02, RB-06b, ASM-B-53 (App cannot merge or enable auto-merge) | P0-065 | M5 / G-S3 | Open |
-| RB-16, ASM-B-51 (rulesets and `bypass_actors` readable with `metadata:read`) | P0-066 | M2 | Open |
+| ASM-B-30, ASM-F-02 (Linear client-credentials app, sandbox team) | P0-220 | P0c | Open |
+| RB-05, ASM-B-57 (pinning requires `statuses:write`?); forged same-name check is TC-GOV-117 | P0-235 | M6 / G-S3 | Open |
+| RB-03 (bot `COMMENT` review never blocks; SEC-T-18) | P0-237 | M6 | Open |
+| ASM-E-01, RB-06a (deploy-key push of an approved head to `main` rejected) | P0-238 | G-SPLIT only | Open |
+| ASM-E-02, RB-06b, ASM-B-53 (App cannot merge or enable auto-merge) | P0-233 | M5 / G-S3 | Open |
+| RB-16, ASM-B-51 (rulesets and `bypass_actors` readable with `metadata:read`) | P0-231 | M2 | Open |
+| B's integration checks (ASM-B-*), one row each in `integrations/github.md` Phase 0 table; gating results: P0-213 (Claude spawn; else ALT-B-1), P0-235 (`statuses:write`), P0-236 (check-run update semantics), P0-224 (`mercury_owns_all` linking), P0-233/P0-238 (G-SPLIT) | P0-201…241 | M2–M6 per row (B's gate column) | Open |
 | ASM-E-03 (read-only credential reads Actions settings) | P0-067 | Optional (else POL check) | Open |
 | ASM-E-07 (branch workflows and deploy keys) | P0-068 | G-SPLIT only | Open |
-| ASM-E-05 (Linear app actor cannot merge or diff-review) | P0-069 | P0c (else Linear writes paused) | Open |
-| ASM-A-07 (withdrawn), RA-10 (branch-name closing behaviour for `mercury_owns_all`) | P0-070 | M4 if OD-06 = `mercury_owns_all` | Open |
-| RD-18 (target CI runs on draft PRs) | P0-071 | M9a | Open |
+| ASM-E-05 (Linear app actor cannot merge or diff-review) | P0-225 | P0c (else Linear writes paused) | Open |
+| ASM-A-07 (withdrawn), RA-10 (branch-name closing behaviour for `mercury_owns_all`) | P0-224 | M4 if OD-06 = `mercury_owns_all` | Open |
+| RD-18 (target CI runs on draft PRs) | P0-240 | M9a | Open |
 | SEC-T-16 cases (a)–(g) on the sandbox | P0-072 | G-S3 (rerun at M5 exit) | Open |
 | MIG-0 legacy inventory of `network_monitor` | P0-073 | M9a | Open |
 | OD-35 policy checklist evidence (OPS-019) | P0-074 | G-S1 | Open |

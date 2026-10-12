@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schemas.mercury.local/v1/code.review.schema.json",
   "title": "Claude PR code review",
-  "description": "T24/T25/T26. Valid only while pr.head_sha is the PR head.",
+  "description": "T24/T24p/T25/T25c/T26. Valid only while pr.head_sha is the PR head and authorization.scope_version is current.",
   "allOf": [
     {
       "$ref": "envelope.schema.json"
@@ -88,10 +88,11 @@
           "additionalProperties": false,
           "properties": {
             "event": {
+              "type": "string",
               "enum": [
-                "COMMENT",
-                "REQUEST_CHANGES"
-              ]
+                "COMMENT"
+              ],
+              "description": "RD-5/INV-09: MERCURY posts COMMENT reviews only; the gate is the MERCURY / claude-review check run."
             },
             "outbox_id": {
               "$ref": "common.schema.json#/$defs/outbox_id"
@@ -111,6 +112,10 @@
         },
         "body": {
           "$ref": "output.code_review.schema.json"
+        },
+        "snapshot_tree_sha": {
+          "$ref": "common.schema.json#/$defs/git_sha",
+          "description": "Tree SHA of the coordinator-built snapshot Claude read (RD-7)."
         }
       },
       "required": [
@@ -126,7 +131,8 @@
         "plan",
         "authorization",
         "github_review",
-        "body"
+        "body",
+        "snapshot_tree_sha"
       ]
     }
   },

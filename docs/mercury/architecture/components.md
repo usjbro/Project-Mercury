@@ -9,7 +9,7 @@ Related documents and what this document defers to them (single source of truth)
 | States, transitions, guards, holds, block reasons, invariants `INV-nn` | [`state-machine.md`](state-machine.md) | **SM §n** |
 | Message envelope, message and agent-output schemas | [`../protocols/messages.md`](../protocols/messages.md) | **MSG §n** |
 | Agent invocation, prompts, validation V1–V4, per-agent deadlines and failure tables | `integrations/claude.md`, `integrations/codex.md` | **CL §n**, **CX §n** |
-| GitHub posting mechanics, merge verification M1–M7, ruleset, **retry matrix**, **dedup key catalogue** | `integrations/github.md` | **GH §n**, **GH §15**, **GH-DEDUP** |
+| GitHub posting mechanics, merge verification M1–M8 and scope (§8), ruleset, **retry matrix** (§15), **dedup key catalogue** (§13) | `integrations/github.md` | **GH §n**, **GH §15**, **GH-DEDUP** (= GH §13) |
 | `spec_hash`, Linear status modes | `integrations/linear.md` | **LN §n** |
 | **Operational parameter values** (wake grace, dark-wake threshold, stall thresholds, lease interval, disk thresholds, shutdown budget, watchdog, downtime notice) | Parameter table, `operations/macos-service.md` §2 (cited by parameter name, e.g. `run.codex_plan.*`, `wake.grace_s`) | **MS-PARAM** |
 | **Filesystem layout** (`MERCURY_HOME`, `WORK_ROOT`, run-directory layout, modes, ACLs), `agent-exec`/`agent-ctl` installation, sudoers | `operations/macos-service.md` §7.1 (layout), §3.4–§3.8 (wrappers, `agent-exec` grammar, fd-3 hand-off, `agent-ctl` grammar, adoption), §9.5 (presence helper), §8.6 (power helper) | **MS §7.1**, **MS §3.5** etc. |
@@ -49,7 +49,7 @@ Assumptions are labelled `ASM-C-nn`, each linked to a Phase 0 check in `planning
 | Runtime | **Node.js 24 LTS**, exact version pinned; move to 26 LTS after it passes the contract suite | Active LTS; `node:sqlite` is RC (1.2) in 24 | Node 22 with `better-sqlite3` |
 | Database | SQLite through **`node:sqlite`** (`DatabaseSync`) behind the `Store` port; WAL, `synchronous=FULL`, `fullfsync=ON` | No native-addon supply chain; synchronous API matches "no `await` inside a transaction" (L3) | `better-sqlite3` behind the same port (ASM-C-01) |
 | Process model | **One coordinator process** (`mercuryd`, a LaunchAgent in the operator's GUI session, operator uid; ADR-010), one event loop, one write connection. Backups and `integrity_check` run in a `worker_thread` with its own read connection (RD-11). **All model-directed and repository-derived code runs as `_mercuryagent`** through the root-owned `agent-exec`/`agent-ctl` wrappers (RD-1, ADR-013, INV-24) | Single writer; OS-enforced separation of agents from MERCURY's and the operator's credentials | Same-uid launcher only with fakes and the sandbox repo (M1–M4 gate, SEC-T-20) |
-| Schema validation | **Ajv 8**: `ajv/dist/2020` for message schemas; draft-07 mode for the **canonical** agent output contracts (full validation incl. lengths and bounds). Agents receive a CI-generated **wire copy** restricted to the provider's strict-mode subset (RD-15, MSG §5.3) | Providers enforce a subset; the coordinator enforces the full contract | — |
+| Schema validation | **Ajv 8**: `ajv/dist/2020` for message schemas; draft-07 mode for the **canonical** agent output contracts (full validation incl. lengths and bounds). Agents receive a CI-generated **wire copy** per provider profile (`claude-sdk`, `anthropic-messages`, `codex-strict`; CL/CX) restricted to that provider's subset (RD-15, MSG §5.3) | Providers enforce a subset; the coordinator enforces the full contract | — |
 | HTTP clients | Built-in `fetch` (undici) with thin typed wrappers; no Octokit. The GitHub wrapper holds an **endpoint allowlist** (SEC-102) | Small dependency tree; explicit ETag handling | Octokit if pagination grows |
 | Config | TOML (`smol-toml`, pinned), validated against a JSON Schema at load | Readable, commented | JSON |
 | IDs | ULID with type prefix, in-repo monotonic generator | No dependency | — |
@@ -87,7 +87,7 @@ src/
     mercuryd.ts            # composition root
     mercury.ts             # CLI
 scripts/
-  gen-wire-schemas.ts      # canonical output contract → strict-subset wire copy + sha256 manifest (MSG §5.3)
+  gen-wire-schemas.ts      # canonical output contract → wire copy per profile (claude-sdk, anthropic-messages, codex-strict) + sha256 manifest (MSG §5.3)
 ```
 
 `runwrap` no longer exists: its role (detached session, `proc.json`/`exit.json`, exit status surviving a coordinator crash) is part of `agent-exec` (RD-1; MS §3.4–§3.8).
@@ -313,8 +313,7 @@ export type BlockReason = "needs_human_decision" | "decision_run_failed" | "run_
   | "plan_revision_limit" | "pr_revision_limit" | "verify_fix_limit" | "human_change_limit"
   | "policy_ack_required" | "security_policy_violation" | "security_escalation" | "injection_suspected"
   | "foreign_push" | "foreign_agent" | "pr_closed_unexpectedly" | "merge_verification_failed"
-  | "reauthorization_required" | "guard_integrity_failure" | "external_state_conflict"
-  | "external_state_lost" | "push_rejected";
+  | "reauthorization_required" | "guard_integrity_failure" | "external_state_conflict";   // 404 and ruleset push rejections map to external_state_conflict (GH §15.2)
 ```
 
 ### 4.2 Supervisor (`app/supervisor.ts`)
@@ -456,7 +455,7 @@ Rules:
 
 - **Claude runs** use the Agent SDK with a custom spawn (`spawnClaudeCodeProcess`) that calls `ProcessSupervisor.start` with `kind = claude`, i.e. `sudo -n -C 4 -u _mercuryagent -g mercury agent-exec --run-dir <run_dir>` with `spec.json` kind `claude` with SDK pipes preserved, the key on fd 3 and a per-run config dir under the run directory (RD-1). If the Phase 0 spawn test fails, the adapter switches to B's ALT-B-1 (Messages API with coordinator-implemented, realpath-confined Read/Grep/Glob over the snapshot), removing the Claude subprocess.
 - **Authority decisions** (authorization, plan review, PR code/security review, revision request) run with **no `fallbackModel`**; a result produced by a model other than the requested one is `output_invalid`. `modelsUsed` is recorded on the run and on the authority row (RD-18, RB-19).
-- **Wire schemas.** The adapter sends the wire copy for `outputSchemaId` and records its `wireSchemaSha256`; a provider `invalid_json_schema` rejection is `config_fatal` (RD-15). Full validation uses the canonical schema.
+- **Wire schemas.** The adapter sends the wire copy of `outputSchemaId` for its provider profile (`claude-sdk` for SDK `outputFormat`, `anthropic-messages` for the ALT-B-1 path, `codex-strict` for `--output-schema`) and records its `wireSchemaSha256`; a provider `invalid_json_schema` rejection is `config_fatal` (RD-15). Full validation uses the canonical schema.
 
 ### 4.7 ProcessSupervisor (`ports/process.ts`): AgentLauncher and process control
 
@@ -590,7 +589,7 @@ export interface GitHubPort {
   // reviews, dismissReview, branch protection and ruleset writes, base-branch deletion.
 }
 export type GateCheckName = "MERCURY / claude-review" | "MERCURY / policy";
-export type CheckConclusion = "success" | "failure" | "action_required" | "cancelled";   // never "neutral" (counts as passing)
+export type CheckConclusion = "success" | "failure" | "action_required";   // never neutral/skipped: they count as passing (GH §6, Addendum C)
 ```
 
 Ownership of every found object (PR, review, comment, check run) is decided by **author = the `mercury-bot` App user id** plus, for PRs, the head branch; the body marker only selects among the App's own objects (RC-36, RB-23). Polling uses one long-lived `read`-purpose installation token per installation so ETags survive (RB-21).
@@ -614,7 +613,7 @@ export interface LinearPort {
 
 Pollers convert external state into **facts** (inbox rows); they never call the TransitionEngine. Fact dedup keys use the **GH-DEDUP** catalogue verbatim; C adds no private formats. Two rules apply to every value-keyed fact (RD-18, RB-11):
 
-- **Observation sequence.** Facts whose key is a value (PR head, relation presence, review state, label presence) carry the source version or an observation sequence (`…:obs:<n>`, incremented when the stored level changes), so A → B → A is three facts, not two.
+- **Observation sequence.** Value-keyed facts carry `obs:<seq>` from `observation_seqs` (GH §13.2), incremented in the same transaction as the inbox insert when the value changes, so A → B → A is three facts, not two. Version-keyed facts (Linear `updatedAt`, ids) need none.
 - **Level snapshots.** Pollers also upsert the current level (PR head, relations, labels) into the mirror tables; the InboxProcessor diffs a fact against stored state, so a dropped edge cannot leave stale state.
 
 Ingestion filters (RE-21, SEC-313): human review comments and reviews are ingested as *actionable* only when `user.id ∈ operator.github_user_ids`; the `mercury:revise` and `mercury:hold` labels count only when the label-event actor is the operator. Everything else is recorded as untrusted context only.
@@ -647,9 +646,7 @@ Idempotency keys come from **GH-DEDUP**. Effect catalogue (C owns op names and o
 | `github.pr.upsert` | `findPullsByHead(branch)` with `state=all`, App-authored; a closed MERCURY PR goes to SM G6 handling, never a second create; always created as draft | after `git.push` |
 | `github.pr.set_draft` | set-to | T24, T42, spec hold effects, cancel protocol |
 | `github.pr.labels` | set-to | T20, T42, BLOCKED projection |
-| `github.check.create` | `findCheckRun(head, name, external_id = <task_id>:<head_sha>:<check>)` | T20 (PL), T22 (CR `in_progress`), G5 (CR `action_required` on the foreign head) |
-| `github.check.update` | same lookup; set-to status/conclusion/output | spec hold set/release (H1) |
-| `github.check.conclude` | same lookup; set-to `completed` + conclusion | T24/T24p (CR success), T25 (CR failure), T26 (CR action_required), T42 (PL success), cancel protocol (CR cancelled) |
+| `github.check.upsert{gate, head_sha, status, conclusion, output}` | `findCheckRun(head, name, external_id = <task_id>:<head_sha>:<gate>)`, App-authored; `PATCH` if found, else create (if GitHub refuses to change a completed run's conclusion, create a new run with external_id suffix `:<n>`, GH §6, ASM-B-56) | Transitions: T20 (CR `queued`, PL `success`/`action_required`), T22 (CR `in_progress`), T24/T24p (CR `success`), T25 (CR `failure`), T26 and every BLOCKED-with-PR (CR `action_required`), T42 (PL `success`), G5 (CR `action_required` on the foreign head), cancel protocol (CR `action_required`). **Hold effects** (H1): `spec_changed`, `integrity_alert`, `security_halt` set → CR `action_required`; release → CR restored from current valid reviews |
 | `github.review.post` | App-authored reviews with marker `<!-- mercury:review=<review_id> -->`; **event `COMMENT` only** | after the CR conclude |
 | `github.comment.post` | App-authored comments with marker | — |
 | `github.request_reviewers` | set-to | after undraft |
@@ -659,7 +656,7 @@ Idempotency keys come from **GH-DEDUP**. Effect catalogue (C owns op names and o
 | `audit.anchor.commit` | anchor repo file path + line (`mercury-ops` App) | AnchorService (§4.16) |
 | `notify.local` / `ops.issue.comment` | `notifications.dedup_key` / marker on the ops issue | NotificationPolicy |
 
-Check-op keys must distinguish successive desired states on the same head (success → action_required → success under a spec hold); C therefore appends the gate-check sequence number `gate_checks.seq` to B's `out:gh:check:…` key (open item for B in GH-DEDUP).
+Successive desired states on the same head (success → action_required → success under a spec hold) get distinct keys through GH-DEDUP's `<cause>` component: the `task_transitions.transition_id` or `holds.hold_id` (+ `set`/`release`) that enqueued the item; `gate_checks.seq` is kept locally only for ordering and diagnostics.
 
 **Attempt accounting (RD-18, GH §15).** A `retry` whose `errorClass` is network-class (`network_down`, DNS, connect/TLS failure, 5xx during an open `network_down` hold, or any error followed by a failed connectivity probe within 60 s) does not increment `outbox.attempts`; it increments `network_class_failures` only. Rate-limit retries honour the reset header and do not count. Only non-network errors count toward `dead`. Mutation budgets per target and hour (SEC-705) are enforced before `execute`.
 
@@ -677,7 +674,8 @@ Check-op keys must distinguish successive desired states on the same head (succe
 | `security_escalation` | task | PR comment (generic text on public repos, OD-21) + `mercury-ops` issue + local notification | `ntf:<task>:security:<reason>:<block_epoch>` | `BLOCKED` schedule |
 | `security_halt`, `integrity_alert`, safe mode | global / repo | `mercury-ops` issue (GitHub Mobile push) + local notification | `ntf:global:<kind>:<hold_id>` | daily while active |
 | `unrecoverable_failure`, `task_abandoned` | task | Linear comment | `ntf:<task>:<kind>:<block_epoch>` | `BLOCKED` schedule |
-| `merge_completed`, `policy_notice` | task | Linear comment | `ntf:<task>:<kind>` | none |
+| `merge_completed` | task | Linear comment | `ntf:<task>:<kind>` | none |
+| `policy_notice` (M4 `merged_unreviewed_head`) | task | PR comment @operator + Linear comment | `ntf:<task>:policy_notice:<block_epoch>` | `BLOCKED` schedule |
 | `coordinator_downtime`, `host_instability`, `circuit_open`, hold digest | global | `mercury-ops` issue | `ntf:global:<kind>:<epoch>` | none |
 | `credentials`, `low_disk`, `keychain_locked` | global | local macOS notification (+ ops issue if > 24 h) | `ntf:global:<kind>:<hold_id>` | none |
 | wake summary (INV-20 d) | global | one `mercury-ops` comment listing coalesced reminders | `ntf:global:wake:<wake_seq>` | none |
@@ -1007,7 +1005,7 @@ CREATE TABLE linear_issues (
   priority INTEGER, labels_json TEXT NOT NULL CHECK (json_valid(labels_json)),
   repo TEXT REFERENCES repos(repo), delegate_json TEXT CHECK (delegate_json IS NULL OR json_valid(delegate_json)),
   spec_sha256 TEXT NOT NULL,                     -- B's spec_hash (LN §5, RD-13)
-  latest_snapshot_artifact_id TEXT, linear_updated_at TEXT NOT NULL, observation_seq INTEGER NOT NULL DEFAULT 0,
+  latest_snapshot_artifact_id TEXT, linear_updated_at TEXT NOT NULL,
   eligible INTEGER NOT NULL CHECK (eligible IN (0,1)), eligibility_reason TEXT NOT NULL,
   mercury_status TEXT NOT NULL DEFAULT 'discovered'
     CHECK (mercury_status IN ('discovered','ineligible','shortlisted','task_open','task_closed')),   -- RD-14, FR-007
@@ -1226,7 +1224,6 @@ CREATE TABLE pull_requests (
   ci_digest TEXT, required_contexts_sha256 TEXT,  -- from GET /rules/branches/{base} at the last evaluation
   merged_by_user_id INTEGER, merged_at TEXT, merge_commit_sha TEXT, closed_by_user_id INTEGER,
   first_observed_head_at TEXT,                   -- INV-20(c) timer origin
-  observation_seq INTEGER NOT NULL DEFAULT 0,
   etag_pull TEXT, etag_reviews TEXT, etag_checks TEXT, observed_at TEXT NOT NULL,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
   UNIQUE (repo, number)
@@ -1240,7 +1237,7 @@ CREATE TABLE gate_checks (                       -- desired state of MERCURY's o
   external_id TEXT NOT NULL,                     -- <task_id>:<head_sha>:<cr|pl>
   seq INTEGER NOT NULL,                          -- increments on every desired-state change; part of the outbox key
   desired_status TEXT NOT NULL CHECK (desired_status IN ('queued','in_progress','completed')),
-  desired_conclusion TEXT CHECK (desired_conclusion IN ('success','failure','action_required','cancelled')),
+  desired_conclusion TEXT CHECK (desired_conclusion IN ('success','failure','action_required')),   -- never neutral/skipped
   github_check_run_id INTEGER, last_outbox_id TEXT, updated_at TEXT NOT NULL,
   PRIMARY KEY (repo, head_sha, name),
   CHECK ((desired_status = 'completed') = (desired_conclusion IS NOT NULL))
@@ -1338,7 +1335,7 @@ CREATE TABLE test_results (
   artifact_id TEXT NOT NULL, sha256 TEXT NOT NULL, message_id TEXT NOT NULL, created_at TEXT NOT NULL
 );
 
-CREATE TABLE merge_verifications (               -- append-only; predicate = GH §8 M1–M7; scoping = SM §8.5
+CREATE TABLE merge_verifications (               -- append-only; predicate and scope = GH §8 M1–M8; mapping = SM §8.5
   verification_id TEXT PRIMARY KEY CHECK (verification_id GLOB 'mvf_*'),
   task_id TEXT NOT NULL REFERENCES tasks(task_id), pr_id TEXT NOT NULL REFERENCES pull_requests(pr_id),
   merge_commit_sha TEXT NOT NULL, head_sha_at_merge TEXT NOT NULL, head_sha_reviewed TEXT,
@@ -1346,9 +1343,10 @@ CREATE TABLE merge_verifications (               -- append-only; predicate = GH 
   m2_merged_by_operator INTEGER NOT NULL, m3_operator_approval_on_head INTEGER NOT NULL,
   m4_claude_check_success_on_head INTEGER NOT NULL, m5_merge_commit_on_base INTEGER NOT NULL,
   m6_required_checks_passed INTEGER NOT NULL, m7_merge_content_matches_review INTEGER NOT NULL,
-  extra_checks_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(extra_checks_json)),   -- checks B adds (e.g. M8/M9)
+  m8_no_mercury_review_state INTEGER NOT NULL,
+  extra_checks_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(extra_checks_json)),   -- checks GH §8 may add later
   control_kind TEXT NOT NULL CHECK (control_kind IN ('preventive','detective')),       -- from repos.governance_mode
-  result TEXT NOT NULL CHECK (result IN ('passed','passed_with_notice','failed','waived')),
+  result TEXT NOT NULL CHECK (result IN ('passed','failed','waived')),
   scope_action TEXT NOT NULL CHECK (scope_action IN ('none','notice','repo_integrity_alert','global_security_halt')),
   waived_by_control_request_id TEXT, artifact_id TEXT NOT NULL, created_at TEXT NOT NULL,
   CHECK ((result = 'waived') = (waived_by_control_request_id IS NOT NULL))
@@ -1422,6 +1420,9 @@ CREATE INDEX ix_outbox_task ON outbox(task_id, status);
 CREATE TABLE cursors (
   name TEXT PRIMARY KEY, value TEXT, etag TEXT, last_success_at TEXT, last_attempt_at TEXT,
   consecutive_failures INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE observation_seqs (                  -- GH §13.2: per entity (e.g. 'gh:pr:<repo>#<n>:head'), updated with the inbox insert
+  entity TEXT PRIMARY KEY, seq INTEGER NOT NULL, value_sha256 TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 
 -- ============ local resources ============
@@ -1946,8 +1947,8 @@ applyInTx(tx, cmd):
 gateCheckSpec(tx, task, head, name, status, conclusion):                 # only from rule/hold effects (lint D7)
   gc = tx.gateChecks.upsert({ repo, head_sha: head, name, task_id, external_id: task+':'+head+':'+short(name),
                               desired_status: status, desired_conclusion: conclusion, seq: prev.seq + 1 })   # trigger INV-21
-  return { op: gc.github_check_run_id ? 'github.check.update' : 'github.check.create' /* or conclude */,
-           key: GH_DEDUP.check(task, head, name, gc.seq), payload: gc }
+  return { op: 'github.check.upsert',
+           key: GH_DEDUP.check(task, head, gate(name), statusOrConclusion, cause /* transition_id | hold_id:set|release */), payload: gc }
 ```
 
 ### 10.3 Authorization recording (initial and reauthorize)
@@ -2148,16 +2149,18 @@ A PR on the task branch not authored by the App is never adopted; it is reported
 
 ```text
 mergedTick(task):
-  v = await mergeVerifier.verify(task)                    # GH §8 M1–M7, fresh reads, numeric user ids; required
+  v = await mergeVerifier.verify(task)                    # GH §8 M1–M8, fresh reads, numeric user ids; required
                                                           # contexts from GET /rules/branches/{base}
   if v.kind == 'not_yet_available': task.next_action_at = now + backoff; return
   store.write(tx => {
-    cls = classify(v)                                      # SM §8.5: security | integrity | notice | pass
-    tx.mergeVerifications.insert({ ...v.values, control_kind: controlKind(repo), result: …, scope_action: … })
+    cls = classify(v)                                      # GH §8 scope column: security | integrity | notice | pass
+    tx.mergeVerifications.insert({ ...v.values, control_kind: controlKind(repo),
+                                   result: cls == 'pass' ? 'passed' : 'failed', scope_action: scopeAction(cls) })
     switch cls:
-      'security':  holdService.setInTx(tx, global 'security_halt'); te.applyInTx(tx, T35 …)
-      'integrity': holdService.setInTx(tx, repo 'integrity_alert', repo); te.applyInTx(tx, T35 …)
-      'notice' | 'pass':
+      'security':  holdService.setInTx(tx, global 'security_halt'); te.applyInTx(tx, T35 …)           # M2, M5, M8
+      'integrity': holdService.setInTx(tx, repo 'integrity_alert', repo); te.applyInTx(tx, T35 …)     # M3, M6, M7
+      'notice':    te.applyInTx(tx, T35 { notification: 'policy_notice' } …)                          # M4 only, no hold
+      'pass':
          ensure outbox per linear mode [mercury_owns_all: linear.issue.set_state(Done)], linear.comment.create(verification),
                 anchorService.enqueueAnchor(tx, 'linear_completion')
          if tx.outbox.allDone(task, POST_MERGE): te.applyInTx(tx, T34 …)
@@ -2260,7 +2263,7 @@ policyAck(ctl, task, head, reason):                      # principal operator_pr
 
 ## 12. Retry, timeout and recovery tables
 
-- **External API failures:** GH §15 is the single retry matrix (classes, backoff, breakers); this document only maps its outcomes to holds and block reasons: 401 after re-mint → `integration_auth_failed`; breaker → `circuit_open`; 403 permission → `config_fatal` (operation type); 404 confirmed → `BLOCKED(external_state_lost)`; ruleset push rejection → `BLOCKED(push_rejected)`; network/DNS → `network_down` (no attempts counted); locked Keychain → `keychain_locked`.
+- **External API failures:** GH §15 is the single retry matrix (classes, backoff, breakers); this document only maps its outcomes to holds and block reasons: 401 after re-mint → `integration_auth_failed`; breaker → `circuit_open`; 403 permission → `config_fatal` (operation type); 404 confirmed or ruleset push rejection → `BLOCKED(external_state_conflict)`; network/DNS → `network_down` (no attempts counted); locked Keychain → `keychain_locked`.
 - **Run retries and state timers:** SM §7.
 - **Recovery per task state:** SM §10. Per component: §10.6. Runbooks: REC.
 
@@ -2353,7 +2356,7 @@ Agent F owns the verification plan, test IDs (`TC-<LEVEL>-nnn`) and pass criteri
 | SMT-10 | Holds never change state; security holds refuse non-presence release; ageing escalates once |
 | SMT-11 | Spec drift during a running Codex run: result `deferred`, never applied before re-authorization (RD-13, RE-14) |
 | SMT-12 | Policy escalation: T24p → `BLOCKED(policy_ack_required)`; ack (presence) → PL success, undraft, review request; carry-forward only on identical protected digest |
-| SMT-13 | Merge verification scoping: M2/M5 → global halt; M3/M6/M7 → repo alert; M4 only → `COMPLETED` with notice; merged while asleep > 24 h is verified, not blocked (RD-16) |
+| SMT-13 | Merge verification scoping: M2/M5/M8 → global halt; M3/M6/M7 → repo alert; M4 only → `BLOCKED` with policy notice and no hold; merged while asleep > 24 h is verified, not blocked (RD-16) |
 | SMT-14 | Gate checks: CR success only via T24/T24p or same-scope release; T22 never waits on MERCURY's own contexts |
 
 ### 14.3 Data-model and contract tests (required)
@@ -2364,7 +2367,7 @@ Agent F owns the verification plan, test IDs (`TC-<LEVEL>-nnn`) and pass criteri
 | DBT-02 | Partial unique indexes reject duplicates |
 | DBT-03 | Forward migration from every released version; `vocab` additive; `user_version` and `schema_meta` set |
 | DBT-04 | Audit chain tamper detection; restore epoch accepted only with a presence-confirmed epoch row; anchors verify |
-| CT-01 | Message fixtures validate (Ajv 2020); output fixtures validate against canonical (draft-07) **and** wire copies pass the strict-subset linter; wire copy sha256 manifest matches (MSG §5.3) |
+| CT-01 | Message fixtures validate (Ajv 2020); output fixtures validate against canonical (draft-07) **and** every wire copy passes its profile's linter (`claude-sdk`, `anthropic-messages`, `codex-strict`); wire copy sha256 manifest matches (MSG §5.3) |
 | CT-02 | Schema minor-version compatibility |
 | CT-03 | Adapter contract tests on recorded agent streams; Phase 0 wire-schema acceptance probe per pinned CLI (RB-01) |
 | CT-04 | GitHub adapter never calls merge, auto-merge, update-branch, APPROVE or REQUEST_CHANGES reviews, dismissals, protection/ruleset writes (static lint D6 + runtime allowlist + fake asserts); sandbox test proves an App `COMMENT` review never blocks the merge box |

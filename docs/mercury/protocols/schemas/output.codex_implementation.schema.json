@@ -34,13 +34,18 @@
         "plan_sha256": {
           "type": "string",
           "pattern": "^[0-9a-f]{64}$"
+        },
+        "auth_id": {
+          "type": "string",
+          "pattern": "^auth_[0-9A-HJKMNP-TV-Z]{26}$"
         }
       },
       "required": [
         "request_id",
         "task_id",
         "pln_id",
-        "plan_sha256"
+        "plan_sha256",
+        "auth_id"
       ]
     },
     "status": {
@@ -49,7 +54,8 @@
         "partial",
         "blocked",
         "needs_plan_change"
-      ]
+      ],
+      "type": "string"
     },
     "summary": {
       "type": "string",
@@ -71,7 +77,8 @@
               "done",
               "skipped",
               "deviated"
-            ]
+            ],
+            "type": "string"
           },
           "note": {
             "type": [
@@ -203,7 +210,8 @@
               "partially_done",
               "not_done",
               "disputed"
-            ]
+            ],
+            "type": "string"
           },
           "note": {
             "type": [

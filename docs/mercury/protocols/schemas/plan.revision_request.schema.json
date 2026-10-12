@@ -96,6 +96,7 @@
           "$ref": "common.schema.json#/$defs/artifact_ref"
         },
         "source": {
+          "type": "string",
           "enum": [
             "claude_plan_review",
             "codex_deviation",
@@ -115,6 +116,61 @@
               "type": "null"
             }
           ]
+        },
+        "producer": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "RD-8 provenance: verbatim_render = Claude review required_change items rendered through a fixed hashed template; claude_revision_request = output of a Claude revision_request run.",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "verbatim_render",
+                "claude_revision_request"
+              ]
+            },
+            "template_sha256": {
+              "oneOf": [
+                {
+                  "$ref": "common.schema.json#/$defs/sha256"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "instruction_run_id": {
+              "oneOf": [
+                {
+                  "$ref": "common.schema.json#/$defs/run_id"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "template_sha256",
+            "instruction_run_id"
+          ]
+        },
+        "source_review_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "common.schema.json#/$defs/review_id"
+          },
+          "minItems": 0,
+          "maxItems": 10
+        },
+        "source_sha256s": {
+          "type": "array",
+          "items": {
+            "$ref": "common.schema.json#/$defs/sha256"
+          },
+          "minItems": 0,
+          "maxItems": 20
         }
       },
       "required": [
@@ -129,7 +185,10 @@
         "artifact",
         "source",
         "current_plan",
-        "review_id"
+        "review_id",
+        "producer",
+        "source_review_ids",
+        "source_sha256s"
       ]
     }
   },

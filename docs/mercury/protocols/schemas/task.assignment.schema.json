@@ -179,6 +179,34 @@
             "null"
           ],
           "maxLength": 100
+        },
+        "exec_uid": {
+          "type": "string",
+          "enum": [
+            "agent",
+            "coordinator",
+            "same_uid_dev"
+          ],
+          "description": "INV-24: agent = _mercuryagent via agent-exec."
+        },
+        "snapshot_tree_sha": {
+          "oneOf": [
+            {
+              "$ref": "common.schema.json#/$defs/git_sha"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Snapshot Claude reads (RD-7); null for Codex and local runs."
+        },
+        "codex_home": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1000,
+          "description": "Per-task CODEX_HOME (RD-15); null for non-Codex runs."
         }
       },
       "required": [
@@ -195,7 +223,10 @@
         "input_digest",
         "prompt",
         "output_schema",
-        "resume_session_id"
+        "resume_session_id",
+        "exec_uid",
+        "snapshot_tree_sha",
+        "codex_home"
       ]
     }
   },
