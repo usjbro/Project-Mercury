@@ -320,7 +320,7 @@ Notes:
 | Screen locked | Keeps running. The login Keychain normally stays unlocked while the screen is locked, unless the operator set "Lock after N minutes of inactivity" or "Lock when sleeping" on the login keychain (ASM-D-09). `mercury doctor` reports `security show-keychain-info`. |
 | Logout | SIGTERM → graceful shutdown (§12). Runs are marked `interrupted`. Resumes at next login. |
 | Restart or shutdown | Same as logout, and the same at the next login. |
-| macOS update with "Install overnight" | Behaves like a restart. If macOS uses an FileVault authenticated restart, the user may come back logged in (ASM-D-10). Otherwise MERCURY waits for login. |
+| macOS update with "Install overnight" | Behaves like a restart. If macOS uses a FileVault authenticated restart, the user may come back logged in (ASM-D-10). Otherwise MERCURY waits for login. |
 
 **FileVault and auto-login tradeoff:**
 
