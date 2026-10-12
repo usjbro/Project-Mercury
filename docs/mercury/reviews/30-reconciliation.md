@@ -123,3 +123,10 @@ Each owner records a disposition for every finding addressed to them in `reviews
 
 ## Addendum A (after Phase 4 revisions)
 - **E objection to RD-1 (44-revision-E.md §3) — accepted in part.** With `mercuryd` in the operator uid, a code-execution bug in the coordinator reaches the operator's own GitHub credentials (RISK-27). RD-1 stands for v1 (agents, which execute untrusted content, are isolated; the coordinator executes only MERCURY's own pinned code and parses untrusted data). **OD-36 (dedicated coordinator account, U2) is promoted from "optional future hardening" to a required operator decision before unattended operation**, alongside OD-01 (G-ORG). Second condition accepted: if Phase 0 shows MERCURY Keychain items must trust `/usr/bin/security`, the signed Keychain helper moves into v1 (M1).
+
+## Addendum B (after A and D Phase 4 objections)
+1. **`statuses:read` added to `mercury-bot`** (A objection 1). Read-only; needed when a target repo's required context is a commit status. RD-6 amended.
+2. **Chain-head anchor carriers** (A objection 2): the `MERCURY / claude-review` check-run summary is **not** used as an anchor carrier on public repositories (consistent with OD-24 default "no public chain-head embed"). Carriers are the Linear completion comment and the private anchor repo via `mercury-ops` (plus the check summary only on private repos). RD-4 amended.
+3. **Supervisor alive file** = `WORK_ROOT/ctl/coordinator.alive` (operator-owned 0640, group-readable) (A objection 3, D objection 2). RD-11 clarified.
+4. **Parameter-table scope** (D objection 1): accepted as implemented — operational values in macos-service.md §2; workflow policy (attempt counts/backoff, revision budgets, authorization expiry, state reminder timers) stays in state-machine.md / OD-08, referenced by name. RD-10 clarified.
+5. **Restore-epoch confirmation is a presence-tier command** (D objection 3): confirmed. RD-12 list extended.
