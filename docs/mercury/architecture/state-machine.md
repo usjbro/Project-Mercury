@@ -10,7 +10,7 @@ What this document does **not** restate (single source of truth elsewhere):
 |---|---|
 | SQL DDL for every table named here | [`components.md` §6](components.md#6-persistent-data-model) |
 | Message and agent-output schemas | [`../protocols/messages.md`](../protocols/messages.md), [`../protocols/schemas/`](../protocols/schemas/) |
-| Operational parameter values (wake grace, stall thresholds, lease interval, disk thresholds, watchdog, shutdown budget, dark-wake threshold) | Parameter table in [`../operations/macos-service.md`](../operations/macos-service.md), cited here as **MS-PARAM** |
+| Operational parameter values (wake grace, stall thresholds, lease interval, disk thresholds, watchdog, shutdown budget, dark-wake threshold) | Parameter table, [`../operations/macos-service.md` §2](../operations/macos-service.md#2-operational-parameter-table-normative), cited here as **MS-PARAM** (parameter names such as `wake.grace_s`) |
 | Filesystem layout (`MERCURY_HOME`, `WORK_ROOT`, run directories) | `operations/macos-service.md` §7.1 |
 | API retry matrix and failure-class accounting for external calls | `integrations/github.md` Part B §15 (**GH §15**) |
 | Dedup key formats | `integrations/github.md` Part B, dedup key catalogue (**GH-DEDUP**) |
@@ -343,8 +343,8 @@ Rules (RD-3):
 |---|---|---|---|---|---|---|
 | `operator_pause` | global / repo / task | Operator `mercury pause` | Operator `mercury unpause` | No (`mercury cancel-run` stops one) | — | none |
 | `operator_hold` | task | Linear label `mercury:hold` added by an operator identity | Label removed | No | — | digest after 14 d |
-| `host_sleep_grace` | global | HealthMonitor sleep gap (components §10.10) | Automatically when the wake grace (MS-PARAM) has elapsed **and** either a full-wake signal was received or the dark-wake threshold (MS-PARAM; RD-16 default 5 min) of continuous credited awake time has passed, **and** a connectivity probe succeeded | No | — | — |
-| `network_down` | global | Authenticated, ETag-conditional connectivity probe fails (RD-18) | Probe success plus the stability period (MS-PARAM) | No (network-class run failures consume nothing, §7.1) | — | ops digest after 24 h awake |
+| `host_sleep_grace` | global | HealthMonitor sleep gap (components §10.10) | Automatically when `wake.grace_s` has elapsed **and** either a full-wake signal from `mercury-power` (MS §8.6) was received or `wake.dark_wake_min_awake_s` of continuous credited awake time has passed, **and** a connectivity probe succeeded | No | — | — |
+| `network_down` | global | Authenticated, ETag-conditional connectivity probe fails (RD-18) | Probe success for `net.stability_s` | No (network-class run failures consume nothing, §7.1) | — | — |
 | `rate_limited` | integration (`github`, `linear`) | Adapter on 403/429 with reset header | Reset time passes | No | — | — |
 | `circuit_open` | integration or agent | Breaker per GH §15 | Half-open probe success | No | — | ops alert at open |
 | `integration_auth_failed` | integration (`github`, `linear`) | 401 after one re-mint (GH §15) | Successful `mercury reload-credentials` or self-test | No | notification `credentials` | — |
@@ -362,7 +362,7 @@ Rules (RD-3):
 | `deprioritized` | task | `mercury` label removed, or issue moved back to `Backlog` (RC-23; cancel only via Linear Canceled/Duplicate or the CLI) | Label restored / state forward | No | — | 14 d → digest notification |
 | `host_instability` | task | `lost_by_host` cap per step reached (§7.1) | Operator `mercury unpause --task` | No | ops alert | — |
 
-Values in the "Ageing" column are the RD-3 defaults; they are registered as parameters in MS-PARAM, which wins on conflict.
+Ageing values are the RD-3 defaults registered as `hold_age.*` in MS-PARAM, which wins on conflict.
 
 While `spec_changed` or `authorization_expired` is set, the dispatcher schedules a Claude `authorization` run in `mode = reauthorize` (the only dispatch allowed for that task). Its decisions (§8.1.1) release the hold or move the task.
 
@@ -445,7 +445,7 @@ The **failure-class accounting for external calls is defined once in GH §15** (
 | Class group | Classes | Consumes a run attempt? | Consumes an outbox attempt? | Effect |
 |---|---|---|---|---|
 | Environment | `network_down`, `rate_limited`, `host_sleep`, `transient_api` (after the adapter's own retries), `cancelled_by_coordinator`, `lost_by_coordinator_crash` | **Never** | **Never** while `network_down` is held or the probe fails within 60 s of the error (RD-18) | Hold set or re-dispatch with backoff |
-| Host loss | `lost_by_host` (boot session changed, `exit.json{reason: supervisor_lost}`, or a recorded SHA missing from the mirror) | Never | n/a | Separate cap per step (RD-11 default 5, MS-PARAM); at the cap: `host_instability` hold + ops alert, **not** `BLOCKED` |
+| Host loss | `lost_by_host` (boot session changed, `exit.json{reason: supervisor_lost}`, or a recorded SHA missing from the mirror) | Never | n/a | Separate cap per step (`run.lost_by_host_cap`); at the cap: `host_instability` hold + ops alert, **not** `BLOCKED` |
 | Run failure | `crash`, `timeout`, `stalled`, `output_invalid` (after one fresh retry with the same input), `incomplete` (Codex `partial`, after one resume) | Yes | n/a | Retry until max attempts, then the "on exhaustion" transition |
 | Fatal | `config_fatal` (incl. `invalid_json_schema` 400, RD-15) | No | No | Global/agent `config_fatal` hold |
 | Policy | `policy_violation`, `semantic_invalid` (V4) | Yes (non-retryable for `policy_violation`) | n/a | T19 or re-run per CL/CX |
