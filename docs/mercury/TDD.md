@@ -692,9 +692,11 @@ Index with statuses: [`architecture/decisions/README.md`](architecture/decisions
 
 Owner: [`planning/roadmap.md`](planning/roadmap.md). Phases: **P0** environment verification, identities and governance setup (P0a Mac and agent CLI checks; P0b agent-uid infrastructure and SEC-T-20; P0c identities, sandbox repo/team governance; P0d MERCURY repo CI) → **M1** core (DDL + all invariant triggers + audit chain, state machine + holds, derived queue, AgentLauncher, control socket/CLI, fakes, property suite) → **M2** read-only pollers + drift monitor → **M3** Claude adapter under agent uid, snapshot builder, authorization records → **M4** Codex planning, plan review loop → **M5** implementation, verify, git hardening, secret scan, policy pre-checks, PR (security gate before first sandbox push) → **M6** Claude code + security review, check runs, revision loops → **M7** merge verification, Linear per mode, notifications, audit trace and anchors, watchdog → **M8** hardening (crash injection, real-Mac sleep/restart, injection corpus, SAC) → **M9a** shadow → **M9b** supervised pilot (requires target-repo governance; G-DETECT risk acceptance or G-ORG) → **M9c** cutover. Unattended operation additionally requires G-ORG and a decision on OD-36.
 
+**Effort (Agent F, Phase 4):** base 156 P50 / ~214 P90 engineer-days, +12/22 for conditional issues; ~7 months P50, 9–10 months P90 calendar for one engineer-equivalent. The critical path runs through P0 (operator time on the Mac and identity/governance setup) → M1 core → M3 → M4 → M5 security gates → M6 → M7 → M8. Delivery risks RISK-41…56 are in roadmap.md.
+
 ## 28. Issue Breakdown and Dependencies
 
-Owner: [`planning/issue-breakdown.md`](planning/issue-breakdown.md) (epics → issues `MERC-nnn` → subtasks with dependencies, requirement IDs, acceptance criteria, effort with uncertainty, critical path). These are proposals; **no Linear issues have been created**.
+Owner: [`planning/issue-breakdown.md`](planning/issue-breakdown.md) (80 proposed issues `MERC-nnn` in 13 epics, 3 conditional; epics → issues → subtasks with dependencies, requirement IDs, acceptance criteria, effort with uncertainty, critical path). These are proposals; **no Linear issues have been created**.
 
 ## 29. Requirements Traceability Matrix
 
