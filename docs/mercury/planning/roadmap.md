@@ -34,11 +34,11 @@ Effort is P50 / P90 focused engineer-days from `planning/issue-breakdown.md` (su
 | **P0d** MERCURY repo bootstrap | Govern MERCURY's own repository like a target | MERC-030 | `mercury-bot` exists | CI (macOS runner), secret scan, ID/pointer/parameter lint green (TC-OPS-009/010); ruleset and CODEOWNERS active | 1 / 1.5 |
 | **M1** Core coordinator | Deterministic core that enforces every invariant with no external I/O | MERC-101…113 (+ MERC-1K1 if triggered): config/paths/parameters, store, DDL with all INV triggers and audit chain, transition engine, holds/timers, derived queue/outbox, production `agent-exec`/`agent-ctl`, run outcomes and adoption, scheduler, lifecycle and host model, control socket and principals, fakes (both clock modes), PROP suite and crash harness | P0a and P0b closed for M1-gating checks; P0d green | Verification plan §7.1 M1 row: 0 PROP counterexamples; TC-REC-001 200 runs 0 violations; FakeBroker grammar tests; **G-S1 recorded** before any real agent run | 38 / 62.5 |
 | **M2** Read-only pollers | See GitHub and Linear without changing them | MERC-201…206: GitHub client (narrowed tokens, retry matrix, endpoint allowlist, probe), Linear poller, PR/check poller, eligibility and dependency guard, drift monitor read, shadow status | M1 exit; P0c identities | 0 missed of 100 sandbox updates; 0 writes; drift detection on the sandbox ≤ 60 min awake (alert only) | 11.5 / 18 |
-| **M3** Claude decisions | Triage and authorization as versioned records, reading snapshots only | MERC-301…305 (+ MERC-3A1 if P0-213 failed): snapshot builder, Claude adapter under the agent uid, schemas and wire copies, Decision Recorder and guards, isolation and injection guard tests | M1 exit; M2 for real input (fakes otherwise); G-S1 | 0 Codex spawns without authorization; TC-SEC-124 100 %; TC-SEC-103/121/123 pass on the Mac | 11.5 / 18 |
-| **M4** Codex planning | Plan → review → revise → approve bound to hashes | MERC-401…406: Codex adapter with per-task `CODEX_HOME`, mirror and worktrees, instruction integrity, plan review loop, stall detection, **G-S2 evidence run** | M3 exit; OD-06 (branch naming), OD-08, OD-11 | 0 implementation spawns with stale approval; **G-S2 evidence** (SAC-05/13/14/19; SAC-18 completed in M5) | 11.5 / 20 |
+| **M3** Claude decisions | Triage and authorization as versioned records, reading snapshots only | MERC-402a, MERC-301…306 (+ MERC-3A1 if P0-213 failed): mirror and read-only hardened git (402a, VC-18), snapshot builder, Linear write handlers for comments/labels/In Progress (306, VC-20), Claude adapter under the agent uid, schemas and wire copies, Decision Recorder and guards, isolation and injection guard tests | M1 exit; M2 for real input (fakes otherwise); G-S1 | 0 Codex spawns without authorization; TC-SEC-124 100 %; TC-SEC-103/121/123 pass on the Mac | 14.5 / 23 |
+| **M4** Codex planning | Plan → review → revise → approve bound to hashes | MERC-401, MERC-402b, MERC-403…406: Codex adapter with per-task `CODEX_HOME`, task worktrees and reset policy (402b), instruction integrity, plan review loop, stall detection, **G-S2 evidence run** | M3 exit; OD-06 (branch naming), OD-08, OD-11 | 0 implementation spawns with stale approval; **G-S2 evidence** (SAC-05/13/14/19; SAC-18 completed in M5) | 10.5 / 18.5 |
 | **M5** Implementation and PR | Approved plans become draft PRs authored by `mercury-bot` | MERC-501…508: implementation run, `verify` and `deps_install` under the agent uid, git hardening and mirror push, pre-push gates, `MERCURY / policy` + presence helper, draft PR creation, drift halt | M4 exit; OD-09; P0-045 (presence) | **G-S3 recorded before the first sandbox push**: SAC-01/02/06/07/11/16/17; 0 duplicate PRs | 18 / 29.5 |
 | **M6** Claude PR review | Independent code and security review; required check; bounded loops | MERC-601…604 | M5 exit; OD-21, OD-23, OD-26, OD-37 | Bot reviews 100 % `COMMENT`; `MERCURY / claude-review` success only on the reviewed head; loops bounded | 7.5 / 11.5 |
-| **M7** Close the loop | Merge verification, Linear modes, notifications, audit, anchoring, watchdog | MERC-701…708 | M6 exit; OD-06, OD-12, OD-15, OD-20, OD-24, OD-28, OD-30 | Audit 10/10; ≤ 1 notification per event; anchors at every carrier; SAC-08 and SAC-10 green; live-agent sandbox smoke passed; **G-S5 controls built** | 16 / 26 |
+| **M7** Close the loop | Merge verification, Linear modes, notifications, audit, anchoring, watchdog | MERC-701…708 | M6 exit; OD-06, OD-12, OD-15, OD-20, OD-24, OD-28, OD-30 | Audit 10/10; ≤ 1 notification per event; anchors at every carrier; SAC-08 and SAC-10 green; live-agent sandbox smoke passed; **G-S5 controls built** | 15 / 24.5 |
 | **M8** Hardening | Prove it on the real Mac under failure | MERC-801…807 (+ MERC-807b if OD-36 = U2) | M7 exit; OD-14 | All L7–L16 exit criteria; TC-REC-020 50/50 on T4v; PI corpus ≥ 60 variants (SAC-04); **SAC-01…20 evidence file complete**; OD-36 decided | 19 / 33.5 |
 | **M9a** Shadow (MIG-1) | Calibrate against real work without writing | MERC-901, MERC-902, MERC-903 | M8 exit; target onboarding (OPS-016) passes; OD-16 | Verification plan §7.3 shadow criteria; daily spend cap (OD-08) set from shadow data | 4 / 7 |
 | **M9b** Supervised pilot (MIG-2) | Real tasks with the operator watching | MERC-904 | M9a exit; **G-S4** (G-DETECT written acceptance or G-ORG; SAC-04/09/10/12/15/20) | §7.3 supervised criteria | 2.5 / 4 |
@@ -123,23 +123,23 @@ Governance modes are not gates: **G-DETECT** is allowed for the sandbox (P0c) an
 | P0d | 1 | 1.5 | parallel |
 | M1 | 38 | 62.5 | yes |
 | M2 | 11.5 | 18 | parallel to M1 tail and M3 |
-| M3 | 11.5 | 18 | yes |
-| M4 | 11.5 | 20 | yes |
+| M3 | 14.5 | 23 | yes |
+| M4 | 10.5 | 18.5 | yes |
 | M5 | 18 | 29.5 | yes |
 | M6 | 7.5 | 11.5 | yes |
-| M7 | 16 | 26 | yes |
+| M7 | 15 | 24.5 | yes |
 | M8 | 19 | 33.5 | yes |
 | M9a–c | 8.5 | 15 | yes |
-| **Total (base)** | **156** | **259.5** | phase path ≈ 139 P50 |
+| **Total (base)** | **157** | **261.5** | phase path ≈ 140 P50 |
 | Contingency (conditional issues MERC-1K1, MERC-3A1, MERC-807b) | 12 | 22 | if triggered |
 
-**Planning P90.** The simple sum of P90s overstates risk because not every issue overruns together; treating them as fully independent understates it. The plan uses a partly correlated estimate: P90 ≈ P50 + 0.5 × Σ(P90 − P50) + 0.5 × √Σ(P90 − P50)² ≈ **214 engineer-days** (base), plus contingency when a trigger fires.
+**Planning P90.** The simple sum of P90s overstates risk because not every issue overruns together; treating them as fully independent understates it. The plan uses a partly correlated estimate: P90 ≈ P50 + 0.5 × Σ(P90 − P50) + 0.5 × √Σ(P90 − P50)² ≈ **216 engineer-days** (base; Phase 5 re-estimate after VC-18/19/20 and VF-20, was 214), plus contingency when a trigger fires.
 
 **Change from the Phase 3 estimate** (≈ 132 / 175, review F §7.3): +24 P50. Drivers: production root-owned wrappers and broker port (+4), presence helper and policy acknowledgement (+3), power/sleep helper and dark-wake handling (+2), two Apps, check-run pinning and Linear dual modes (+3), adoption/`lost_by_host`/durability ordering (+3), restore epochs and anchoring carriers (+2), `verify`/`deps` profiles (+3), power-loss VM rig (+2), G-S2 evidence run (+1.5).
 
 **Critical path.**
-- *Phase level:* P0a → P0b → M1 → M3 → M4 → M5 → M6 → M7 → M8 → M9a → M9b → M9c ≈ 139 P50 days of the 156; P0c, P0d and M2 run alongside.
-- *Issue level:* the dependency chain in `planning/issue-breakdown.md` §3 (≈ 44 P50 days) is the shortest build with unlimited capacity; because one operator-engineer builds MERCURY, capacity — not dependencies — sets the calendar, and the chain sets priority inside each milestone.
+- *Phase level:* P0a → P0b → M1 → M3 → M4 → M5 → M6 → M7 → M8 → M9a → M9b → M9c ≈ 140 P50 days of the 157; P0c, P0d and M2 run alongside.
+- *Issue level:* the dependency chain in `planning/issue-breakdown.md` §3 (≈ 51 P50 days after the Phase 5 re-plan; it now runs through M3–M5: 202 → 306 → 304 → 404 → 501 → 502 → 507) is the shortest build with unlimited capacity; because one operator-engineer builds MERCURY, capacity — not dependencies — sets the calendar, and the chain sets priority inside each milestone.
 - *Inside M1:* store → DDL/triggers → engine → queue/outbox → adoption → PROP suite, with the broker (MERC-107, H uncertainty) started first because P0b can change it.
 
 **Re-plan points.** Re-estimate at Phase 0 close (MERC-005, after P0b/P0c) and at M4 exit (after the first real agent runs).
@@ -153,7 +153,7 @@ Assumption ASM-F-10: about 1.5 focused engineer-days per workday with agent assi
 | Segment | Effort P50 / planning P90 | Calendar at P50 | Calendar at P90 | Notes |
 |---|---|---|---|---|
 | Phase 0 (P0a–P0d) | 14.5 / ≈ 20 | 2–3 weeks | 4 weeks | Bound by operator availability at the Mac and root consent, not effort |
-| Build M1–M8 | 133 / ≈ 183 | ≈ 18 weeks | ≈ 25 weeks | |
+| Build M1–M8 | 134 / ≈ 185 | ≈ 18 weeks | ≈ 25 weeks | |
 | Shadow (M9a) | 4 | 2 weeks (10 working days, OD-16) | 3 weeks | Calendar-bound |
 | Supervised pilot (M9b) | 2.5 | 3–4 weeks (≥ 10 tasks) | 6 weeks | Bound by suitable issues and review windows |
 | Cutover and watch (M9c) | 2 | 30 days | 30 days | Calendar-bound; G-ORG transfer must precede |

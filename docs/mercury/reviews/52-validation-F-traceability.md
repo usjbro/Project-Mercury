@@ -174,3 +174,110 @@ For each TC it checks that the Covers column cites ≥ 1 registered requirement,
 - **Fix, verified on a patched copy under both versions:** replace `;` with `,` in TDD lines 344 and 348.
 - **Limitation:** parse only, no rendering. Layout and readability are unchecked.
 
+## 5. Roadmap: architectural dependencies and security gates
+
+**Method.** A script over `planning/issue-breakdown.md` parses `Blocked by` edges, epics and estimates. It reports undefined targets, cycles, edges into a later phase, and the longest P50 chain. I then inspected each edge against the transitions and components it needs.
+
+| Check | Result |
+|---|---|
+| Undefined dependency targets | 0 |
+| Cycles | 0 |
+| Edge from an earlier phase to a later one | 1: MERC-005 (Phase 0 closure report, filed under P0a) depends on MERC-011 (P0b) and MERC-024 (P0c). The roadmap also listed "re-estimate published" as a P0a exit condition, which P0a cannot meet. **Fixed in place** (VF-11): MERC-005 closes at the end of Phase 0, and the P0a exit no longer waits for it |
+| Architectural edges missing (C, `reviews/50` VC-18/19/20) | **Applied in place** (coordinator request): (a) MERC-402 retired and split into **MERC-402a** (mirror + hardened read-only git, M3), which blocks MERC-301/302, and **MERC-402b** (task worktrees + reset policy, M4), which blocks MERC-404/504/707. (b) MERC-501 is now blocked by 504/505 (T15 uses a stub policy report until 506). (c) New **MERC-306** (M3) holds the Linear comment/label/In Progress handlers and allowlist and blocks MERC-304; MERC-702 keeps only the mode-dependent projection |
+| Edge missing (found here) | **VF-20, fixed in place**: MERC-507 (draft PR) was not blocked by MERC-502 (`verify`), although `TESTING → PR_OPEN` requires a `verify` result. Before the fix, the dependency critical path skipped M3–M5 entirely (020→…→106→201→203→507→…) |
+| Re-estimate | Base 156 → **157** P50; P90 sum 259.5 → **261.5**; planning P90 214 → **≈ 216**. Base issues 77 → **79** (82 incl. 3 conditional). Effort per phase: M3 14.5/23, M4 10.5/18.5, M7 15/24.5. Phase path ≈ 140 P50. Issue-level dependency critical path 44 → **51** P50, now through 202 → 306 → 304 → 404 → 501 → 502 → 507 → 601 → … Calendar unchanged (≈ 7 months P50, 9–10 months P90): the schedule is capacity-bound. Updated: issue-breakdown §2, §3; roadmap §2, §5, §6; verification plan §7.1 (TC-UNIT-070/071 moved to the M3 gate); RTM FR-202, SEC-805 |
+| Security gates before first use | G-S1 before the first real agent run (M1 exit; MERC-302 records it); G-S2 evidence in M4, before any non-sandbox write run (CON-018, TC-UNIT-072 dispatcher refusal), now including P0-049 when `deps_install` is enabled (VE-17); G-S3 at M5 exit, before the first sandbox push (MERC-508); G-S4 at M9b entry; G-S5 at M9c entry. **Pass** |
+| Mermaid dependency graphs (roadmap §3, issue-breakdown §2.1) | Parse under 10.9.1. Epic-level edges are unchanged by the split (E3 → E4 already exists) |
+
+**G-S5 placement disagreement (E: "M7", F: M9c entry). Resolved: the gate is at M9c entry, and its controls are built in M7.** Evidence:
+
+1. E's own G-S5 condition requires "SAC-01…SAC-20 green". SAC-04 needs the ≥ 60-variant PI corpus with real agents, and the SAC evidence file is completed in M8 (roadmap M8 exit; verification plan §7.1 M8 row). The gate therefore cannot be passed at M7.
+2. Both documents define the gate by the same event, "unattended or overnight operation". In the roadmap, that event first occurs at M9c: M1–M8 use fakes and the sandbox under operator-run test procedures, and M9b dispatches only in operator-declared supervision windows "unless G-S5 passed" (verification plan §7.3).
+3. The reconciliation (RD-4) attaches "M7" to anchoring being in place before unattended operation. That is a statement about building the control, and it matches "G-S5 controls built" in the roadmap M7 exit.
+
+Remaining action: **VF-17 (Low, E)**. threat-model §8.10 should read "Unattended or overnight operation (controls built in M7; gate recorded at M9c entry)". Moving the gate earlier would only be needed if the operator wanted unattended sandbox runs before cutover. That would also require G-ORG for the sandbox, and nobody has requested it.
+
+## 6. Operator-decision register consistency (TDD §30 ↔ traceability §9 ↔ ADRs ↔ roadmap §9)
+
+**Method.** Extracted the 37 register rows (default and needed-by), the 17 rows of the TDD §30 table, every `OD-nn … (default …)` statement in `architecture/decisions/`, and roadmap §9. Compared them pairwise.
+
+| Pair | Result |
+|---|---|
+| Register ↔ roadmap §9 | One mismatch: OD-37 was needed-by M6 in the register but P0c in the roadmap. The App permission set is fixed at P0c (P0-060 checks "no `actions` unless OD-37"). **Fixed in place**: register "P0c (permission set); M6 (use)" |
+| Register ↔ TDD §30 (defaults) | All 17 defaults agree |
+| Register ↔ TDD §30 (needed-by) | **VF-16 (Low, orchestrator)**. Correct to: OD-06 "M4 (branch naming) / M7"; OD-01 "P0c / M9b / M9c (G-ORG)"; OD-36 "M8 exit (decision); in force at G-S5 / M9c"; OD-37 "P0c / M6". TDD "P0" for OD-03/04/05/17/18/20/35 is coarse but correct |
+| Register ↔ ADRs | **VF-14 (Medium, A)**: ADR-014 lists "**OD-22** require review-thread resolution (default on)". The register, `integrations/github.md` §9.1 ruleset JSON (`required_review_thread_resolution: false`) and SEC-100 all say **off**. An operator who follows the ADR would let bot `COMMENT` threads block merges. Fix: "(default off; if on, MERCURY posts body-only reviews, github.md §6.3)". **VF-15 (Low, A)**, four items: (1) ADR-010 and ADR-013 call OD-36 "optional … default: not in v1" without stating Addendum A (decision required before G-S5); (2) ADR-011 (OD-08) and ADR-015 (OD-27) say values live in "D's parameter table", but workflow policy belongs to state-machine §7/§9 (Addendum B.4); (3) ADR-018 OD-24 "no, beyond the check summary" is looser than the register (carriers are the Linear completion comment and the private anchor repo; check summary only on private repos, TC-SEC-163); (4) ADR-013 OD-31 "acceptable only together with OD-18" understates the register ("not acceptable as the end state; signed helper") |
+| Aliases cited in TDD (OD-E-02, OD-D-07) | Resolve through the register's Aliases column (OD-35, OD-20). Pass |
+
+## 7. Accuracy of TDD §5, §22, §27–§30 (for the orchestrator)
+
+| § | Statement checked | Result |
+|---|---|---|
+| §5 | Requirement set owned by traceability.md; SEC in threat-model §5 | Correct (§5.1) |
+| §5 | "coverage matrix is in `reviews/25-review-F-coverage.md` §3" | **Stale (VF-19, Low)**. The normative coverage map is now traceability §2 (Phase 4), and Phase 5 used it. Point there; keep 25 §3 as history |
+| §5 | "17 task states + issue-level `discovered`" | Correct |
+| §22 | Table thresholds (10,000 sequences; 1,000 crash runs; 50 VM stops; ≥ 60 PI cases; 100 % guards) | Match the verification plan §3/§5/§6 |
+| §22 | Levels listed vs brief J | **VF-13 (Low)**. Missing rows: generic Integration (L4: macOS runner, both SQLite drivers, 0 surviving children, one positive and one negative case per trigger) and Duplicate events (L10: each duplicate input → exactly one effect; 0 repeated notifications in 100 unchanged polls; A→B→A flips observed) |
+| §27 | Phases, M-scopes, gates, "unattended additionally requires G-ORG and OD-36" | Correct in structure. **Now stale after the Phase 5 re-plan (VF-21, Low)**: effort is "157 P50 / ≈ 216 P90, +12/22"; M3 adds the mirror and Linear write handlers; the issue-level dependency path is ≈ 51 P50 through M3–M5. Optionally name G-S1…G-S5 at their milestones |
+| §28 | "80 proposed issues in 13 epics, 3 conditional" | **Stale (VF-21)**: now 82 (79 base + 3 conditional), 13 epics |
+| §29 | RTM columns | Correct |
+| §30 | RISK-01…34 (threat-model §9) and RISK-41…56 (roadmap §8); ASM→P0 linkage; OD table; open questions (ASM-B-56 resolves to P0-236) | Correct except the needed-by cells (VF-16) |
+| Other TDD items found while linting | §10.2 Mermaid parse failure (**VF-01, Medium**); §10 envelope example omits `recorded_at`, `actor`, `recorded_by`, `payload_sha256` (**VF-12, Low**: label it an excerpt or add them); §21 matrix says CI failure → "GitHub PR comment + Linear comment", but components §4.15 (owner) says PR comment only (**VF-18, Low**) | Report |
+
+## 8. Fixes routed to F by other Phase 5 validators (applied in place)
+
+| Source | Request | Applied in |
+|---|---|---|
+| D `reviews/51` **VD-01** (High, D-owned fix) | After a history-losing restore (backup audit head seq < last anchor seq, or reason `new_host`), every non-terminal task must go to `BLOCKED(reauthorization_required)` | Verification plan TC-REC-019 (fixture: revocation, CLI cancel and budget grant after the backup; criterion: every non-terminal task `BLOCKED(reauthorization_required)`, 0 dispatches before re-authorization, nothing resurrected) and TC-SEC-164 (added F criterion). Consistent with recovery.md §6 TC-REC-019 |
+| E `security/security-review.md` **VE-17** | The `deps_install` registry-egress part of SEC-206 is MUST; P0-049 gates G-S2 whenever `deps_install` is enabled for a non-sandbox repo (procedure: threat-model §10.4) | traceability §4.1 and §6.2 (SEC-206 → M, gate G-S2), §10.2 ASM-E-06 row; verification plan §7.2 G-S2 evidence and §8.1 P0 note |
+| C `reviews/50` **VC-18, VC-19, VC-20** (Medium) | Split MERC-402; add 504/505 → 501 and 402 → 404 edges; move Linear write handlers to M3 | issue-breakdown (MERC-402a/402b/306; edges; §2, §3); roadmap §2, §5, §6; verification plan §7.1; RTM FR-202/SEC-805; re-estimate in §5 above |
+
+## 9. Findings register
+
+| ID | Sev | Owner | Finding | Proposed fix / status |
+|---|---|---|---|---|
+| VF-01 | Medium | Orchestrator (TDD) | TDD §10.2 `sequenceDiagram` fails to parse in mermaid 10.9.1 and 11.4.1: `;` in message text at lines 344 and 348. A required "agent message sequences" diagram will not render on GitHub | Replace `;` with `,` on both lines (verified to parse) |
+| VF-02 | Low | E | threat-model §3.3 item 11, §5.2.1 L7, SEC-T-93 say merge verification "M1–M9"; the single definition (github.md §8) is M1–M8 | Change to M1–M8. F's copies fixed in place |
+| VF-03 | Medium | Orchestrator, B, all | ID collisions. `RB-nn` is used both for Review-B findings and for runbooks RB-01…18 (e.g. linear.md §7.3 heading "RB-13"). `RD-nn` is used both for Review-D findings and for decisions RD-1…20 (e.g. "RD-13, RD-15" in reconciliation RD-15). Pointers are ambiguous | Registry rule added to traceability §1.1 (fixed in place). Owners should qualify Phase 3 finding citations as `RB-nn (21)` / `RD-nn (23)` in new text; the TC-OPS-010 lint should enforce this |
+| VF-04 | Medium | D | recovery.md §6 labels seven scenarios with TC-REC IDs that mean different tests in the verification plan; TC-REC-022/023 were unregistered | Fixed in F's files (022/023 registered; mapping note). D should relabel recovery.md §6 per traceability §8.3 |
+| VF-05 | Low | A, E | Two-digit `P0-26…P0-32` in overview §-ASM table, ADR-013, ADR-020, threat-model §10.3; D's alias statement covers only P0-01…25 | Use P0-026…032 |
+| VF-06 | Low | E, D | P0-049 had no procedure | **Resolved** during Phase 5 (threat-model §10.4; VE-17); gate registration updated |
+| VF-07 | Low | F | SEC level mismatches (SEC-110/206/211); FR-260 pointer; NFR design pointers; 4 weak criteria; OPS-001 range; withdrawn ASM-B-18 cited; 19 TCs missing from the RTM; OD-37 needed-by | **Fixed in place** (traceability §14.1) |
+| VF-08 | Low | C | `ASM-C-nn` text exists only in the process record `reviews/12-agent-C-report.md`; components.md and traceability §10.2 cite ASM-C-01/02 | Add an ASM-C table to components.md (or state that reviews/12 §Assumptions is the defining location) |
+| VF-09 | Low | Orchestrator | Phase 5 outputs linked from TDD §19/§32 were missing at first run | **Resolved**. Re-run both lints at sign-off |
+| VF-10 | Low | C | FR-042's starvation bound is only implicit in the components §7.4 score (aging term saturates at 5 days) | Define a numeric bound or a parameter |
+| VF-11 | Low | F | MERC-005 phase placement versus P0a exit | **Fixed in place** |
+| VF-12 | Low | Orchestrator | TDD §10 envelope example omits 4 schema-required fields | Add them or mark the example as an excerpt |
+| VF-13 | Low | Orchestrator | TDD §22 omits the L4 (integration) and L10 (duplicate events) rows | Add the two rows (text in §7) |
+| VF-14 | Medium | A | ADR-014: OD-22 "default on" contradicts the register, the github.md ruleset and SEC-100 (off) | "default off; if on, body-only reviews (github.md §6.3)" |
+| VF-15 | Low | A | ADR OD wording: OD-36 (ADR-010/013), OD-08/OD-27 values location (ADR-011/015), OD-24 (ADR-018), OD-31 (ADR-013) | Align with the register (§6) |
+| VF-16 | Low | Orchestrator | TDD §30 needed-by cells for OD-01, OD-06, OD-36, OD-37 | Per §6 |
+| VF-17 | Low | E | threat-model §8.10 G-S5 "(M7)" | "(controls built in M7; gate at M9c entry)". Disagreement resolved in §5 |
+| VF-18 | Low | Orchestrator | TDD §21 CI-failure channel differs from components §4.15 | Align with the owner (components) |
+| VF-19 | Low | Orchestrator | TDD §5 points to the Phase 3 coverage matrix | Point to traceability §2 |
+| VF-20 | Low | F | MERC-507 not blocked by MERC-502; the critical path skipped M3–M5 | **Fixed in place**; path re-computed (51 P50) |
+| VF-21 | Low | Orchestrator | TDD §27/§28 figures stale after the Phase 5 re-plan | 157 P50 / ≈ 216 P90; 82 issues (79 base + 3 conditional); dependency path ≈ 51 P50 |
+
+**Counts:** Critical 0 · High 0 · Medium 4 (VF-01, VF-03, VF-04, VF-14) · Low 17 (of which 6 are fixed or resolved: VF-06, VF-07, VF-09, VF-11, VF-20, plus the F parts of VF-02/VF-04).
+
+## 10. Verdict
+
+**Approve with conditions.**
+
+- Traceability is complete in both directions: 281 live requirements, each with a design location, a measurable criterion, ≥ 1 resolvable test and a milestone; 284 live TCs, each tracing to a requirement and listed in the RTM.
+- No ID is defined twice, and no cited ID is undefined outside retired, withdrawn or alias contexts.
+- All 1,511 file§ pointers and 473 links in the current documents resolve.
+- Every brief item is covered.
+
+Conditions before TDD §32 sign-off:
+
+1. Fix VF-01 (diagram parse).
+2. Fix VF-14 (OD-22 contradiction in ADR-014).
+3. Decide the VF-03 ID-qualification rule and apply it in new text.
+4. D relabels recovery.md §6 (VF-04).
+5. Update TDD §27/§28/§30 figures (VF-16, VF-21).
+6. Re-run `lint_ids.py` / `lint_links.py` / `mermaid` parse at sign-off, as the TC-OPS-010 dry run.
+
+**Unverifiable in design.** Every threshold is specified but none is measured. The measured values depend on Phase 0 (P0-001…049, P0-060…074, P0-201…241; notably P0-027 / SEC-T-20, P0-072 / SEC-T-16, P0-213, P0-047, P0-049) and on M1–M9 test execution.
+
+**Files changed by F in Phase 5:** `planning/traceability.md`, `planning/roadmap.md`, `planning/issue-breakdown.md`, `testing/verification-plan.md`, and this report.

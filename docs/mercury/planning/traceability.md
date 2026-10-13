@@ -768,7 +768,7 @@ Columns: requirement → ADR(s) → test case(s) → milestone where first verif
 | FR-185 | S | — | TC-E2E-009 | M7 | BC |
 | FR-200 | M | ADR-009 | TC-UNIT-050 | M7 | BC |
 | FR-201 | M | ADR-008 | TC-SBX-005, P0-220 | P0c / M7 | BC |
-| FR-202 | M | — | TC-NET-003, TC-DUP-001, TC-UNIT-070 | M7 | BC |
+| FR-202 | M | — | TC-NET-003, TC-DUP-001, TC-UNIT-070 | M3 (handlers, VC-20) / M7 | BC |
 | FR-203 | M | ADR-011 | TC-GOV-006, TC-PI-131 | M3 | BC |
 | FR-220 | M | ADR-019 | TC-SBX-006 | M7 | BC |
 | FR-221 | M | — | TC-UNIT-051, TC-DUP-005 | M7 | BC |
@@ -950,7 +950,7 @@ TC aliases of E's `SEC-T-nn` follow §8.3 (TC-SEC-1nn, TC-GOV-11n, TC-PI-13n). "
 | SEC-802 | M | ADR-004 | TC-SEC-123, P0-042 | M3 | G-S1 |
 | SEC-803 | M | — | TC-SEC-181, TC-E2E-014 | M2 | G-S4 |
 | SEC-804 | M | — | P0-074 | P0c | G-S1 |
-| SEC-805 | M | — | TC-UNIT-071, TC-SEC-180 | M7 | G-S4 |
+| SEC-805 | M | — | TC-UNIT-071, TC-SEC-180 | M3 (allowlist, VC-20) / M7 | G-S4 |
 | SEC-806 | M | ADR-012 | TC-PIL-003 | M9c | — |
 | SEC-901 | M | ADR-019 | TC-SEC-190 | M7 | G-S4 |
 | SEC-902 | M | ADR-015 | TC-SEC-191 | M1 / M5 | G-S3 |
@@ -1356,3 +1356,15 @@ An issue in `planning/issue-breakdown.md` (or in MERCURY's own backlog once the 
 | New FR-007 (issue-level discovery) | RF-22; RD-14 |
 | NFR-061 single retention table | RF-17; OD-15 |
 | OD register OD-01…36 | RF-23 (decisions part); RD decisions; OD-36 new |
+
+### 14.1 Change notes (Phase 5 validation, `reviews/52-validation-F-traceability.md`)
+
+| Change | Cause |
+|---|---|
+| SEC-110, SEC-206, SEC-211 registered as M (levels in threat-model §5.1 are MUST); §6.3 totals updated | VF-07 |
+| SEC-206 / ASM-E-06: `deps_install` registry egress is MUST; P0-049 gates G-S2 whenever `deps_install` is enabled for a non-sandbox repository | VE-17 (E) |
+| FR-260 pointer components §5.7; NFR-006/021/025/027/082 design pointer to macos-service §2; FR-042, NFR-091, NFR-094, NFR-100 criteria made measurable | VF-07 |
+| OPS-001 P0 range corrected; ASM-B-18 (withdrawn) no longer cited as live; OD-37 needed-by P0c / M6 | VF-07 |
+| 19 TCs that cited requirements added to the RTM (reverse trace complete) | VF-07 |
+| FR-202, SEC-805 first verified in M3 (Linear write handlers moved to MERC-306) | VC-20 (C) |
+| Process-record ID collisions (RB, RD) registered with a disambiguation rule (§1.1) | VF-03 |

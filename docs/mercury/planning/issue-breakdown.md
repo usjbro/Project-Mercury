@@ -24,17 +24,17 @@
 | E0d | P0d | MERCURY repository bootstrap | MERC-030 | 1 | 1.5 |
 | E1 | M1 | Core coordinator | MERC-101, MERC-102, MERC-103, MERC-104, MERC-105, MERC-106, MERC-107, MERC-1K1, MERC-108, MERC-109, MERC-110, MERC-111, MERC-112, MERC-113 | 38 | 62.5 |
 | E2 | M2 | Read-only pollers and drift read | MERC-201, MERC-202, MERC-203, MERC-204, MERC-205, MERC-206 | 11.5 | 18 |
-| E3 | M3 | Claude adapter, snapshots, authorization | MERC-301, MERC-302, MERC-3A1, MERC-303, MERC-304, MERC-305 | 11.5 | 18 |
-| E4 | M4 | Codex planning and plan review | MERC-401, MERC-402, MERC-403, MERC-404, MERC-405, MERC-406 | 11.5 | 20 |
+| E3 | M3 | Claude adapter, mirror and snapshots, authorization, Linear write handlers | MERC-402a, MERC-301, MERC-302, MERC-3A1, MERC-303, MERC-304, MERC-305, MERC-306 | 14.5 | 23 |
+| E4 | M4 | Codex planning and plan review | MERC-401, MERC-402b, MERC-403, MERC-404, MERC-405, MERC-406 | 10.5 | 18.5 |
 | E5 | M5 | Implementation, gates, PR | MERC-501, MERC-502, MERC-503, MERC-504, MERC-505, MERC-506, MERC-507, MERC-508 | 18 | 29.5 |
 | E6 | M6 | Claude PR review and loops | MERC-601, MERC-602, MERC-603, MERC-604 | 7.5 | 11.5 |
-| E7 | M7 | Merge, Linear, notifications, audit, anchoring | MERC-701, MERC-702, MERC-703, MERC-704, MERC-705, MERC-706, MERC-707, MERC-708 | 16 | 26 |
+| E7 | M7 | Merge, Linear, notifications, audit, anchoring | MERC-701, MERC-702, MERC-703, MERC-704, MERC-705, MERC-706, MERC-707, MERC-708 | 15 | 24.5 |
 | E8 | M8 | Hardening on the real Mac | MERC-801, MERC-802, MERC-803, MERC-804, MERC-805, MERC-806, MERC-807, MERC-807b | 19 | 33.5 |
 | E9 | M9a–c | Pilot and cutover | MERC-901, MERC-902, MERC-903, MERC-904, MERC-905, MERC-906 | 8.5 | 15 |
-| **Total (base)** | | | 77 issues | **156** | **259.5** |
+| **Total (base)** | | | 79 issues | **157** | **261.5** |
 | Contingency (conditional) | | MERC-1K1, MERC-3A1, MERC-807b | 3 | 12 | 22 |
 
-Planning P90 (partly correlated, ρ = 0.5): P50 + 0.5 × Σ(P90−P50) + 0.5 × √Σ(P90−P50)² = 156 + 51.8 + 6.4 ≈ **214 engineer-days** (method in `planning/roadmap.md` §5).
+Planning P90 (partly correlated, ρ = 0.5): P50 + 0.5 × Σ(P90−P50) + 0.5 × √Σ(P90−P50)² = 157 + 52.3 + 6.4 ≈ **216 engineer-days** (Phase 5 re-estimate after VC-18/19/20 and VF-20; was 214) (method in `planning/roadmap.md` §5).
 
 ### 2.1 Epic dependency graph
 
@@ -73,22 +73,26 @@ Longest blocked-by chain over base issues:
 | 6 | MERC-103 | DDL, invariant triggers, audit chain | 3.5 | 11.5 |
 | 7 | MERC-104 | Transition engine | 3 | 14.5 |
 | 8 | MERC-106 | Derived queue, claims, outbox/inbox | 3 | 17.5 |
-| 9 | MERC-201 | GitHub client | 2.5 | 20 |
-| 10 | MERC-203 | PR, check and review poller | 2 | 22 |
-| 11 | MERC-507 | PR creation (draft) | 2 | 24 |
-| 12 | MERC-601 | Code and security review runs | 2 | 26 |
-| 13 | MERC-602 | COMMENT reviews and claude-review check | 1.5 | 27.5 |
-| 14 | MERC-604 | Pre-review re-check, ready, review request | 1 | 28.5 |
-| 15 | MERC-701 | Merge verification | 2.5 | 31 |
-| 16 | MERC-702 | Linear projection, both modes | 2.5 | 33.5 |
-| 17 | MERC-705 | Anchoring and restore epoch | 2.5 | 36 |
-| 18 | MERC-805 | Security suite on the Mac and SAC evidence | 2 | 38 |
-| 19 | MERC-901 | Shadow mode (MIG-1) | 1.5 | 39.5 |
-| 20 | MERC-904 | Supervised pilot (MIG-2) | 2.5 | 42 |
-| 21 | MERC-905 | Unattended readiness (G-S5) | 1 | 43 |
-| 22 | MERC-906 | Cutover and watch (MIG-3/4) | 1 | 44 |
+| 9 | MERC-202 | Linear client and poller | 2 | 19.5 |
+| 10 | MERC-306 | Linear write handlers (comments, labels, In Progress) | 1.5 | 21 |
+| 11 | MERC-304 | Authorization records and guards | 2.5 | 23.5 |
+| 12 | MERC-404 | Plan review loop | 2.5 | 26 |
+| 13 | MERC-501 | Implementation run | 1.5 | 27.5 |
+| 14 | MERC-502 | verify under agent uid | 2.5 | 30 |
+| 15 | MERC-507 | PR creation (draft) | 2 | 32 |
+| 16 | MERC-601 | Code and security review runs | 2 | 34 |
+| 17 | MERC-602 | COMMENT reviews and claude-review check | 1.5 | 35.5 |
+| 18 | MERC-604 | Pre-review re-check, ready, review request | 1 | 36.5 |
+| 19 | MERC-701 | Merge verification | 2.5 | 39 |
+| 20 | MERC-702 | Linear projection, both modes | 1.5 | 40.5 |
+| 21 | MERC-705 | Anchoring and restore epoch | 2.5 | 43 |
+| 22 | MERC-805 | Security suite on the Mac and SAC evidence | 2 | 45 |
+| 23 | MERC-901 | Shadow mode (MIG-1) | 1.5 | 46.5 |
+| 24 | MERC-904 | Supervised pilot (MIG-2) | 2.5 | 49 |
+| 25 | MERC-905 | Unattended readiness (G-S5) | 1 | 50 |
+| 26 | MERC-906 | Cutover and watch (MIG-3/4) | 1 | 51 |
 
-This **dependency** critical path is ≈ **44 P50 engineer-days**: the shortest possible build with unlimited parallel capacity. MERCURY is built by one operator-engineer with agent assistance, so the schedule is **capacity-bound**: the phase sequence in `planning/roadmap.md` §5 (≈ 156 P50 days of effort, of which P0c/P0d and most of M2 overlap other work) determines the calendar, and this chain says which issues must never wait for capacity. Issues on it are prioritised first in every milestone. Calendar time for shadow, supervised pilot and the cutover watch is added in `planning/roadmap.md` §6.
+This **dependency** critical path is ≈ **51 P50 engineer-days** (Phase 5 re-plan: was 44; the chain now runs through M3–M5 because of the edges added for VC-18/19/20 and VF-20: 306 → 304, 402b → 404, 504/505 → 501, 502 → 507): the shortest possible build with unlimited parallel capacity. MERCURY is built by one operator-engineer with agent assistance, so the schedule is **capacity-bound**: the phase sequence in `planning/roadmap.md` §5 (≈ 156 P50 days of effort, of which P0c/P0d and most of M2 overlap other work) determines the calendar, and this chain says which issues must never wait for capacity. Issues on it are prioritised first in every milestone. Calendar time for shadow, supervised pilot and the cutover watch is added in `planning/roadmap.md` §6.
 
 ## 4. Issues
 
@@ -446,10 +450,20 @@ This **dependency** critical path is ≈ **44 P50 engineer-days**: the shortest 
 
 ### E3 — M3 — Claude adapter, snapshots, authorization
 
+#### MERC-402a — Mirror and hardened read-only git invocation
+
+- **Description:** Per-repo mirror with `core.fsync` under `WORK_ROOT` (ADR-016) and the hardened **read-only** git invocation used by SnapshotService and plan/PR review inputs (components §9.2, §9.5, §9.6 read side: no config/hooks/attributes, pinned env). Split from the retired MERC-402 (Phase 5, VC-18) so that M3 authorization runs have a base snapshot. Write-side hardening (plumbing commits, push) stays in MERC-504.
+- **Blocked by:** MERC-102
+- **Requirements:** FR-066, NFR-053, SEC-205, SEC-401
+- **Acceptance:** TC-INT-006 (mirror part), TC-SEC-140 (read-path cases) pass; snapshot reads never invoke a worktree or `.git` config.
+- **Estimate:** P50 1.5 / P90 2.5 engineer-days; uncertainty M
+- **DoR fields:** Env T1 · Gates P0-043, P0-030 · OD — · Security label yes · Recovery: Mirror re-fetchable; no task state
+- **Subtasks:** Mirror; fsync; read-only invocation; tests
+
 #### MERC-301 — Snapshot builder
 
 - **Description:** Git-object snapshots (no `.git`, attributes not applied, symlink/gitlink placeholders, 0444/0555) under `WORK_ROOT/snapshots`.
-- **Blocked by:** MERC-102
+- **Blocked by:** MERC-102, MERC-402a
 - **Requirements:** FR-066, SEC-205
 - **Acceptance:** TC-SEC-124 100 %.
 - **Estimate:** P50 2 / P90 3 engineer-days; uncertainty L
@@ -459,7 +473,7 @@ This **dependency** critical path is ≈ **44 P50 engineer-days**: the shortest 
 #### MERC-302 — Claude adapter under agent uid
 
 - **Description:** SDK custom spawn via `agent-exec` kind `claude` (or ALT-B-1), per-run config dir, profiles per role, no `fallbackModel`, managed settings, budgets; self-test as dispatch gate.
-- **Blocked by:** MERC-107, MERC-301, MERC-003
+- **Blocked by:** MERC-107, MERC-301, MERC-402a, MERC-003
 - **Requirements:** FR-020, FR-062, NFR-083, SEC-204, SEC-802
 - **Acceptance:** TC-CON-003, TC-SEC-103, -121, -123, TC-AFS-001, -005, -011 pass; **G-S1** recorded.
 - **Estimate:** P50 3 / P90 5 engineer-days; uncertainty H
@@ -489,7 +503,7 @@ This **dependency** critical path is ≈ **44 P50 engineer-days**: the shortest 
 #### MERC-304 — Authorization records and guards
 
 - **Description:** Decision Recorder, authorization versions, guard at dispatch and result application, revocation, `spec_hash` and `spec_changed` hold, re-authorization.
-- **Blocked by:** MERC-103, MERC-105, MERC-303
+- **Blocked by:** MERC-103, MERC-105, MERC-303, MERC-306
 - **Requirements:** FR-021…024, CON-005, SEC-305, SEC-307
 - **Acceptance:** TC-UNIT-010, -011, -013, TC-SM-015, TC-E2E-006, -008 pass.
 - **Estimate:** P50 2.5 / P90 4 engineer-days; uncertainty M
@@ -506,6 +520,15 @@ This **dependency** critical path is ≈ **44 P50 engineer-days**: the shortest 
 - **DoR fields:** Env T1/T4 · Gates — · OD — · Security label yes · Recovery: n/a
 - **Subtasks:** Planting; env; provenance; PI guards
 
+#### MERC-306 — Linear write handlers (comments, labels, In Progress)
+
+- **Description:** Outbox handlers for `linear.comment.create` (deterministic v4-shaped ids, `findCommentByMarker`), `linear.labels` (`mercury:needs-human` on every `BLOCKED`) and `linear.issue.set_state` In Progress compare-and-set, behind the Linear endpoint allowlist. Moved from MERC-702 (Phase 5, VC-20) because transitions enqueue these effects from T02 on; without handlers, M3–M6 escalations would never reach the operator. Mode-dependent `In Review`/`Done` projection stays in MERC-702.
+- **Blocked by:** MERC-106, MERC-202
+- **Requirements:** FR-200, FR-201, FR-202, FR-220, SEC-805
+- **Acceptance:** TC-UNIT-070, -071 pass (TC-SBX-005 rehearsed on the sandbox; gated in M7); crash injection over these handlers: 0 duplicate Linear comments or label writes (TC-REC-001 subset).
+- **Estimate:** P50 1.5 / P90 2.5 engineer-days; uncertainty M
+- **DoR fields:** Env T2/T3 · Gates P0-220, P0-221 · OD OD-05, OD-12 · Security label yes · Recovery: Find-then-create by marker
+
 ### E4 — M4 — Codex planning and plan review
 
 #### MERC-401 — Codex adapter
@@ -518,15 +541,15 @@ This **dependency** critical path is ≈ **44 P50 engineer-days**: the shortest 
 - **DoR fields:** Env T1/T4 · Gates P0-204…211, P0-048 · OD OD-09 · Security label yes · Recovery: Adoptable detached run
 - **Subtasks:** Argv; parser; CODEX_HOME; resume
 
-#### MERC-402 — Mirror and worktree manager
+#### MERC-402b — Task worktrees, naming and reset policy
 
-- **Description:** Mirror with `core.fsync`, worktrees under `WORK_ROOT` per ADR-016, naming per Linear mode, reset policy.
-- **Blocked by:** MERC-102
-- **Requirements:** FR-120, FR-126, NFR-053
-- **Acceptance:** TC-UNIT-040, TC-INT-006, TC-REC-037 pass.
-- **Estimate:** P50 2 / P90 3.5 engineer-days; uncertainty M
-- **DoR fields:** Env T1 · Gates P0-043, P0-030 · OD OD-06 · Security label yes · Recovery: Reset policy single definition
-- **Subtasks:** Mirror; worktrees; naming; reset
+- **Description:** Task worktrees from the mirror under `WORK_ROOT` per ADR-016, branch/worktree naming per Linear mode, single WorktreeResetPolicy (components §9.3–§9.4). Split from the retired MERC-402 (VC-18).
+- **Blocked by:** MERC-402a
+- **Requirements:** FR-120, FR-126
+- **Acceptance:** TC-UNIT-040, TC-INT-006 (worktree part), TC-REC-037 pass.
+- **Estimate:** P50 1 / P90 2 engineer-days; uncertainty M
+- **DoR fields:** Env T1 · Gates P0-030 · OD OD-06 · Security label yes · Recovery: Reset policy single definition
+- **Subtasks:** Worktrees; naming; reset
 
 #### MERC-403 — Instruction integrity and sandbox-violation counting
 
@@ -541,7 +564,7 @@ This **dependency** critical path is ≈ **44 P50 engineer-days**: the shortest 
 #### MERC-404 — Plan review loop
 
 - **Description:** Plan artifacts, review at base snapshot, approval binding, budgets, verbatim revision template.
-- **Blocked by:** MERC-304, MERC-401, MERC-301
+- **Blocked by:** MERC-304, MERC-401, MERC-301, MERC-402b
 - **Requirements:** FR-101…106, CON-006, CON-012, SEC-306, SEC-315
 - **Acceptance:** TC-E2E-002, -003, TC-SM-007, -008, -026 pass.
 - **Estimate:** P50 2.5 / P90 4 engineer-days; uncertainty M
@@ -573,7 +596,7 @@ This **dependency** critical path is ≈ **44 P50 engineer-days**: the shortest 
 #### MERC-501 — Implementation run
 
 - **Description:** Workspace-write run as agent uid with approved plan, progress events.
-- **Blocked by:** MERC-404, MERC-405
+- **Blocked by:** MERC-404, MERC-405, MERC-504, MERC-505 (VC-19; T15 uses a stub policy report until MERC-506)
 - **Requirements:** FR-121, FR-125
 - **Acceptance:** TC-E2E-001 to commit; TC-UNIT-011/012 pass.
 - **Estimate:** P50 1.5 / P90 2.5 engineer-days; uncertainty L
@@ -603,7 +626,7 @@ This **dependency** critical path is ≈ **44 P50 engineer-days**: the shortest 
 #### MERC-504 — Git hardening and mirror push
 
 - **Description:** Plumbing commit against the mirror, pointer verification, SEC-401 flags, push from mirror with fd askpass, durability ordering.
-- **Blocked by:** MERC-402
+- **Blocked by:** MERC-402a, MERC-402b
 - **Requirements:** FR-140, NFR-053, SEC-401, SEC-402, SEC-407
 - **Acceptance:** TC-INT-007, -027, TC-SEC-140, -141, -144, TC-REC-034 pass.
 - **Estimate:** P50 3 / P90 5 engineer-days; uncertainty M
@@ -633,7 +656,7 @@ This **dependency** critical path is ≈ **44 P50 engineer-days**: the shortest 
 #### MERC-507 — PR creation (draft)
 
 - **Description:** Lookup-then-create, draft, template per Linear mode, neutraliser, mutation budgets.
-- **Blocked by:** MERC-504, MERC-203
+- **Blocked by:** MERC-504, MERC-203, MERC-502 (T-tests passed → `PR_OPEN` needs a `verify` result; Phase 5, VF-20)
 - **Requirements:** FR-142, FR-143, SEC-304, SEC-705
 - **Acceptance:** TC-UNIT-042, TC-DUP-004, TC-SEC-153, -173, TC-SBX-002 pass.
 - **Estimate:** P50 2 / P90 3 engineer-days; uncertainty L
@@ -706,11 +729,11 @@ This **dependency** critical path is ≈ **44 P50 engineer-days**: the shortest 
 
 #### MERC-702 — Linear projection, both modes
 
-- **Description:** Projection per mode, verification comment, v4 UUIDs, Linear allowlist.
-- **Blocked by:** MERC-701, MERC-202
+- **Description:** Mode-dependent projection (`In Review`/`Done` in `mercury_owns_all`; observed Done and warnings in `integration_owns_done`) and the verification comment, on top of MERC-306's handlers (comment/label/allowlist moved to M3, VC-20).
+- **Blocked by:** MERC-701, MERC-306
 - **Requirements:** FR-183, FR-200…202, SEC-805
-- **Acceptance:** TC-E2E-015, -016, TC-UNIT-050, -070, -071, TC-SBX-004, -005, -009 pass.
-- **Estimate:** P50 2.5 / P90 4 engineer-days; uncertainty M
+- **Acceptance:** TC-E2E-015, -016, TC-UNIT-050, TC-SBX-004, -009 pass.
+- **Estimate:** P50 1.5 / P90 2.5 engineer-days; uncertainty M
 - **DoR fields:** Env T2/T3 · Gates P0-224 · OD OD-06 · Security label yes · Recovery: Idempotent writes
 - **Subtasks:** Projection; comments; allowlist
 
@@ -757,7 +780,7 @@ This **dependency** critical path is ≈ **44 P50 engineer-days**: the shortest 
 #### MERC-707 — Cleanup
 
 - **Description:** Realpath-checked worktree/branch removal; archive.
-- **Blocked by:** MERC-402
+- **Blocked by:** MERC-402b
 - **Requirements:** FR-184, SEC-406
 - **Acceptance:** TC-INT-006, TC-SEC-143 pass.
 - **Estimate:** P50 1 / P90 1.5 engineer-days; uncertainty L
