@@ -526,7 +526,7 @@ erDiagram
 - **Outbox / inbox:** outbox rows with idempotency keys and leases; inbox facts with unique dedup keys (catalogue github.md §13).
 - **Durability beyond SQLite:** git commit → fsync → DB transaction; `exit.json` written with fsync + rename.
 - **Migrations:** `user_version`, forward-only expand/contract, backup before migrate.
-- **Retention:** audit and artifacts ≥ 1 year; redacted transcripts and ops logs 90 days; raw agent output not persisted beyond run completion (OD-15).
+- **Retention:** audit and artifacts ≥ 1 year; redacted transcripts and ops logs per macos-service §2.7; raw run streams deleted when the run is finalized (OD-15; SEC-505 alignment tracked in §32).
 
 ## 17. API and Message Contracts
 
@@ -547,9 +547,9 @@ Example agent-output contract (excerpt of `output.plan_review`): verdict ∈ {ap
 Owner: [`operations/macos-service.md`](operations/macos-service.md) (parameter table §2 is normative for every value).
 - **Service:** per-user LaunchAgent `com.usjbro.mercury` (ADR-010): absolute pinned Node path, `KeepAlive{SuccessfulExit:false}`, `RunAtLoad`, `ThrottleInterval` = `svc.throttle_interval_s`, `ExitTimeOut` = `svc.exit_timeout_s`, logs to `~/Library/Logs/Mercury`. Exit contract: lock held / fatal marker / schema too new → exit 0 (no restart loop); DB corruption → stay alive in safe mode; crash loop → safe mode.
 - **Login session:** runs only while the operator is logged in; after reboot (FileVault) nothing runs until login; recovery then runs (§20).
-- **Agent isolation:** `_mercuryagent` role account, group `mercury`; root-owned `agent-exec`/`agent-ctl` via a restricted sudoers drop-in; ACL-inherited `WORK_ROOT`; secrets on fd 3; toolchains provisioned by `mercury toolchain sync`. All root steps require explicit operator consent in Phase 0.
+- **Agent isolation:** `_mercuryagent` role account, group `mercury`; root-owned `agent-exec`/`agent-ctl` via a restricted sudoers drop-in; ACL-inherited `WORK_ROOT`; secrets on fd 3; toolchains provisioned by `mercury toolchain sync`. Every root step requires explicit operator consent — in Phase 0 setup and later (wrapper/helper upgrades, pin updates, repair, uninstall, new Mac; macos-service §6, §13.5–§13.6).
 - **Layout:** `MERCURY_HOME = ~/Library/Application Support/Mercury` (0700); `WORK_ROOT = /Users/Shared/MercuryWork` (group `mercury`, ACLs); logs `~/Library/Logs/Mercury` (§7.1).
-- **Sleep:** `mercury-power` holds an idle-sleep assertion only while runs are active; never fights lid close; credited awake time per tick = `min(Δmono, Δwall, 3×tick)`; sleep gaps not credited; no dispatch in dark wake; on wake: connectivity gate, reconcile, coalesced reminders.
+- **Sleep:** `caffeinate -i -w <pid>` holds an idle-sleep assertion only while runs are active, and the signed `mercury-power` helper reports will-sleep and full/dark wake; MERCURY never fights lid close or user sleep; credited awake time per tick = `min(Δmono, Δwall, 3×tick)`; sleep gaps not credited; no dispatch in dark wake; on wake: connectivity gate, reconcile, coalesced reminders.
 - **Credentials:** Keychain items `com.usjbro.mercury.*` read once at start (and on `mercury reload-credentials`), held in memory; never in plist, env files or logs.
 - **Graceful shutdown:** stop dispatch, interrupt non-adoptable runs, keep adoptable runs (supervisor lease bounds them), checkpoint, exit within `svc.shutdown_budget_s`.
 
@@ -580,33 +580,41 @@ Owner: [`operations/recovery.md`](operations/recovery.md) (principles, host-fail
 flowchart TD
     S["Start: crash restart, login, upgrade, restore"] --> L{"flock acquired?"}
     L -->|"no"| E0["exit 0"]
-    L -->|"yes"| F{"fatal marker or schema too new?"}
+    L -->|"yes"| CLG{"Crash loop?"}
+    CLG -->|"yes"| SAFE["Safe mode: no dispatch, heartbeat, one ops alert"]
+    CLG -->|"no"| F{"fatal marker?"}
     F -->|"yes"| E1["exit 0, operator action"]
-    F -->|"no"| DBC{"DB quick_check ok?"}
-    DBC -->|"no"| SAFE["Safe mode: no dispatch, heartbeat, one alert"]
-    DBC -->|"yes"| AC{"Audit chain verifies vs anchor?"}
-    AC -->|"restore pending"| RC["Await mercury restore --confirm (presence)"]
+    F -->|"no"| CFG{"Config and paths valid?"}
+    CFG -->|"no"| E1
+    CFG -->|"yes"| DBC{"DB quick_check ok?"}
+    DBC -->|"no"| SAFE
+    DBC -->|"yes"| SCH{"Schema migrate ok / not too new?"}
+    SCH -->|"too new"| E1
+    SCH -->|"ok"| AC{"Audit chain verifies vs anchor?"}
+    AC -->|"restore pending"| RC["Await mercury restore --confirm (presence); history lost: all non-terminal tasks reauthorization_required"]
+    RC --> SEC
     AC -->|"mismatch"| SAFE
     AC -->|"ok"| SEC["Read credentials once; self-tests"]
     SEC --> DUR["Durability check: commits and refs exist, else lost_by_host replay"]
-    DUR --> RUNS["Runs: adopt Codex/verify if identity matches; re-run Claude; finalize from exit.json"]
+    DUR --> RUNS["Runs: probe proc.json identity; adopt Codex/verify if match; re-run Claude; finalize from exit.json"]
     RUNS --> ORPH["Orphan sweep via agent-ctl"]
     ORPH --> NET{"Online?"}
     NET -->|"no"| HOLD["network_down hold; wait"]
     HOLD --> NET
     NET -->|"yes"| OBX["Outbox reconcile (find-then-create)"]
-    OBX --> REM["Remote reconcile: PRs, reviews, checks, merges, Linear"]
+    OBX --> REM["Remote reconcile: PRs, reviews, checks, merges, Linear (results applied only after fresh Linear poll)"]
     REM --> TIM["Timers after fresh attempt; one coalesced summary"]
     TIM --> DW{"Full wake?"}
-    DW -->|"dark wake"| TIM
+    DW -->|"dark wake"| POLL["Poll only, no dispatch"]
+    POLL --> DW
     DW -->|"yes"| GO["Resume dispatch: replayed steps first"]
 ```
 
-Key guarantees: recovery only removes authority, never grants it; adopted output is re-checked against the authorization guard before use; every external side effect is reconciled by natural key before retry (zero duplicate PRs/comments/reviews under crash injection); `lost_by_host` (reboot, power loss, supervisor lost) consumes no attempt; network-class errors never consume attempts; backups restored only through a recorded restore epoch.
+Key guarantees: recovery only removes authority, never grants it; adopted output is re-checked against the authorization guard before use; every external side effect is reconciled by natural key before retry (zero duplicate PRs/comments/reviews under crash injection); `lost_by_host` (reboot, power loss, supervisor lost) consumes no attempt but is capped per step (`run.lost_by_host_cap`) → `host_instability` hold + ops alert; network-class errors never consume attempts; backups restored only through a recorded, presence-confirmed restore epoch, and when a restore loses history (backup behind the last off-host anchor, or a new Mac) **every non-terminal task returns to `BLOCKED(reauthorization_required)`** so no revoked authorization, cancel, or exhausted budget is silently resurrected (VD-01).
 
 ## 21. Logging, Monitoring, and Auditability
 
-- **Logs:** structured JSON lines (`mercuryd.jsonl`) with `ts`, `level`, `event`, `task_id`, `run_id`, `correlation_id`, `issue`, `repo`, `msg`; redaction on every sink; rotation and 90-day retention (macos-service §11).
+- **Logs:** structured JSON lines (`mercuryd.jsonl`) with `ts`, `level`, `event`, `task_id`, `run_id`, `correlation_id`, `issue`, `repo`, `msg`; redaction on every sink; rotation and retention per macos-service §2.7 (`logs.*`).
 - **Health:** `mercury status`, `mercury doctor`, heartbeat file; metrics logged every 5 min (no server).
 - **Liveness watchdog (no inbound):** `mercury-ops` updates a heartbeat issue in `project-mercury`; a scheduled GitHub Actions workflow alerts (GitHub Mobile) when the heartbeat is stale beyond threshold (45 min awake / 12 h when the last heartbeat said `sleeping`) and work is pending; `doctor` checks that scheduled workflows are not auto-disabled.
 - **Audit:** append-only, hash-chained `audit_log` with epochs; chain head anchored off-host daily and at completion (Linear completion comment, private anchor repo; never on public PRs); verification at startup.
@@ -656,15 +664,15 @@ Results from fakes never count as verifying a sandbox- or Mac-level requirement.
 - **API budgets:** worst-case GitHub polling ≤ ~670 requests/h (ETag 304s free) against 5,000/h per installation; Linear complexity budget well under limits (github.md, linear.md).
 - **SQLite:** backups/integrity checks in a worker thread; lease rows persisted ≥ 60 s to limit `F_FULLFSYNC` load.
 - **Disk guard:** thresholds before worktree creation; worktree cleanup after merge/cancel; archives before destructive resets.
-- **Cost:** per-decision budgets and a daily spend cap (OD-08); dedicated API keys with provider spend limits (OD-03/04).
+- **Cost:** per-decision budgets and a daily spend cap (`claude.daily_budget_usd`, macos-service §2.8); dedicated API keys with provider spend limits (OD-03/04).
 
 ## 24. Deployment and Upgrade Strategy
 
 Owner: macos-service §13–§14; recovery RB-07/RB-08.
 - **Release layout:** versioned install directories + `current` symlink; Node runtime pinned per release; agent CLI versions pinned and verified at startup (`config_fatal` hold on mismatch).
-- **Upgrade:** drain (stop dispatch, let adoptable runs finish or interrupt), backup (`VACUUM INTO` in worker), migrate (expand/contract), switch symlink, `launchctl kickstart -k`, verify `doctor`.
+- **Upgrade (macos-service §13.2):** drain Claude runs (adoptable Codex/verify runs are kept unless the release is marked `requires-drain`) → backup (`VACUUM INTO` in a worker) → switch symlink → `launchctl kickstart -k` → **the new version migrates** (expand/contract) → verify ready within `upgrade.ready_max_min`, else automatic rollback. Wrapper and helper upgrades are **[ROOT — operator consent]** (`--upgrade-wrappers`, §13.6).
 - **Rollback:** switch symlink back; expand/contract migrations make code rollback safe without data restore; data restore via restore epoch (presence-confirmed).
-- **Backups:** nightly online backup + before upgrade; retention; `integrity_check` periodically in worker; worktrees excluded from Time Machine.
+- **Backups:** online backup due after `backup.due_after_h` of **awake** time (checked hourly and at wake) + before every upgrade; retention; `integrity_check` periodically in worker; worktrees excluded from Time Machine.
 - **CI/CD for MERCURY itself:** GitHub Actions on `project-mercury` (lint, typecheck, unit/property/contract tests, schema wire-copy generation check); no self-hosted runner on public repos. Target repos keep their own CI as required checks.
 - **Migration from Slack:** stages MIG-0 (identities and governance) → MIG-1 shadow (MERCURY decides, legacy executes; compare) → MIG-2 supervised pilot (`mercury`-labelled issues only, concurrency 1) → MIG-3 cutover (Slack coordination off) → MIG-4 decommission scripts ([ADR-012](architecture/decisions/ADR-012-migration-from-slack-workflow.md)).
 
