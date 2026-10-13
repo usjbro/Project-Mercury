@@ -222,3 +222,91 @@ Two qualifications are carried into §7:
 Single-control-failure re-check (TM §5.2.3): every row still matches the final documents. The row "`MERCURY / claude-review` forged by another identity" now also depends on the Phase 0 confirmation that the latest App-authored run of a name governs the requirement (GH §6, ASM-B-56). That is **UNVERIFIABLE IN DESIGN — P0 for ASM-B-56/57, SEC-T-17**.
 
 ---
+## 6. Specific checks
+
+Each check records what was checked, the method, the evidence and the result.
+
+### 6.1 Endpoint allowlist completeness (no approve, merge, dismiss, update-branch or auto-merge path)
+
+- **Method:** ripgrep across `integrations/github.md`, `architecture/components.md` and `architecture/state-machine.md` for `update-branch|update_branch|auto-?merge|enablePullRequestAutoMerge|/merge\b|/merges|dismiss|APPROVE|REQUEST_CHANGES|mergePullRequest`. I then read every hit in context.
+- **Evidence:** the positive allowlist is GH §10.4. Its only review write is `POST /pulls/{n}/reviews` with `event: "COMMENT"`, and its only PR state write is `PATCH /pulls/{n}` with `state: open` (reopen). The explicit forbidden list in GH §10.4 covers `PUT …/merge`, `POST /merges`, merge queue, GraphQL `mergePullRequest`/`enablePullRequestAutoMerge`/`disablePullRequestAutoMerge`/`enqueuePullRequest`, `update-branch`, `APPROVE`/`REQUEST_CHANGES` incl. pending-review submission, `…/dismissals`, rules, protection, settings, collaborators, hooks, Actions writes, commit statuses, foreign check names, and refs outside `mercury/**`. CMP §4.11 `GitHubPort` has no such method; `createReview` is typed `event: "COMMENT"` and `CheckConclusion` excludes `neutral`/`skipped`. CMP §1 rule D6 is a lint for the strings; CT-04 is the contract test. SM INV-09, T25 ("never REQUEST_CHANGES") and T41 ("never GitHub update-branch") repeat the rules. Every other hit is an explanation, a forbidden-list entry, an operator action, a Phase 0 negative test (GH §10.2) or a plan-approval state name.
+- **Result: PASS.** The only Contents write is `mercury-ops` `PUT` in the anchor repo, which SEC-102 allows. I found no path that approves, merges, dismisses, updates a branch or enables auto-merge.
+
+### 6.2 Check-run pinning and SEC-113 `action_required`
+
+- **Evidence:** GH §9.1 pins both MERCURY contexts to `integration_id` = `mercury-bot`'s App id and pins CI to GitHub Actions (`15368`). The drift monitor asserts the pin (GH §9.4 O4, §9.6). GH §6 uses only `success`/`failure`/`action_required`; CMP §4.11 enforces this in the type; SM §8.6 and §5.1 emit `action_required` for holds, cancel and spec change.
+- **Result: PASS after amendment.** SEC-113 now states `action_required` and forbids `neutral`/`skipped` (Addendum C §2). TM §7.5 pseudo-code and SAC-16 were updated to match (VE-19). The ack carry-forward (same protected-blob digest) is accepted as secure and written into SEC-310. **UNVERIFIABLE IN DESIGN:** whether a completed run's conclusion can be changed, and which run governs (ASM-B-56). Also whether `statuses:write` is needed for pinning (ASM-B-57); if it is granted, GH §10.4 still forbids status creation.
+
+### 6.3 Agent-uid controls vs `macos-service.md` §3 grammar
+
+| Control | Evidence | Result |
+|---|---|---|
+| Lateral sudo, two binaries, digest-pinned | MS §3.4 sudoers (`(_mercuryagent : mercury)`, `sha256:` digests); `doctor` lists exactly two (MS §3.10) | Pass |
+| argv validation | MS §3.5: exactly `--run-dir`; caller uid; realpath with `O_NOFOLLOW` walk; spec owner, mode and size; `argv[0]` = pinned binary + hash; per-kind allow-list token tables; cwd per kind; refusal → `config_fatal` | Pass; **VE-04** for the `claude` `--add-dir`/`cwd` rule |
+| fd 3 | MS §3.5 step 7 (length-prefixed, 1…4096 bytes, EOF; must be closed for `verify`/`deps_install`; `closefrom(3)`); `closefrom_override` only for `agent-exec` (MS §3.4) | Pass; UNVERIFIABLE — P0-026 |
+| fd 0 | MS §3.4 says `/dev/null` for Codex; CX §3 requires the prompt file | **VE-04** |
+| Environment | sudo `env_reset, !setenv`; MS §3.5 step 6 key allowlist with realpath-confined values; MS §9.4 per-kind table; CL §7.2 | Pass |
+| `agent-ctl` | MS §3.7 identity triple before any signal; `purge` realpath roots; runs as `_mercuryagent`, never root | Pass |
+| Supervised lifetime | MS §3.5 step 11 (credited deadline + lease on `WORK_ROOT/ctl/coordinator.alive`, Addendum B §3) | Pass |
+
+### 6.4 Claude isolation settings (`claude.md`)
+
+- **Evidence:** CL §2.1 sets `settingSources: []`, `disableAllHooks`, `mcpServers: {}`, `permissionMode: "dontAsk"`, tool lists (`[]` or Read/Grep/Glob) with `disallowedTools` incl. `Task`/`Agent`/`Skill`/`mcp__*`, `canUseTool` deny fallback, `PreToolUse` confinement hook, no `fallbackModel`, pinned binary, and an empty `env` (`agent-exec` builds it). CL §2.2 token table forbids `--dangerously-skip-permissions`, `--mcp-config`, `--plugin-dir`, `--fallback-model`. CL §8 self-test is a hard gate (planted hooks, MCP, symlink, out-of-root read, model id). The ALT-B-1 fallback (CL §2.3) has no subprocess and its confined tools run in Zone C over immutable snapshots.
+- **Result: PASS, except VE-06** (managed-settings content). **UNVERIFIABLE:** P0-042 (SDK spawn through sudo), P0-201 (`disableAllHooks` keeps SDK hooks; ASM-E-17), P0-048 (managed settings path).
+
+### 6.5 Snapshot builder
+
+- **Evidence:** CMP §9.5 builds from `ls-tree -r` + `cat-file --batch` in the mirror, with no `.git`, no attributes, no filters or `export-subst`, symlinks and submodules as placeholders, 0444/0555, keyed by tree SHA, manifest hash on review rows. MS §7.1 snapshots row; MS §3.5 step 5 (`claude` cwd = snapshot). SEC-T-24 covers `export-ignore`, `export-subst`, symlink, submodule and `.git` file.
+- **Result: PASS.** Note: snapshots are shared by tree SHA across tasks. That is safe because they are read-only to the agent, and the manifest is re-verified after the run (SEC-205).
+
+### 6.6 Git hardening
+
+- **Evidence:** CX §9 (explicit `GIT_DIR` to the mirror or its admin dir; `.git` pointer, `commondir` and `gitdir` checks; fixed `-c` set; `GIT_CONFIG_GLOBAL=/dev/null`, `NOSYSTEM`; `--no-textconv --no-ext-diff`; temporary index; plumbing commit; CAS `update-ref`; push from mirror). CMP §9.2/§9.6; MS §9.3 askpass fd; GH §9.3 FF-only `mercury/**`.
+- **Analysis:** CX §9 step 1 stages with `add -A` with `GIT_WORK_TREE` set, so git itself reads the worktree. With config coming only from the mirror, in-tree `.gitattributes` can transform data (eol, `ident`, encoding) but cannot run filters, which need `filter.*` config. `core.symlinks=true` stores links rather than following them. This is acceptable, and differs from the TM's illustrative `hash-object` per file.
+- **Result: PASS, with VE-10** (CMP flag subset; SEC-402 config check frequency).
+
+### 6.7 Policy gate path lists
+
+- **Evidence:** TM SEC-310 (owner), CX §9 step 2, GH §6.2, SM §8.7, TDD §19.
+- **Result:** **VE-05** (TDD loosens `.claude/**`/`.mcp.json` to escalate) and **VE-09** (CX stricter; TM now permits stricter classification and adds `.husky/**`, `.npmrc`, `.yarnrc*`). GH §6.2 and SM §8.7 are consistent with SEC-310 as amended.
+
+### 6.8 Presence-tier method list consistency
+
+| Method / action | CMP §5.2/§5.4 | ADR-019 §33 | MS §9.5 | TM SEC-115 (Phase 4) | TM SEC-115 (amended) |
+|---|---|---|---|---|---|
+| `ack-merge` | ★ | ★ | ★ | ★ | ★ |
+| `security unhalt` | ★ | ★ | ★ | ★ | ★ |
+| `unpause --safe-mode` | ★ | "after automatic security pause" | "post-incident unpause" | "after automatic pause" | ★ (`--safe-mode`) |
+| `policy ack` | ★ | ★ | ★ | ★ | ★ |
+| `grant` / `retry` (run_exhausted) | ★ | ★ (grant) | ★ (grant) | ★ (grant) | ★ |
+| `resume` security_escalation / injection_suspected | ★ | ★ | ★ | ★ | ★ |
+| `resume --reopen` / `--discard-worktree-changes` | ★ | — | — | — | ★ |
+| `resume --adopt` / `orphan adopt` | ★ | ★ (adopt) | ★ (adopt) | ★ (adopt) | ★ |
+| `outbox retry` (security) | ★ | — | — | ★ | ★ |
+| `restore --confirm` | ★ | — | ★ | ★ | ★ |
+| ruleset-emergency ack | ★ | ★ | ★ | ★ | ★ |
+| `guard_integrity_failure` resume | none (SM §6.1: cancel/abandon only) | — | — | ★ (listed) | removed |
+
+- **Result:** CMP is the superset and is now named authoritative in SEC-115. ADR-019 and MS §9.5 are subsets (**VE-14**, Low). Stopping work never needs presence in any document. Pass.
+
+### 6.9 Linear app actor and comment handling
+
+- **Evidence:** LN §2 (client-credentials `actor=app`; personal key rejected at config validation; no `app:assignable`/`app:mentionable`; own objects identified by actor id; team restriction in code; Linear writes pause if P0-225 shows merge reach). LN LN-2 (no command parser). LN §7 line 224 (write allowlist = SEC-805) and line 228 (neutraliser incl. magic words). LN §9 (delegate, coding session, foreign PR → block). LN §2 "Who is the human": operator-authored Linear actions are not proof while connectors act as the human, so eligibility only.
+- **Result: PASS.** UNVERIFIABLE — P0-225 (ASM-E-05).
+
+### 6.10 Secret redaction sinks
+
+- **Evidence:** CMP §4.16 (audit data, `runs.error_summary`, outbox payloads incl. check-run output, `control_requests.params_json`, logs, notifications; `Redacted<NeutralisedText>` type at public sinks); MS §9.3 `Secret` type, no `--inspect`/fatal reports; CX §9 step 3 pre-push scan; CMP §6.5 raw stdout until finalization.
+- **Result: PASS with VE-15** (encodings and entropy stage not restated in CMP).
+
+### 6.11 Audit chain and anchors (Addendum B: no public chain-head embed)
+
+- **Evidence:** CMP §4.16 chain (JCS, gap-free, epochs), anchors limited to Linear completion comment + private anchor repo, with the check summary on private repos only. GH §6.1 T24 row: "never on public repositories". LN §7 `completed`. REC §4 step 7 start-up verification → safe mode. MS §14.4 restore epoch via presence. ADR-018 §Decision 2 still unconditional (**VE-02**). TM fixed (**VE-19**).
+- **Result: PASS in the implementing documents.** The Linear team is workspace-internal, not internet-public, so the Linear carrier does not count as a public embed.
+
+### 6.12 Supply-chain controls
+
+- **Evidence:** MS §3.4 (`agent.conf` hashes checked at every spawn), §3.9 (toolchains verified against pinned vendor checksums; agent read and execute only), §13.2 (`npm ci --omit=dev --ignore-scripts`, SHA-256 verified release), §13.5 (agent CLI pins, no auto-update), §15.1 (SHA-pinned Actions, `permissions: contents: read`, provenance attestation, `supply-chain` and `codeql` jobs). CX §9 lockfile lint before install; MS §3.5 `deps_install` must carry ignore-scripts.
+- **Result: PASS with VE-16** (`gh` invocation in the upgrade path). Residual RISK-27: a compromised coordinator dependency reaches Zone H (OD-36).
+
+---

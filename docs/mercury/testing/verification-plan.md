@@ -464,7 +464,7 @@ Phase 0 checks cited by requirements in this plan that live in B's table: P0-201
 | TC-REC-016 | Wall-clock jump ±10 min | T0 + T4 | No false sleep; deadlines correct | FR-282 |
 | TC-REC-017 | ⓗ BTM "Allow in the Background" off | T4 | `doctor` reports; watchdog alerts with pending work | OPS-012 |
 | TC-REC-018 | Upgrade with `--keep-runs` during a real Codex run | T4 | Adopted; 0 re-runs | OPS-005 |
-| TC-REC-019 | Restore a 24 h-old backup with anchors ahead (T-REC-06); epoch confirmed with presence | T2 | Epoch recorded; 0 cancelled tasks; authority only shrinks | FR-264, SEC-607 |
+| TC-REC-019 | Restore a 24 h-old backup with anchors ahead (T-REC-06); epoch confirmed with presence; fixture includes an authorization revoked, a task cancelled by CLI and a budget grant consumed **after** the backup | T2 | Epoch recorded; **every** non-terminal task is `BLOCKED(reauthorization_required)` (history-losing restore: backup audit head seq < last anchor seq, or reason `new_host`; VD-01); 0 tasks cancelled by the restore; 0 dispatches before a new authorization version; no revoked authorization, CLI cancel, consumed budget or expiry is resurrected (authority only shrinks) | FR-264, SEC-607 |
 | TC-REC-020 | Power-loss cycles (T-REC-02) | **T4v** | 50/50 per §6 | NFR-020, NFR-050, NFR-053 |
 | TC-REC-021 | Merged while asleep > 24 h | T2 | Verified, not blocked | CON-009, FR-085 |
 | TC-REC-022 | `agent-exec` rejects a tampered `spec.json` mode, a symlinked `--run-dir`, an unknown flag, and a key on fd 3 for `verify` (D, recovery §6) | T4v | 100 % rejected with exit 125; nothing executed; `config_fatal` hold | FR-051, SEC-212 |
@@ -541,7 +541,7 @@ E's tests registered by alias (procedure and binary criterion in `security/threa
 | TC-SEC-161 | SEC-T-61 chain mutation → safe mode | T1 | FR-262, SEC-602, SEC-605, SEC-908 |
 | TC-SEC-162 | SEC-T-62 HMAC and restore mapping (if implemented) | T1 | SEC-603 |
 | TC-SEC-163 | SEC-T-63 anchor divergence; carriers (Linear comment, private anchor repo; check summary only on private repos) | T1 + T3 | FR-263, SEC-604 |
-| TC-SEC-164 | SEC-T-64 restore epoch with and without presence | T1 | FR-264, SEC-607 |
+| TC-SEC-164 | SEC-T-64 restore epoch with and without presence. Added F criterion (Phase 5, VD-01): after an accepted history-losing restore epoch, every non-terminal task is `BLOCKED(reauthorization_required)` and 0 dispatches occur before re-authorization; without presence the epoch is refused | T1 | FR-264, SEC-607 |
 | TC-SEC-170 | SEC-T-70 lockfile lint | T0 | SEC-702 |
 | TC-SEC-171 | SEC-T-71 `deps_install` scripts, ack, hosts | T4 | FR-123, SEC-703, SEC-215 |
 | TC-SEC-172 | SEC-T-72 resource limits | T4 | SEC-704 |
