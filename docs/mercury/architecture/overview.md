@@ -478,7 +478,7 @@ Hold kinds and block reason codes are C's (`state-machine.md` §5, §6.1).
 | C8 | Merge verification fails | MergeVerifier | `BLOCKED(merge_verification_failed)`, scoped: wrong merge actor or merge commit not on base → global `security_halt`; approval, content or review-ordering mismatch → repo `integrity_alert` hold; operator merged before review → policy notice ([ADR-014](decisions/ADR-014-merge-actor-enforcement-and-required-checks.md)) |
 | C9 | Linear-native delegation or coding session on a managed issue | LinearPoller | `BLOCKED(foreign_agent)`; no dispatch until the delegation is removed |
 | C10 | Coordinator DB lost or corrupt | Startup integrity check | Safe mode; restore per `operations/recovery.md`; restore epoch recorded; unverifiable authority → `BLOCKED(reauthorization_required)` ([ADR-018](decisions/ADR-018-audit-integrity.md)) |
-| C11 | Target-repo ruleset drift (a required rule relaxed) | Drift monitor via `mercury-ops` (SEC-108) | Ops alert; new dispatch for that repository stops until the ruleset is restored (OPS-003) |
+| C11 | Target-repo ruleset drift (a required rule relaxed) | Drift monitor via a `mercury-bot` token narrowed to `metadata:read` (SEC-108) | Ops alert; new dispatch for that repository stops until the ruleset is restored (OPS-003) |
 
 ---
 

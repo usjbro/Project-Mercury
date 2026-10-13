@@ -282,7 +282,7 @@ A schema rejected by the provider at request time is `config_fatal` for that dec
 
 ### 7.3 Managed settings
 
-The operator installs a root-owned `/Library/Application Support/ClaudeCode/managed-settings.json` with `permissions.disableBypassPermissionsMode: "disable"` and `permissions.disableAutoMode: "disable"`. **Recommended: yes** (OD-19); it also protects the operator's interactive use. CL-1…CL-8 do not depend on it.
+When OD-19 = yes (default), the operator installs a root-owned `/Library/Application Support/ClaudeCode/managed-settings.json` containing every SEC-204 key: `permissions.disableBypassPermissionsMode: "disable"`, `permissions.disableAutoMode: "disable"`, `allowManagedHooksOnly: true`, `permissions.deny` rules for credential paths (`~/.ssh/**`, `~/.config/gh/**`, `~/.aws/**`, `~/Library/Keychains/**`, `~/Library/Application Support/Mercury/**`), and an empty managed MCP configuration. It also protects the operator's interactive use. The §8 startup self-test validates that the file exists, is root-owned and contains these keys (P0-048); CL-1…CL-8 provide the per-run isolation independently of it.
 
 ---
 

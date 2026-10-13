@@ -16,7 +16,7 @@
 ## Decision
 1. **Hash-chained `audit_log` — MUST.** Every transition, decision, run, external effect and operator command appends an entry whose hash covers the previous entry's hash. Append-only by trigger (`components.md` §6.4).
 2. **Off-host anchoring of the chain head — MUST before unattended operation (milestone M7).** The head `(seq, hash)` is carried in App-posted artifacts that already exist:
-   - the `MERCURY / claude-review` check-run output summary;
+   - the `MERCURY / claude-review` check-run output summary — **private repositories only**, never on public repositories (Addendum B, OD-24);
    - the Linear completion comment per task;
    - a daily anchor commit in a **private anchor repository**, written by `mercury-ops` ([ADR-008](ADR-008-agent-identities-and-merge-governance.md)).
    Anchors are outbox effects with natural-key reconciliation and are recorded in the `anchors` table. Embedding the head in public PR comments beyond the check summary is OD-24.

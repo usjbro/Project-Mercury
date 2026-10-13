@@ -406,7 +406,8 @@ export interface RunManager {
   startClaimed(claim: ClaimedRun): Promise<void>;
   monitor(ctx: TickContext): Promise<void>;          // credits time, stdout growth + CPU progress (agent-ctl stats)
   cancel(runId: RunId, reason: CancelReason): Promise<KillReport>;
-  finalize(runId: RunId, exit: ExitInfo): Promise<FinalizeOutcome>;   // idempotent on run_id; applies via AG@apply
+  finalize(runId: RunId, exit: ExitInfo, opts?: { deferUntilLinearRefresh?: boolean }): Promise<FinalizeOutcome>;   // idempotent on run_id; applies via AG@apply (startup defers, §10.6, VD-03)
+  applyDeferredAfterLinearRefresh(): FinalizeOutcome[];   // startup step 17: applies results deferred for spec freshness
   adoptOrReap(run: RunRow): Promise<AdoptionOutcome>;
   applyDeferred(taskId: TaskId): FinalizeOutcome[];  // after a same-scope re-authorization (SM §8.1.1)
   markDeferredReady(tx: WriteTx, taskId: TaskId): void;   // flags deferred runs so the next tick calls applyDeferred
@@ -541,6 +542,11 @@ export interface GitOps {                                                 // har
   remoteHead(repo: RepoName, branch: string): Promise<GitSha | null>;
   exists(repo: RepoName, sha: GitSha): Promise<boolean>;                    // git cat-file -e (INV-25 recovery)
   diffArtifact(repo: RepoName, base: GitSha, head: GitSha): Promise<{ artifact: ArtifactId; diffSha256: Sha256 }>;
+  // diff_sha256 (normative, Phase 5 VC-17): sha256 of the exact bytes of
+  //   git diff --no-ext-diff --no-textconv --no-color --binary --full-index --no-renames <mb>..<head>
+  // run with the §9.6 hardened invocation against the mirror, where mb = git merge-base(<base>, <head>) and <base> =
+  // pull_requests.base_sha observed when the review runs are claimed (recorded on both runs as runs.base_sha).
+  // Both PR reviews of one head use the same base, so code.diff_sha256 == sec.diff_sha256 is deterministic (SM §8.3).
 }
 export type PushResult = { kind: "pushed" | "already_there"; sha: GitSha } | { kind: "rejected_non_ff"; remote: GitSha }
   | { kind: "rejected_ruleset"; detail: string };
@@ -724,7 +730,7 @@ Redaction applies to audit `data`, `runs.error_summary`, outbox payloads, `contr
 | `CredentialBroker` | `loadOnce()`, `reload()`, `githubInstallationToken(repo, purpose)`, `opsToken()`, `linearToken()`, `modelKeyFd(agent)` | Reads Keychain items `com.usjbro.mercury.*` **once at start and on `mercury reload-credentials`**, holds them in memory (RD-18); registers each with the Redactor |
 | `HealthMonitor` | `tick(): {creditedMs, sleepGap, fullWake, network}` | §10.10; authenticated ETag probe; disk thresholds (MS-PARAM) |
 | `PresenceVerifier` | `confirm(method, scope, paramsSha256): Promise<Assertion>` | Spawns `mercury-presence` (§5.2, MS §9.5) |
-| `TimerService` | `due(now): TimerFire[]` | SM §7.3 under INV-20; coalesces wake summaries |
+| `TimerService` | `due(now): TimerFire[]` | SM §7.3 under INV-20; coalesces wake summaries. **No timers table**: each timer is derived from a persisted origin column (`tasks.state_entered_at`, `tasks.blocked_since`, `pull_requests.first_observed_head_at`, `authorizations.expires_at`, `holds.first_observed_awake_ms`, `tasks.next_action_at`) and from the latest attempt of the awaited action (`cursors.last_attempt_at`, `merge_verifications.created_at`, `runs.created_at`) compared with the latest `host_events` `wake`/`startup` row (INV-20 b). Fired reminders are deduplicated through `notifications.dedup_key` |
 | `RecoveryManager` | `recover()` | §10.6 |
 | `MergeVerifier` | `verify(task)` | GH §8 predicate, SM §8.5 scoping |
 | `TriageService` | `maybeRunTriage(ctx)` | Shortlist → T01 within free WIP |
@@ -761,7 +767,7 @@ When the daemon is down, read commands use a read-only connection (`--offline`);
 | `readonly` | `readonly.token` | Read methods |
 | `claude_session` | `claude_session.token` | Read methods; `request.authorize`, `request.triage`, `request.reauth` (executed as isolated headless decision runs, RD-20) |
 | `operator` | `operator.token` | Read, request, and **non-relaxing** mutations: `pause`, `unpause` (non-security holds), `cancel`, `revoke`, `abandon`, `cancel-run`, `policy reject`, `resume` for non-★ reasons, `outbox retry` (non-security items), `reload-credentials`, `doctor`, `db backup`, `shutdown` |
-| `operator_presence` | `operator.token` **plus** a presence assertion | Every ★ method (§5.4): `ack-merge`, `security unhalt`, `unpause --safe-mode`, `policy ack`, `grant`, `resume --adopt`/`--reopen`/`--discard-worktree-changes`, `resume` of `security_escalation`/`injection_suspected`/`run_exhausted` (retry grant), `outbox retry` of security items, `orphan adopt`, `restore --confirm`, ruleset-emergency acknowledgement (REC runbook) |
+| `operator_presence` | `operator.token` **plus** a presence assertion | Every ★ method (§5.4): `ack-merge`, `security unhalt`, `unpause --safe-mode`, `policy ack`, `grant`, `resume --adopt`/`--reopen`/`--discard-worktree-changes`, `resume` of `security_escalation`/`injection_suspected`/`run_exhausted` (retry grant), `outbox retry` of security items, `orphan adopt`, `restore --confirm`, `ruleset-emergency begin|end`, `doctor --plant-canaries` |
 
 **Presence assertion (MS §9.5).** For a ★ method, `mercuryd` itself spawns the signed `mercury-presence` helper (hardened runtime, no `get-task-allow`) with a fixed reason template (`"MERCURY: <method> <task or scope>"`, never free text from GitHub or Linear) and a fresh single-use nonce bound to `(method, params_sha256, control_request_id)`. The helper runs `LAContext.evaluatePolicy(.deviceOwnerAuthentication)` (Touch ID or login password). Only an `ok` with the matching nonce on the stdout of the child that `mercuryd` spawned authorizes the method; `PresenceVerifier` records `presence_assertion_sha256 = sha256(nonce ‖ method ‖ params_sha256 ‖ result)` in `control_requests` (INV-22). A process running as the operator, including the interactive Claude Code session, can therefore *request* but never *complete* the confirmation. Without an Aqua session the method fails with `presence_unavailable`. If Phase 0 (P0-045) rejects the helper, the fallback is a TTY-bound typed nonce, recorded as policy-enforced (RA-09).
 
@@ -807,6 +813,13 @@ Error codes: `unauthenticated`, `forbidden`, `presence_denied`, `presence_unavai
 | `doctor {recheck}` | operator | Self-tests incl. agent-uid setup (MS §3.4–§3.8); clears `agent_auth_failed`/`config_fatal` on success |
 | `db.backup {}` | operator | Worker-thread backup |
 | `daemon.shutdown {}` | operator | Graceful shutdown |
+| `ruleset.emergency_begin {repo, pr, reason}` / `ruleset.emergency_end {repo}` | ★ | Records an audited expected-drift window so the drift monitor reports the operator's emergency ruleset edit as expected instead of raising `security_halt` (REC RB-13) |
+| `repo.add {repo}`, `repo.check {repo}` | operator | Onboarding checklist and governance check (GH §9.4); `repo.add` writes `repos` only after every check passes |
+| `task.show {task, diff, policy}` | any | Diff artifact and policy report of the current head |
+| `doctor {recheck, repair, presence, agents, quick, full}` / `doctor.plant_canaries {}` | operator / ★ | `repair` tightens modes and ACLs only; `plant_canaries` writes SEC-T-20 canaries |
+| `db.backup {list}` | operator | Lists verified backups (`user_version`, age, audit head, epoch) |
+
+Release-management verbs (`upgrade`, `rollback`, `runtime upgrade`, `agents upgrade|pin`) and `restore` run in the CLI process with the daemon drained or stopped (MS §13–§14). They are not socket methods; each writes an audit record at the next daemon start (Phase 5 VD-05).
 
 There is deliberately **no** method to approve a plan, approve or merge a PR, create an authorization, or edit a counter.
 
@@ -829,6 +842,13 @@ mercury cancel-run <run>                     mercury outbox [--dead] [--retry ID
 mercury orphan list|adopt <pr> (★)|close <pr>
 mercury audit verify                         mercury restore <backup> [--reason new_host] (daemon stopped)   mercury restore --confirm (★)
 mercury clear-fatal                          mercury toolchain sync       mercury stop                 (owned by MS; listed for completeness)
+mercury upgrade <version>    mercury rollback    mercury runtime upgrade <node-version>    mercury agents upgrade codex|claude <ver>
+mercury agents pin codex|claude <ver>        (release management, MS §13; daemon drained by the command itself)
+mercury db backup [--list]                   mercury restore <backup> --reason restore|new_host (daemon stopped)
+mercury ruleset-emergency begin --repo R --pr N --reason TEXT (★)      mercury ruleset-emergency end --repo R (★)   (REC RB-13)
+mercury repo add <owner/repo>                mercury repo check <owner/repo>     (onboarding checklist, GH §9.4)
+mercury show <task> --diff [--policy]
+mercury doctor [--recheck|--repair|--presence|--agents|--quick|--full]       mercury doctor --plant-canaries (★)
 mercury reload-credentials                   mercury doctor [--recheck]       mercury db backup
 mercury --as operator|claude-session|readonly <command>
 ```

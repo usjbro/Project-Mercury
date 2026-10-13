@@ -136,7 +136,7 @@ This **dependency** critical path is ≈ **44 P50 engineer-days**: the shortest 
 
 #### MERC-005 — Phase 0 closure report and re-estimate
 
-- **Description:** Consolidate results, update traceability §10.2 statuses, re-estimate the roadmap.
+- **Description:** Consolidate results, update traceability §10.2 statuses, re-estimate the roadmap. Filed under E0a but closes **at the end of Phase 0** (after P0b and P0c, hence MERC-011 and MERC-024 below); P0a itself exits on MERC-001…004 (Phase 5, VF-11).
 - **Blocked by:** MERC-002, MERC-003, MERC-011, MERC-024
 - **Requirements:** CON-015, OPS-001
 - **Acceptance:** 0 Open checks gating M1; revised P50/P90 published in roadmap §5.

@@ -19,8 +19,8 @@
 
 | Identity | Kind | Installed on / scope | Permissions | Used by | Never |
 |---|---|---|---|---|---|
-| **`mercury-bot`** | GitHub App | Target repositories only (selected repos) | `contents:write`, `pull_requests:write`, `checks:write`, `metadata:read`; plus `statuses:write` **only if** the Phase 0 pinning test requires it (RD-5) | Push task branches, open and update PRs, post `COMMENT` reviews, create the `MERCURY / claude-review` and `MERCURY / policy` check runs | `administration`, `workflows`, `actions`, `issues`; APPROVE, REQUEST_CHANGES, dismiss, merge, update-branch, auto-merge (endpoint allowlist, SEC-102) |
-| **`mercury-ops`** | GitHub App | `project-mercury`, the private anchor repository, and target repositories (read-only) | `issues:write` on `project-mercury` (heartbeat issue, ops alerts); `contents:write` on the anchor repository; `metadata:read` on targets for the ruleset drift monitor (reads `/rulesets`) | Ops alerts, heartbeat, daily audit anchor ([ADR-018](ADR-018-audit-integrity.md)), governance drift monitor (SEC-108) | Any write to a target repository |
+| **`mercury-bot`** | GitHub App | Target repositories only (selected repos) | `contents:write`, `pull_requests:write`, `checks:write`, `statuses:read`, `metadata:read` (an `audit`-purpose installation token narrowed to `metadata:read` serves the ruleset drift monitor, SEC-108); plus `statuses:write` **only if** the Phase 0 pinning test requires it (RD-5) | Push task branches, open and update PRs, post `COMMENT` reviews, create the `MERCURY / claude-review` and `MERCURY / policy` check runs | `administration`, `workflows`, `actions`, `issues`; APPROVE, REQUEST_CHANGES, dismiss, merge, update-branch, auto-merge (endpoint allowlist, SEC-102) |
+| **`mercury-ops`** | GitHub App | `project-mercury` and the private anchor repository only — **never installed on target repositories** (Addendum C, SEC-110) | `issues:write` on `project-mercury` (heartbeat issue, ops alerts); `contents:write` on the anchor repository | Ops alerts, heartbeat, daily audit anchor ([ADR-018](ADR-018-audit-integrity.md)) | Any access to a target repository |
 | **Linear app** | OAuth app, `actor=app` | MERCURY's Linear teams | Read issues and relations; write comments, `In Progress` and (in `mercury_owns_all` mode) `Done`; MERCURY labels | Linear projection and comments | Edit issue descriptions; any action as the human user |
 | **Anthropic key** | Dedicated API workspace key with a spend limit | Claude decision runs | Model API only | Passed to the Claude run on fd 3 per run | Written to a file, argv, a log, or any other process's environment |
 | **OpenAI key** | Dedicated project key with a spend limit | Codex runs | Model API only | Passed to the Codex run on fd 3 per run | Same as above |
@@ -30,7 +30,7 @@
 
 Rules:
 1. Installation tokens are minted per purpose with the narrowest repository and permission set the API allows.
-2. Governance on target repositories uses **rulesets**, not classic branch protection, because `mercury-ops` reads `/rulesets` with `metadata:read` (RB-16). The ruleset content is in [ADR-014](ADR-014-merge-actor-enforcement-and-required-checks.md).
+2. Governance on target repositories uses **rulesets**, not classic branch protection, because the drift monitor reads `/rulesets` with a `mercury-bot` token narrowed to `metadata:read` (RB-16, Addendum C). The ruleset content is in [ADR-014](ADR-014-merge-actor-enforcement-and-required-checks.md).
 3. Claude's reviews are posted by `mercury-bot` with a "Claude review" header; Claude itself has no GitHub identity.
 4. The operator's own interactive agents are outside MERCURY but hold human credentials. Policy OD-35 restricts them ([ADR-019](ADR-019-notifications-and-operator-presence.md)).
 
@@ -38,7 +38,7 @@ Rules:
 | Alternative | Why rejected |
 |---|---|
 | One App with all permissions (Phase 2 text) | Permissions are App-wide, so `issues:write` and anchor `contents:write` would reach every target repository (RA-07) |
-| A third read-only "auditor" App for drift monitoring (RA-07 proposal) | `metadata:read` on `mercury-ops` is enough to read rulesets; a third identity adds setup and a Keychain item for no extra separation |
+| A third read-only "auditor" App for drift monitoring (RA-07 proposal) | a `mercury-bot` installation token narrowed to `metadata:read` is enough to read rulesets; a third identity adds setup and a Keychain item for no extra separation |
 | Machine-user account with a PAT | Classic PAT needed on personal repos; a second human-like account; can be a collaborator with write |
 | Operator's own token | Agent PRs authored as the human cannot be approved by the human; the token can merge as admin (today's state) |
 | Linear personal API key | Writes appear as the human (the JAM-160 identity confusion) |
@@ -64,3 +64,5 @@ RA-06, RA-07, RE-10, RF-10, RB-03, RB-05, RB-15, RB-16, RD-08.
 
 ## Revision history
 - Phase 4: became the identity inventory (RD-6); governance moved to ADR-014; `mercury-bot` gains `checks:write` and loses `issues:write`; `mercury-ops` added; model keys and the agent uid listed.
+
+- Phase 5 (orchestrator, VE-01): aligned with reconciliation Addenda B/C — `statuses:read` added to `mercury-bot`; `mercury-ops` not installed on target repositories; drift monitor uses a narrowed `mercury-bot` token.
