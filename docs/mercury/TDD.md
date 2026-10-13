@@ -3,10 +3,10 @@
 | | |
 |---|---|
 | Document | `docs/mercury/TDD.md` (authoritative, navigable design; supporting specifications are linked per section) |
-| Version | 1.0-rc (design for human review) |
-| Date | 2026-10-12 |
+| Version | 1.0-rc1 (design for human review) |
+| Date | 2026-10-13 |
 | Design authority | Orchestrating session (Claude Code) integrating six specialized subagents (A–F) — see §31 |
-| Status | **Conditionally ready for human review** — see §32. Not approved for implementation. |
+| Status | **Conditionally ready for human review** — see §32. Not approved for implementation. Phase 5 validation complete (0 Critical / 0 High open). |
 | Scope | Design, specification, validation and implementation planning only. Nothing in this repository authorizes deployment, configuration changes on the Mac, Linear issue creation, or GitHub changes. All code and configuration snippets are examples for design review. |
 
 **Reading guide.** Each section states the design decisions and the essential contracts, then links to the single supporting document that owns the detail. When this document and a supporting document disagree, the supporting document named as owner in the "Single-source rules" table below wins for detail, and the disagreement is a defect to report. Process records (discovery, agent reports, peer reviews, reconciliation decisions) are in [`reviews/`](reviews/).
@@ -755,10 +755,10 @@ Owner: [`planning/traceability.md`](planning/traceability.md): requirement → d
 |---|---|---|---|---|---|
 | A Principal Architect | — | overview.md, ADR-001…012, [report](reviews/10-agent-A-report.md) | [20-review-A](reviews/20-review-A-architecture.md) (38 findings) | overview, ADR-001…020, [40-revision-A](reviews/40-revision-A.md) | — |
 | B Solutions Architect | 3 discovery reports | integrations/*.md, [report](reviews/11-agent-B-report.md) | [21-review-B](reviews/21-review-B-interfaces.md) (27) | integrations, [41-revision-B](reviews/41-revision-B.md) | — |
-| C Staff Engineer | — | components, state-machine, messages, schemas, [report](reviews/12-agent-C-report.md) | [22-review-C](reviews/22-review-C-implementability.md) (41) | all four, [42-revision-C](reviews/42-revision-C.md) | Implementation feasibility validation |
-| D DevOps/Platform | discovery (platform, joint) | macos-service, recovery, [report](reviews/13-agent-D-report.md) | [23-review-D](reviews/23-review-D-reliability.md) (31) | both, [43-revision-D](reviews/43-revision-D.md) | Operational recoverability validation |
-| E Security | — | threat-model, [report](reviews/14-agent-E-report.md) | [24-review-E](reviews/24-review-E-security.md) (29) | threat-model, [44-revision-E](reviews/44-revision-E.md) | Final security review |
-| F TPM | — | traceability, verification-plan, [report](reviews/15-agent-F-report.md) | [25-review-F](reviews/25-review-F-coverage.md) (37) | traceability, verification plan, roadmap, issue breakdown, [45-revision-F](reviews/45-revision-F.md) | Traceability verification |
+| C Staff Engineer | — | components, state-machine, messages, schemas, [report](reviews/12-agent-C-report.md) | [22-review-C](reviews/22-review-C-implementability.md) (41) | all four, [42-revision-C](reviews/42-revision-C.md) | [50-validation-C](reviews/50-validation-C-feasibility.md) |
+| D DevOps/Platform | discovery (platform, joint) | macos-service, recovery, [report](reviews/13-agent-D-report.md) | [23-review-D](reviews/23-review-D-reliability.md) (31) | both, [43-revision-D](reviews/43-revision-D.md) | [51-validation-D](reviews/51-validation-D-recoverability.md) |
+| E Security | — | threat-model, [report](reviews/14-agent-E-report.md) | [24-review-E](reviews/24-review-E-security.md) (29) | threat-model, [44-revision-E](reviews/44-revision-E.md) | [security-review.md](security/security-review.md) |
+| F TPM | — | traceability, verification-plan, [report](reviews/15-agent-F-report.md) | [25-review-F](reviews/25-review-F-coverage.md) (37) | traceability, verification plan, roadmap, issue breakdown, [45-revision-F](reviews/45-revision-F.md) | [52-validation-F](reviews/52-validation-F-traceability.md) |
 
 **Phase 3 totals:** 203 findings — Critical 3, High 52, Medium 118, Low 30. The three Critical findings (RF-01, RD-01, RE-01) shared one root cause: the separate agent uid required by SEC-201 was not implemented by any runtime design.
 
@@ -783,8 +783,58 @@ Owner: [`planning/traceability.md`](planning/traceability.md): requirement → d
 
 ## 32. Final Design Validation and Sign-Off Status
 
-See Phase 5 results: [`security/security-review.md`](security/security-review.md) (Agent E), and the Phase 5 validation reports [`reviews/50-validation-C-feasibility.md`](reviews/50-validation-C-feasibility.md), [`reviews/51-validation-D-recoverability.md`](reviews/51-validation-D-recoverability.md), [`reviews/52-validation-F-traceability.md`](reviews/52-validation-F-traceability.md). The sign-off table below is completed by the orchestrator after Phase 5.
+### 32.1 Phase 5 independent validation results
 
-| Gate | Status | Evidence |
+| Validator | Report | Verdict | Findings (C / H / M / L) | Open after orchestrator fixes |
+|---|---|---|---|---|
+| E — final security review | [`security/security-review.md`](security/security-review.md) | Approve with conditions | 0 / 0 / 8 / 12 | Low only (VE-09, VE-14 list restatements; VE-18 residual accepted) |
+| C — implementation feasibility | [`reviews/50-validation-C-feasibility.md`](reviews/50-validation-C-feasibility.md) | Approve with conditions | 0 / 0 (D's VD-01 High fixed in C's files) / 10 / 18 | None of Medium or above |
+| D — operational recoverability | [`reviews/51-validation-D-recoverability.md`](reviews/51-validation-D-recoverability.md) | Approve with conditions | 0 / 1 (VD-01, fixed) / 9 / 11 | None of Medium or above |
+| F — requirements traceability | [`reviews/52-validation-F-traceability.md`](reviews/52-validation-F-traceability.md) | Approve with conditions | 0 / 0 / 4 / 17 | Low only (VF-03 disambiguation rule adopted; minor ADR wording) |
+
+Evidence produced in Phase 5 (scripts kept in the session scratchpad, results recorded in the reports): lifecycle determinism matrix (17 states reachable, every non-terminal state has an exit, unmatched pairs rejected); SQLite DDL executed in-memory (97 statements, 26 triggers, 0 errors, positive and negative probes); JSON Schemas (26/26 metaschema, 153/153 `$ref`, 25/25 fixtures, unknown fields rejected); ID lint (no duplicate definitions; all citations resolve or are registered aliases); link lint (473 links, 1,530 file§ pointers; remaining hits are parser false positives); Mermaid parse (all 8 TDD diagrams and all supporting-document diagrams parse with mermaid 10.9.1; four blocks fail only under a mermaid 11.4.1 jsdom harness with "Element is not defined", an environment artefact).
+
+All Medium and higher findings routed to the orchestrator or to owners were fixed in the documents (commit history on branch `claude/mercury-tdd`; dispositions in the four reports and in [`reviews/30-reconciliation.md`](reviews/30-reconciliation.md) Addenda A–C).
+
+### 32.2 Quality gates (brief §7)
+
+| Quality gate | Status | Evidence |
 |---|---|---|
-| _Completed after Phase 5_ | | |
+| Every required subagent delivered or limitation recorded | **Met** | §31 table; limitations listed in §31 |
+| All major interfaces have defined contracts | **Met** | §17; F Q2 |
+| Job lifecycle is deterministic | **Met (design)** | C Phase 5 §1 matrix |
+| Every transition has authorization rules | **Met (design)** | state-machine §3; C Phase 5 §2 |
+| Persistent-state and recovery behaviour specified | **Met (design)** | §16, §20; D Phase 5 |
+| Agent communication versioned and traceable | **Met** | §10; messages.md §6 |
+| Claude authorization required before development | **Met (design)** | INV-03/04 DB triggers + guards at dispatch and result application |
+| Codex cannot execute unapproved work through the coordinator | **Met (design)** | Plan-hash binding guard + trigger; `agent-exec` argv grammar |
+| Human approval enforceable via GitHub permissions/protections | **Met (design), conditional on configuration** | ADR-014; threat-model §5.2 proof; requires rulesets applied and verified in P0c (SEC-T-16) |
+| Security boundaries independently reviewed | **Met** | Phase 3 review by E; Phase 5 security-review.md |
+| Failure scenarios documented | **Met** | recovery.md §5; D Phase 5 walk-through |
+| Testing and verification criteria measurable | **Met** | verification-plan.md; 281 requirements each with a pass/fail criterion and a test (F Phase 5) |
+| Roadmap reflects architectural dependencies | **Met** | roadmap.md; C VC-18/19/20 dependency fixes applied by F |
+| Design can be implemented incrementally | **Met** | P0 → M1…M9c with exit gates G-S1…G-S5 |
+| Remaining assumptions and unresolved decisions documented | **Met** | §30; traceability ASM→P0 register; OD-01…37 |
+
+"Met (design)" means the specification satisfies the gate on inspection and script checks. **No gate has been validated by a running implementation**, and none can be until Phase 0 and the milestone tests run.
+
+### 32.3 Sign-off status
+
+**Status: CONDITIONALLY READY FOR HUMAN REVIEW.** No Critical or High design finding is open. The design is **not** approved for implementation until the operator reviews it and the following conditions are met:
+
+| # | Condition | Before |
+|---|---|---|
+| C1 | Operator decisions with defaults confirmed or changed: OD-01, OD-03/04, OD-05, OD-06, OD-07, OD-08, OD-17, OD-18, OD-19, OD-20, OD-35 | P0 start |
+| C2 | Phase 0 read-only checks executed on the Mac (P0-001…), and root steps (agent uid, sudoers, wrappers, ACLs) executed **only with explicit operator consent** | M1 / P0b |
+| C3 | SEC-T-20 credential canaries pass on the real Mac for every agent kind (gate G-S2) | Any non-sandbox write run (M5) |
+| C4 | Rulesets, CODEOWNERS and App installations applied to the sandbox repo and verified (SEC-T-16) | First sandbox push |
+| C5 | G-DETECT written risk acceptance, or G-ORG move, for target repos | M9b supervised pilot |
+| C6 | G-ORG in force and OD-36 decided | Any unattended or overnight operation (G-S5) |
+| C7 | Phase 0 results that disprove an assumption are fed back through an ADR revision before the affected milestone | Continuous |
+
+**Not verifiable in this design phase** (explicitly): every macOS behaviour (launchd, sleep/dark wake, logout survival, Keychain access, TCC, `F_FULLFSYNC` via git), the Agent SDK spawning Claude through `sudo agent-exec`, Codex 0.162.x runtime behaviour (commit protection, `exec resume` sandbox re-application, wire-schema acceptance), GitHub check-run pinning semantics and whether a concluded check's conclusion can be changed, Linear `actor=app` client-credentials flow, the presence helper, and every performance or reliability threshold. Each is mapped to a Phase 0 check or milestone test.
+
+| Role | Name | Decision | Date |
+|---|---|---|---|
+| Operator (final authority) | _pending_ | _pending human review_ | |
+| Design authority (orchestrator) | Claude Code session | Submitted as conditionally ready | 2026-10-13 |
