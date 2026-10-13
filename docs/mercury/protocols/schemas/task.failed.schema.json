@@ -75,13 +75,16 @@
             "type": "string"
           },
           "minItems": 0,
-          "maxItems": 10
+          "maxItems": 14
         },
         "notification_kind": {
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "pattern": "^[a-z_]{3,64}$",
+          "maxLength": 64,
+          "description": "Notification kind from the components §4.15 vocabulary, or null when no notification is sent."
         },
         "presence_required_actions": {
           "type": "array",

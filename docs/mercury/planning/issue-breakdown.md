@@ -696,7 +696,7 @@ This **dependency** critical path is ≈ **44 P50 engineer-days**: the shortest 
 
 #### MERC-701 — Merge verification
 
-- **Description:** Recipe M1–M9, scoped responses, `ack-merge` (presence), `merged_unreviewed_head` notice.
+- **Description:** Recipe M1–M8 (`integrations/github.md` §8), scoped responses, `ack-merge` (presence), `merged_unreviewed_head` notice.
 - **Blocked by:** MERC-604
 - **Requirements:** FR-181, FR-182, SEC-905, SEC-906
 - **Acceptance:** TC-UNIT-052, TC-SM-017, -018, TC-SEC-193, TC-GOV-004 pass (SAC-10).

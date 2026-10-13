@@ -281,7 +281,7 @@ Phase 0 checks cited by requirements in this plan that live in B's table: P0-201
 | TC-UNIT-043 | Diff gate: scope, block-class vs escalate-class paths, allowance | Block fixtures block; escalate fixtures proceed with policy pending | FR-124, SEC-309 |
 | TC-UNIT-050 | Linear projection tables (both modes) | All 17 states mapped per mode | FR-200 |
 | TC-UNIT-051 | Notification dedup key and suppression | Duplicates suppressed | FR-221 |
-| TC-UNIT-052 | Merge-verification predicate (checks M1…M9 by ID; not-yet-available vs definitive) | Each failing check detected with the right scope | FR-181, FR-182 |
+| TC-UNIT-052 | Merge-verification predicate (checks M1…M8 by ID, `integrations/github.md` §8; not-yet-available vs definitive) | Each failing check detected with the right scope | FR-181, FR-182 |
 | TC-UNIT-053 | PR ownership check (`user.login`, head repo, recorded branch) | Foreign PRs ignored | SEC-107 |
 | TC-UNIT-054 | Pre-review re-check (head = reviewed SHA, checks, policy) | Review request suppressed on any mismatch | SEC-904 |
 | TC-UNIT-061 | Config validator (incl. no hard-coded team/repo; parameter clamps) | Invalid configs rejected with field path | CON-013, NFR-072 |
@@ -467,6 +467,8 @@ Phase 0 checks cited by requirements in this plan that live in B's table: P0-201
 | TC-REC-019 | Restore a 24 h-old backup with anchors ahead (T-REC-06); epoch confirmed with presence | T2 | Epoch recorded; 0 cancelled tasks; authority only shrinks | FR-264, SEC-607 |
 | TC-REC-020 | Power-loss cycles (T-REC-02) | **T4v** | 50/50 per §6 | NFR-020, NFR-050, NFR-053 |
 | TC-REC-021 | Merged while asleep > 24 h | T2 | Verified, not blocked | CON-009, FR-085 |
+| TC-REC-022 | `agent-exec` rejects a tampered `spec.json` mode, a symlinked `--run-dir`, an unknown flag, and a key on fd 3 for `verify` (D, recovery §6) | T4v | 100 % rejected with exit 125; nothing executed; `config_fatal` hold | FR-051, SEC-212 |
+| TC-REC-023 | Agent strips ACLs in its worktree (D, recovery §6) | T4v | `policy_violation`; `BLOCKED(security_policy_violation)`; nothing committed | SEC-405, SEC-903 |
 | TC-REC-030 | Adoption of a detached Codex run after coordinator crash (T-REC-03) | T1/T4 | Result adopted; 0 re-runs | FR-054, NFR-026 |
 | TC-REC-031 | Sleep simulation in both clock modes (RT-03, T-REC-04) | T0/T2 | Budget unchanged; one coalesced notice | CON-009, FR-282 |
 | TC-REC-032 | Reboots during a step → `lost_by_host`; cap exhaustion | T2 | 0 attempts; 1 ops alert at cap; state unchanged | FR-053, NFR-026 |
@@ -477,6 +479,8 @@ Phase 0 checks cited by requirements in this plan that live in B's table: P0-201
 | TC-REC-037 | Worktree reset policy | T1 | Tree = recorded commit; patch archived; `-x` only with deps re-queue | FR-126 |
 | TC-REC-038 | Authorization revoked while daemon down; adopted output | T2 | Output not applied | FR-022, FR-054 |
 | TC-REC-039 | N authorizations expire during sleep | T2 | 1 summary notification | FR-085 |
+
+**Recovery §6 numbering (Phase 5, VF-04).** `operations/recovery.md` §6 proposes IDs; the canonical IDs are the rows above. Where D's §6 label differs, read: §6 TC-REC-002 → TC-REC-020 (T4v) and TC-REC-002 (logic); §6 -003 → TC-REC-030; §6 -004 → TC-REC-031; §6 -006 → TC-REC-019; §6 -007 → TC-AFS-008; §6 -008 → TC-REC-007; §6 -009 → TC-REC-033. §6 TC-REC-001, -005 and -010…-023 match.
 
 ### 8.11 TC-DUP and TC-CONC
 
@@ -547,7 +551,7 @@ E's tests registered by alias (procedure and binary criterion in `security/threa
 | TC-SEC-190 | SEC-T-90 notification routing; locked ops issue | T3 | FR-224, SEC-901, SEC-907 |
 | TC-SEC-191 | SEC-T-91 kill switch and every halt trigger | T2 | FR-243, SEC-902, SEC-906 |
 | TC-SEC-192 | SEC-T-92 sandbox violations | T4 | SEC-903 |
-| TC-SEC-193 | SEC-T-93 merge-verification mismatches M1–M9 (incl. unexpected base commit) | T3 | FR-182, SEC-905 |
+| TC-SEC-193 | SEC-T-93 merge-verification mismatches M1–M8 (`integrations/github.md` §8; incl. unexpected base commit, M5) | T3 | FR-182, SEC-905 |
 | TC-SEC-194 | SEC-T-94 cross-run isolation | T4 | SEC-213 |
 
 ### 8.13 TC-GOV

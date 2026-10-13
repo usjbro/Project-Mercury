@@ -73,7 +73,7 @@ Workflow policy is **out of scope** of this table and stays with its owner: per-
 | `db.lease_persist_s` | 60 (minimum) | wall | Lease rows are persisted no more often than this; `flock` is the real guard (RD-17). |
 | `db.progress_flush_s` | 60 | wall | In-memory run progress (`awake_ms`, `idle_awake_ms`, byte offsets) flushed at this interval, on phase change and at exit. |
 | `run.liveness_poll_s` | 15 | wall | `agent-ctl probe` / `stats` sampling of active runs. |
-| `run.lost_by_host_cap` | 5 per run step | — | `lost_by_host` outcomes never consume attempts; above the cap → ops alert (not BLOCKED). |
+| `run.lost_by_host_cap` | 5 per run step | — | `lost_by_host` outcomes never consume attempts; at the cap → task hold `host_instability` (state-machine §5.1) + `ops.lost_by_host_cap` alert, never `BLOCKED`. |
 
 ### 2.2 Supervisor lease and wrapper deadlines
 
@@ -155,6 +155,7 @@ Deadlines are awake time. Liveness = stdout growth **or** process-group CPU-time
 | `disk.ballast_mib` | 64 | Released on `ENOSPC`/`SQLITE_FULL`. |
 | `run.stdout_cap_mib` | Codex 256, Claude 64, verify 128; stderr 32 | Above → cancel, class `crash` (`output_cap_exceeded`). |
 | `deferral.notify_after_h` | 2 | Disk or memory deferral longer than this → one notification. |
+| `run.rlimit_nofile` / `run.rlimit_nproc` / `run.rlimit_fsize_gib` / `run.rlimit_core` | 4096 / 1024 / 4 / 0 | Set by `agent-exec` (SEC-704). `nproc` applies per agent uid; `fsize` bounds a single runaway file below `resources.worktree_max_gib`. |
 
 ### 2.7 Observability, backups and holds
 
@@ -170,12 +171,77 @@ Deadlines are awake time. Liveness = stdout growth **or** process-group CPU-time
 | `credentials.locked_retry_s` | 60 | Retry interval while `keychain_locked`. |
 | `backup.due_after_h` | 24 (awake) | Next backup due. `doctor` warns at 26 h; `ops.backup_stale` at 48 h. |
 | `backup.retention` | 7 daily, 4 weekly, 5 pre-upgrade, quarantine 30 d | |
-| `logs.rotate_mib` / `logs.generations` / `logs.total_cap_mib` | 20 (or daily) / 14 / 300 | In-process rotation. |
-| `logs.retention_d` / `runs.retention_d` | 30 / 30 | Audit records and artifacts: life of the DB. |
+| `logs.rotate_mib` / `logs.total_cap_mib` | 20 (or daily, compressed) / 1024 | In-process rotation. Reaching the cap before retention raises `ops.disk` and drops debug generations first; ops logs inside retention are not deleted. |
+| `logs.retention_d` / `logs.debug_retention_d` | 90 / 30 | OD-15 / NFR-061 / SEC-606. Audit records and decision artifacts: ≥ 1 year (life of the DB). |
+| `runs.retention_d` | 30 | Terminal run directories (spec, `ctl/`, `out/`, redacted streams); SEC-207. |
+| `runs.raw_retention_d` | 0 (raw `stdout.jsonl` / `stderr.log` replaced by the redacted copy at finalization) | OD-15 / NFR-061 ("raw output not persisted beyond run completion"). SEC-505 permits up to this value; E proposed 14 d (reported, `reviews/51` VD-09). |
+| `metrics.interval_min` | 5 | `metric.*` log lines (§11.2). |
 | `hold_age.spec_changed_h` | 24 (awake) | Hold ageing (RD-3): escalate once. |
 | `hold_age.dependency_unresolved_d` | 7 (awake) | |
 | `hold_age.deprioritized_d` | 14 (awake) | |
 | `helper.timeout_s` | `security`/helpers 10; git network ops 120; local git 600 | Subprocess timeouts. |
+
+### 2.8 Agent configuration (defaults proposed by B, `reviews/41-revision-B.md` §4; semantics in claude.md §3.1, codex.md, github.md, linear.md)
+
+| Parameter | Value |
+|---|---|
+| `claude.<type>.max_turns` | triage 3 · authorization 30 · plan_review 40 · code_review / security_review 60 · revision_request 20 |
+| `claude.<type>.max_budget_usd` | triage 1 · authorization 3 · plan_review 5 · code_review / security_review 8 · revision_request 2 |
+| `claude.<type>.max_input_tokens` | triage 150 k · authorization 100 k · plan_review 150 k · code_review / security_review 300 k · revision_request 100 k |
+| `claude.<type>.model` | `claude-opus-5-5` for every type (downgrade is an operator decision) |
+| `claude.<type>.reasoning_effort` | SDK default (only if the pinned SDK exposes it, ASM-B-04) |
+| `claude.daily_budget_usd` | 60 (→ `budget_exhausted` hold) |
+| `claude.triage.min_interval` | 30 min (components §13 `[triage] min_interval_minutes` is the same key; one name, VD-12) |
+| `claude.max_path_denials` | 5 |
+| `claude.limit_retry_factor` | 1.5 |
+| `codex.max_tokens_per_run` | 4 M input + 400 k output |
+| `codex.progress.min_interval` | 60 s |
+| `gate.max_file_bytes` / `gate.max_changed_lines` | 1 MiB / 3,000 |
+| `github.review.max_inline_comments` | 30 |
+| `github.security_findings.private_full` | true |
+| `linear.eligibility.max_age` / `linear.done_observe_timeout` | 10 min / 10 min |
+| `linear.label_removed_action` | `hold` |
+| `outbox.pending_escalation` | 24 h |
+| `outbox.lease_min` | 5 (components §10.7 lease) |
+| `budget.github_mutations_per_hour` / `budget.linear_mutations_per_hour` | 60 per repo each (SEC-705) |
+
+### 2.9 Security thresholds named by the threat model (E owns the bounds)
+
+| Parameter | Value | SEC |
+|---|---|---|
+| `presence.validity_s` | 120 | Presence assertion → command execution window (threat-model §8, ADR-019) |
+| `policy.max_source_line_chars` | 1000 | SEC-312 over-long lines |
+| `policy.bidi_controls_max` / `policy.zero_width_identifier_max` / `policy.mixed_script_identifier_max` | 0 / 0 / 0 | SEC-312: any occurrence escalates |
+| `policy.minified_min_avg_line_chars` | 300 | SEC-312 new minified/obfuscated source |
+| `gov.drift_check_interval_min` | §2.5 (bound ≤ 60 min awake, SEC-108) | SEC-108 |
+
+### 2.10 Other fixed operational values (previously inline)
+
+| Parameter | Value | Used in |
+|---|---|---|
+| `orphan.sweep_interval_min` | 10 | `recovery.md` FM-11 |
+| `git.stale_index_lock_min` | 10 | `recovery.md` §4 step 13, FM-12 |
+| `power.helper_restart_limit` | 2 deaths per 10 min → gap detection only | §8.6 |
+| `credentials.oauth_expiry_alert_d` | 14 | §9.1, §11.4 |
+| `clock.skew_alert_s` | 120 (vs GitHub `Date`) | `recovery.md` FM-15 |
+| `shutdown.outbox_grace_s` / `shutdown.remote_heartbeat_timeout_s` | 5 / 2 | §12 |
+| `upgrade.claude_drain_max_min` / `upgrade.ready_max_min` / `upgrade.rollback_after_starts` | 20 / 2 (auto-rollback after 3 starts or 5 min) / 3 | §13.2, §13.4 |
+| `backup.defer_cap_min` | 30 | §14.1 |
+| `launchd_log.truncate_mib` / `launchd_log.keep_mib` | 5 / 1 | §10.5 |
+| `snapshots.retention_h` | 24 after the last holder (components §9.5) | components §9.5 |
+| `healthcheck.grace_h` | 12 | §11.6 (OD-D-06) |
+
+### 2.11 Workflow policy (registered by reference; values are **not** defined here)
+
+| Policy | Owner and keys |
+|---|---|
+| Per-kind run attempts and backoff; no-progress detector | state-machine §7.1 |
+| State-level timers (authorization reminder, CI wait `repo.ci_wait_minutes`, human-approval reminders, merge-verification deadline, `blocked_ttl`) | state-machine §7.3; keys in components §13 |
+| Revision budgets and caps; authorization expiry (OD-08) | state-machine §9; components §13 `[budgets.defaults]`, `[budgets.caps]` |
+| `limits.max_awaiting_human`, `limits.blocked_ttl_days`, `repo.test_timeout_min`, `repo.ci_wait_minutes` | components §13 (C) |
+| Hold ageing thresholds | §2.7 `hold_age.*` (operational, here) |
+| Notification cadence and dedup | components §4.15 |
+| Integration retry matrix | github.md §15 |
 
 ---
 
@@ -223,7 +289,7 @@ flowchart TD
 | `env` | Map of allowlisted keys to values | Key allowlist per kind; path values realpath-confined (§9.4) |
 | `secret_env` | Name the fd-3 secret is bound to (`CODEX_API_KEY` or `ANTHROPIC_API_KEY`) or `null` | Must match kind: Codex kinds → `CODEX_API_KEY`; `claude` → `ANTHROPIC_API_KEY` (or `CLAUDE_CODE_OAUTH_TOKEN` under OD-03); `verify`/`deps_install` → `null` |
 | `deadline_awake_ms` | Awake-time budget (§2.3) | Positive, ≤ the per-kind cap compiled into `agent.conf` |
-| `rlimits` | `nofile`, `core=0` | Within compiled bounds |
+| `rlimits` | `nofile`, `nproc`, `fsize`, `core` (§2.6 `run.rlimit_*`) | Within compiled bounds |
 | `sandbox_profile` | `verify` or `deps` for those kinds, else `null` | Must name a root-owned profile in `/usr/local/libexec/mercury/profiles/` whose SHA-256 matches `agent.conf` |
 
 The **identity triple** of a run (ADR-020) is `(run_id marker, process start time, kern.bootsessionuuid)`. `agent-exec` records it in `ctl/proc.json`; adoption requires all three to match (§3.8).
@@ -274,7 +340,7 @@ Defaults!MERCURY_AGENT_EXEC closefrom_override
 
 ```text
 sudo -n -C 4 -u _mercuryagent -g mercury /usr/local/libexec/mercury/agent-exec --run-dir /Users/Shared/MercuryWork/runs/<run_id>
-  fd 0: /dev/null (Codex, verify, deps) | SDK stdin pipe (claude)
+  fd 0: runs/<run_id>/in/prompt.txt opened read-only by mercuryd (Codex kinds; Codex reads it via the final `-`, codex.md §3) | /dev/null (verify, deps) | SDK stdin pipe (claude)
   fd 1: runs/<run_id>/stdout.jsonl opened by mercuryd O_WRONLY|O_APPEND|O_CREAT, operator-owned 0640 | SDK stdout pipe (claude)
   fd 2: runs/<run_id>/stderr.log, same
   fd 3: pipe carrying the model key (§3.6) | closed for verify and deps_install
@@ -295,16 +361,16 @@ The agent writes its output through inherited descriptors whose permission was c
 
    | Kind | `argv[0]` | Fixed prefix | Allowed option tokens | Forbidden (always rejected) |
    |---|---|---|---|---|
-   | `codex_plan`, `codex_implement`, `codex_revise` | pinned `codex` | `exec` (plus `resume <uuid>` for `codex_revise` and plan revisions) | Only the flags listed for that run type in codex.md §3 (B owns the list; it is compiled into `agent.conf` as a token table). `--sandbox` value ∈ {`read-only` for `codex_plan`, `workspace-write` otherwise}. Path-valued options (`--cd`, `--output-schema`, `-o`) realpath-confined: `--cd` = `cwd`; schema under `runs/<run_id>/in/`; `-o` under `runs/<run_id>/out/` | `--dangerously-bypass-approvals-and-sandbox`, any option that enables network access, `danger-full-access`, `-c`/`--config` keys outside the allowlist, `--profile`, `--add-dir`, any second positional prompt source |
+   | `codex_plan`, `codex_implement`, `codex_revise` | pinned `codex` | `exec` (plus `resume <uuid>` for `codex_revise` and plan revisions); final positional exactly `-` (prompt from fd 0) | Only the flags listed for that run type in codex.md §3 (B owns the list; it is compiled into `agent.conf` as a token table). `--sandbox` value ∈ {`read-only` for `codex_plan`, `workspace-write` otherwise}. Path-valued options (`--cd`, `--output-schema`, `-o`) realpath-confined: `--cd` = `cwd`; schema under `runs/<run_id>/in/`; `-o` under `runs/<run_id>/out/` | `--dangerously-bypass-approvals-and-sandbox`, any option that enables network access, `danger-full-access`, `-c`/`--config` keys outside the allowlist, `--profile`, `--add-dir`, any second positional prompt source |
    | `verify` | `/usr/bin/sandbox-exec` | `-f /usr/local/libexec/mercury/profiles/verify.sb --` | Then the repository's `test_commands` entry: `argv[0]` must resolve under `WORK_ROOT/toolchains/` or `/usr/bin`, `/bin`; no shell unless the repo config names one explicitly (`shell = true` is an onboarding-time decision recorded in `mercury.toml`) | Any `-p`/`-D` to `sandbox-exec`; a profile other than the pinned one |
    | `deps_install` | `/usr/bin/sandbox-exec` | `-f /usr/local/libexec/mercury/profiles/deps.sb --` | The repository's `setup_commands` entry, which must contain the package manager's ignore-scripts flag (SEC-703; OD-09) | Lifecycle-script-enabling flags |
-   | `claude` | pinned `claude` | Options from claude.md §2.2 (B owns), compiled as a token table | `--settings` JSON only from `runs/<run_id>/in/settings.json`; `--add-dir` only `cwd` | `--dangerously-skip-permissions`, `--mcp-config`, `--plugin-dir`, `--setting-sources` other than empty |
+   | `claude` | pinned `claude` | Options from claude.md §2.2 (B owns), compiled as a token table | `--settings` JSON only from `runs/<run_id>/in/settings.json`; `--add-dir` only `cwd` or `runs/<run_id>/in` | `--dangerously-skip-permissions`, `--mcp-config`, `--plugin-dir`, `--setting-sources` other than empty |
 
 5. **Working directory.** `cwd` realpath, no symlink components:
    - Codex kinds, `verify`, `deps_install` → exactly `WORK_ROOT/worktrees/<owner>__<repo>/<task_dir>`;
-   - `claude` → exactly `WORK_ROOT/snapshots/<tree_sha>` (RD-7).
+   - `claude` → exactly `WORK_ROOT/snapshots/<tree_sha>` (RD-7), or exactly `runs/<run_id>/in` when the spec names no snapshot (tool-less runs such as triage; claude.md §2.2).
 6. **Environment.** Only keys in the per-kind allowlist (§9.4). Values that are paths must realpath under `WORK_ROOT` or `/Users/_mercuryagent` or be one of the fixed system paths.
-7. **Secret.** For kinds with `secret_env`, read fd 3: 4-byte big-endian length, then that many bytes (1…4096), then EOF. Anything else → reject. For `verify`/`deps_install`, fd 3 must be closed; if it is open → reject. Close fd 3, then `closefrom(3)`.
+7. **Secret.** For kinds with `secret_env`, read fd 3: 4-byte big-endian length, then that many bytes (1…4096), then EOF. Anything else → reject. For `verify`/`deps_install`, fd 3 must be closed; if it is open → reject. Close fd 3, then `closefrom(3)`. **fd 0**: for Codex kinds it must be a regular file whose path (`F_GETPATH`) is `runs/<run_id>/in/prompt.txt`, owner operator, mode 0640; for `verify`/`deps_install` it must be `/dev/null`; for `claude` a pipe. Anything else → reject.
 8. **Process setup.** `setsid()`; `umask(0007)`; `setpriority(+10)`; rlimits; `HOME=/Users/_mercuryagent`.
 9. **Record identity.** Write `ctl/proc.json` `{run_id, wrapper_pid, pgid, start_time, boot_session_uuid, argv_sha256, spec_sha256, wrapper_sha256}` with write → `F_FULLFSYNC` → rename → directory `fsync` (§14.2).
 10. **Execute.** `fork` + `execve` the child in the same process group; `waitpid` it.
@@ -663,7 +729,7 @@ A small signed Swift binary in `/usr/local/libexec/mercury/` (root-owned file, r
 - **Will sleep** (`kIOMessageSystemWillSleep`): sends `will_sleep` on its stdout pipe; `mercuryd` flushes in-memory progress, checkpoints the WAL, writes `run/heartbeat.json` and the remote heartbeat with `mode: sleeping` (best effort within `power.will_sleep_budget_s`), then acknowledges; the helper calls `IOAllowPowerChange` on the acknowledgement or at the budget.
 - **Can sleep** (idle sleep request): always allowed; MERCURY uses `caffeinate` assertions instead of vetoing.
 - **Did wake**: reports `wake_type = full` when the graphics/display capability is present, else `dark`.
-- If the helper is missing or dies twice in 10 min, `mercuryd` falls back to gap detection only, uses the dark-wake time rule, and the watchdog uses `watchdog.stale_awake_min` regardless of sleep (more false alerts; `doctor` warns).
+- If the helper is missing or dies more often than `power.helper_restart_limit`, `mercuryd` falls back to gap detection only, uses the dark-wake time rule, and the watchdog uses `watchdog.stale_awake_min` regardless of sleep (more false alerts; `doctor` warns).
 
 ---
 
@@ -779,7 +845,7 @@ Every `run.liveness_poll_s`: `agent-ctl probe` (identity), `agent-ctl stats` (gr
 
 ### 10.5 Log rotation
 
-In-process (no `newsyslog`, which needs root). `mercuryd.jsonl` per `logs.*`. Run streams are capped by `run.stdout_cap_mib`. launchd stdout/stderr files are truncated at start if > 5 MiB, keeping the last 1 MiB.
+In-process (no `newsyslog`, which needs root). `mercuryd.jsonl` per `logs.*`. Run streams are capped by `run.stdout_cap_mib`; at finalization the coordinator writes the redacted transcript to `MERCURY_HOME` and deletes the raw `stdout.jsonl`/`stderr.log` per `runs.raw_retention_d` (SEC-505). launchd stdout/stderr files are truncated at start if > 5 MiB, keeping the last 1 MiB.
 
 ### 10.6 Host capacity input for TDD §23 (cost and throughput, RF-32)
 
@@ -817,7 +883,7 @@ interface LogLine {
 
 Redaction is E's pipeline (threat-model §8.4); every `Secret` value is registered for exact-match scrubbing. `info` is the default; `debug` is switchable at runtime for a bounded period.
 
-### 11.2 Metrics (logged as `metric.*` every 5 min; no metrics server)
+### 11.2 Metrics (logged as `metric.*` every `metrics.interval_min`; no metrics server)
 
 `tasks_by_state`, `holds_active{kind}`, `runs_active{kind}`, `runs_deferred{reason}`, `run_duration_ms{kind}`, `poll_latency_ms{source}`, `rate_limit_remaining{source}`, `outbox_pending`, `outbox_reconciled`, `sleep_events`, `dark_wakes`, `credited_ms_total`, `lost_by_host_total`, `disk_free_gib`, `db_size_mib`, `wal_size_mib`, `db_commit_ms_p99`, `event_loop_lag_ms_p99`, `last_backup_age_h`, `last_anchor_age_h`, `circuit_state{dependency}`.
 
@@ -1000,11 +1066,11 @@ Hash chain, anchors and `audit_epochs` are C's tables and E's controls (ADR-018)
 
 ### 14.4 Restore epoch and new-Mac procedure (RD-4)
 
-**Restore epoch.** `mercury restore <backup>` (daemon stopped) quarantines the current `db/*`, copies the backup, verifies `integrity_check`, and writes `run/restore.json {backup_file, backup_sha256, backup_audit_head, reason: restore|new_host, requested_at}`. At the next start:
+**Restore epoch.** `mercury restore <backup>` (daemon stopped; the command itself takes `run/mercuryd.lock` for its duration so a starting daemon exits 0) quarantines the current `db/*`, copies the backup, verifies `integrity_check`, and writes `run/restore.json {backup_file, backup_sha256, backup_audit_head, reason: restore|new_host, requested_at}`. At the next start:
 
 1. Chain verification finds the restored head behind the last off-host anchor. Because `restore.json` matches the restored DB, startup does **not** enter safe mode; it asks for presence-tier confirmation (`mercury restore --confirm`, §9.5).
 2. On confirmation, `mercuryd` records an operator-initiated `audit.restore_epoch` event in C's `audit_epochs`: `{epoch+1, backup_seq, backup_hash, last_anchor_seq, last_anchor_hash, reason}`, anchors it immediately via `mercury-ops`, and deletes `restore.json`. `audit verify` accepts a fork only at a recorded epoch boundary.
-3. For every non-terminal task whose authority rows cannot be verified (rows missing after the restore, or `record_mac` unverifiable): `BLOCKED(reauthorization_required)`, **never** `guard_integrity_failure`.
+3. `BLOCKED(reauthorization_required)`, **never** `guard_integrity_failure`, for every non-terminal task whose authority rows cannot be verified (rows missing after the restore, or `record_mac` unverifiable) **and, whenever history was lost** (`backup_audit_head` seq < last anchor seq, or `reason = new_host`), for **every** non-terminal task: revocations, cancellations, counter increments and expiries recorded after the backup are gone, so a verifiable but stale authorization must not resume dispatch (VD-01).
 4. Remote objects whose marker names an unknown task (created after the backup) are recorded as **orphan remote objects** and reported once; they are never adopted automatically (`mercury orphan adopt|close`, components §5.5).
 5. Full reconcile (`recovery.md` §4) with `rebooted = true`.
 
@@ -1013,7 +1079,7 @@ Without a matching `restore.json`, a head behind the anchor is tampering until p
 **New Mac (or disk loss).**
 
 1. On the new Mac: Phase 0 read-only checks (§16.1), then `mercury-install --system` **[ROOT — operator consent]** (agent uid, wrappers, sudoers, `WORK_ROOT`).
-2. Generate **new** private keys for `mercury-bot` and `mercury-ops` in the App settings and delete the old ones (the old Mac may be lost); create new model keys if the old Mac is not wiped; recreate all §9.1 items.
+2. Generate **new** private keys for `mercury-bot` and `mercury-ops` in the App settings and delete the old ones (the old Mac may be lost). If the old Mac is not verifiably wiped, also rotate the model keys, the Linear client secret (and refresh token), the OAuth token and the healthcheck URL, and treat `k_auth` as compromised (new key). Recreate all §9.1 items.
 3. Restore `backups/`, `artifacts/` and `config/` from Time Machine; `mercury toolchain sync`.
 4. `mercury restore <latest verified backup> --reason new_host` → restore epoch as above. If `k_auth` was not escrowed (OD-D-07 default: no escrow), every `record_mac` is unverifiable and all non-terminal tasks go to `BLOCKED(reauthorization_required)`; `mercury request reauth` per task.
 5. Mirrors are re-cloned. Commits that existed only in the old mirror are missing → `lost_by_host`, replay from the last pushed commit or `base_sha`.
@@ -1034,7 +1100,7 @@ GitHub-hosted runners only (public repo; self-hosted runners only for private re
 | `test-integration` | ubuntu | Fakes for GitHub/Linear, crash injection around every side effect, restore-and-reconcile, restore epoch |
 | `test-contracts` | ubuntu | Schemas compile; recorded Codex/Claude fixtures for the pinned versions parse |
 | `test-wrappers` | `macos-15` | Build `agent-exec`/`agent-ctl`/helpers; grammar unit tests and argv fuzzing (SEC-T range, E); `visudo -cf` of the rendered drop-in; spec validation fixtures |
-| `test-macos` | `macos-15` | `plutil -lint`; same-uid spawn/kill/adoption with a fake agent; `fullfsync` pragma; `caffeinate -w`; temporary-keychain round trip; socket path length; TCC-safe path validation (ASM-D-28) |
+| `test-macos` | `macos-15` | `plutil -lint`; same-uid spawn/kill/adoption with a fake agent; `fullfsync` pragma; `caffeinate -w`; temporary-keychain round trip; socket path length and peer-uid check (ASM-D-20); `RLIMIT_AS` behaviour (ASM-D-25); TCC-safe path validation (ASM-D-28) |
 | `build`, `supply-chain`, `codeql` | ubuntu | As Phase 2 |
 
 Hosted macOS runners have no nested virtualization and no second uid with sudo, so agent-uid and power-loss tests run outside CI (§15.3, `recovery.md` §6). Release workflow: rebuild → `attest-build-provenance` → Release with tarball, `SHA256SUMS` and the wrapper/helper manifest. `main` uses the same governance as target repos.
@@ -1104,7 +1170,7 @@ These need the §3.10 system install (or its manual equivalent on a probe accoun
 
 | ID (alias) | Experiment | Pass criterion | Validates | Gate |
 |---|---|---|---|---|
-| P0-033 (E1) | Dummy LaunchAgent `com.usjbro.mercury-probe` trapping TERM for 25 s; `bootout` and time it; observe at logout | `bootout` waits ≥ 25 s | ASM-D-03, ASM-D-04 | M1 |
+| P0-033 (E1) | Dummy LaunchAgent `com.usjbro.mercury-probe` trapping TERM for 25 s; `bootout` and time it; observe at logout. Also: a `~` path in the probe plist; bootstrap at mode 0664, then 0644 | `bootout` waits ≥ 25 s; `~` not expanded; 0664 refused | ASM-D-01, ASM-D-02, ASM-D-03, ASM-D-04 | M1 |
 | P0-034 (E2) | Node script logging `Date.now()`, `hrtime`, tick gaps every 2 s; sleep the Mac 2 min | Record whether mono advances in sleep; gap detected; `kern.waketime` updated | ASM-D-13, ASM-D-14 (RD-16) | M1 |
 | P0-035 (E3) | From the probe agent: read a throwaway item via `mercury-keychain`; repeat with the screen locked | Value returned without a prompt both times | ASM-D-09 | M1 |
 | P0-036 | Create a throwaway item with `-T mercury-keychain`; read it with the helper (no prompt) and with `/usr/bin/security` (prompt expected); re-sign the helper and read again | Helper silent; `security` prompts; re-signed helper prompts once | ASM-E-08, RE-29 | M1 |
@@ -1114,12 +1180,14 @@ These need the §3.10 system install (or its manual equivalent on a probe accoun
 | P0-040 (E7) | `osascript display notification` from the probe agent | Shown | ASM-D-06 | M1 |
 | P0-041 (E8) | Bind a socket at the real `run/mercuryd.sock` path | Succeeds | §7.2 | M1 |
 | P0-042 | Claude Agent SDK with `spawnClaudeCodeProcess` → `sudo -n -C 4 -u _mercuryagent agent-exec` (kind `claude`); one decision run with a snapshot `cwd` | Pipes work; structured output returned; key arrives on fd 3; `CLAUDE_CONFIG_DIR` writable | ASM-D-33 (RD-1, RD-25) | M3 (else ALT-B-1) |
-| P0-043 | `sudo fs_usage -w -f filesys git` during a mirror commit with `core.fsync=committed,reference` | `F_FULLFSYNC` (or `fcntl` 51) observed for objects and refs | ASM-D-29 | M2 |
+| P0-043 **[ROOT — operator consent]** | `sudo fs_usage -w -f filesys git` during a mirror commit with `core.fsync=committed,reference` | `F_FULLFSYNC` (or `fcntl` 51) observed for objects and refs | ASM-D-29 | M2 |
 | P0-044 | Create `WORK_ROOT` with ACLs; create files as each uid; `chmod -N` as the agent; check TCC prompts for `/Users/Shared` | Inheritance works; stripping fails closed as in §7.3; no TCC prompt | ASM-D-31 | M1 |
 | P0-045 | Probe LaunchAgent spawns `mercury-presence`; screen unlocked and locked | Touch ID/password sheet appears and returns the nonce; locked screen → error | ASM-D-34 (RD-12) | M5 |
 | P0-046 (E9) | `mercury-power` probe with Power Nap enabled; close the lid for 2 h with tasks queued; compare `pmset -g log` DarkWake entries with the helper log | will-sleep acknowledged; dark wakes reported `dark`; no dispatch logged during dark wake | ASM-D-35 (RD-16, RD-18) | M5 |
 | P0-047 | Apple Silicon host can run a macOS guest VM (`tart`/UTM) with an uncached disk | VM boots; force-stop works | RD-24 | M2 |
 | P0-048 | Locate and validate managed Claude settings and Codex `requirements.toml` paths **[ROOT — operator consent]** | Settings honoured; forbidden flags refused | ASM-E-10 (OD-19) | M3 |
+
+| P0-049 **[ROOT — operator consent]** | Agent-uid egress (procedure proposed by D; pass criterion owned by E): as `_mercuryagent` via `agent-exec`, `verify` spec running `/usr/bin/curl -sS -m 5 https://api.github.com` and `/usr/bin/nc -z 1.1.1.1 443`; repeat under the `deps` profile against the allowed registry and a non-allowed host; if E selects a `pf` anchor for the agent uid, repeat with it loaded | `verify`: all connections fail; `deps`: only allowlisted registry succeeds | ASM-E-06 (SEC-206) | M5 |
 
 Remove probe agents and throwaway items afterwards.
 
@@ -1144,8 +1212,8 @@ Remove probe agents and throwaway items afterwards.
 
 | ID | Assumption | P0 | If false |
 |---|---|---|---|
-| ASM-D-01 | launchd does not expand `~`/`$HOME` in plists | P0-010 | None (installer expands) |
-| ASM-D-02 | launchd rejects group/world-writable plists; 0644 accepted | P0-033 | Adjust mode |
+| ASM-D-01 | launchd does not expand `~`/`$HOME` in plists | P0-033 (probe plist with a `~` path) | None (installer expands) |
+| ASM-D-02 | launchd rejects group/world-writable plists; 0644 accepted | P0-033 (bootstrap the probe at 0664, then 0644) | Adjust mode |
 | ASM-D-03 | `bootstrap/bootout/kickstart` work in `gui/<uid>` without sudo | P0-033 | Document sudo steps |
 | ASM-D-04 | `ExitTimeOut` honoured on bootout; may be shorter at logout or shutdown | P0-033 | Shrink `svc.shutdown_budget_s` |
 | ASM-D-05 | The operator usually stays logged in | Operator | Availability only |
@@ -1162,10 +1230,10 @@ Remove probe agents and throwaway items afterwards.
 | ASM-D-17 | `kern.bootsessionuuid` exists and changes per boot | P0-005 | Use `kern.boottime` |
 | ASM-D-18 | Nice +10 without `LowPriorityIO` is acceptable | Operator | `taskpolicy -b` in `agent-exec` |
 | ASM-D-19 | Default soft `NumberOfFiles` 256 too low; 8192 accepted | P0-011 | Adjust |
-| ASM-D-20 | Node can check the peer uid on a Unix socket | Spike | 0600 + 0700 dir |
+| ASM-D-20 | Node can check the peer uid on a Unix socket | `test-macos` CI job (§15.1) | 0600 + 0700 dir |
 | ASM-D-21 | Seatbelt profiles deny Keychain access via `security` (now defence in depth) | P0-037 | Rely on the agent uid |
 | ASM-D-24 | `DISABLE_AUTOUPDATER=1` disables Claude auto-update | P0-042 | Managed setting |
-| ASM-D-25 | macOS does not enforce `RLIMIT_AS` | Spike | Sampling remains |
+| ASM-D-25 | macOS does not enforce `RLIMIT_AS` | `test-macos` CI job | Sampling remains |
 | ASM-D-26 | App issue edits do not count as repository activity for the 60-day rule | Observe | Monthly commit or doctor re-enable |
 | ASM-D-27 | `tmutil addexclusion` (sticky) works without sudo, also for `/Users/Shared` | P0-020 | Manual exclusion |
 | ASM-D-28 | Hosted macOS runners allow same-uid process-group and temporary-keychain tests | CI spike | Move to the VM rig |

@@ -153,12 +153,13 @@ stateDiagram-v2
 stateDiagram-v2
     state "Any non-terminal state" as ANY
     state "Any state where a PR exists" as WITHPR
-    state "PLAN_APPROVED to AWAITING_HUMAN_APPROVAL" as POSTPLAN
+    state "AWAITING_PLAN_REVIEW to AWAITING_HUMAN_APPROVAL" as POSTPLAN
     ANY --> CANCELLED: G1 revoke or operator cancel or Linear cancelled
     ANY --> BLOCKED: G2 guard failure or foreign agent
     WITHPR --> MERGED: G3 merge observed
     POSTPLAN --> PLAN_REVISION_REQUESTED: G4 scope amendment
     WITHPR --> BLOCKED: G5 foreign push or G6 closed by other
+    WITHPR --> CANCELLED: G7 closed by operator
 ```
 
 ### 2.3 Gate checks per head SHA
@@ -243,7 +244,7 @@ stateDiagram-v2
 | T29 | `CHANGES_REQUESTED` → `BLOCKED` | `revision.limit_exceeded` / `revision_request.escalate` | Coordinator / Claude | Budget exhausted, or Claude `revision_request.action = escalate`, or `replan` with no plan budget left | counters, run ids | `blocked_reason = pr_revision_limit / verify_fix_limit / human_change_limit / needs_human_decision`; notification |
 | T30 | `CHANGES_REQUESTED` → `PLAN_REVISION_REQUESTED` | `revision_request.needs_plan_change` | Claude | `revision_request.action = replan`; plan budget remains | run id, sha | `revision_requests(kind = plan, source = claude_revision_request)`; WorktreeResetPolicy |
 | T31 | `AWAITING_HUMAN_APPROVAL` → `MERGED` | `pr.merged` | GitHub | Poll shows `merged = true` with `merge_commit_sha` | PR snapshot sha256 (`merged_by.id`, `merged_at`, `merge_commit_sha`, head sha) | `pull_requests` merge fields |
-| T32 | `AWAITING_HUMAN_APPROVAL` → `CHANGES_REQUESTED` | `human_review.changes_requested` | GitHub (operator identity) | A review with `state = CHANGES_REQUESTED` whose `user.id ∈ operator.github_user_ids`, on the current head; or a `mercury:revise` label whose label-event actor id is the operator (RE-21) | GitHub review id or label event id, snapshot sha | `github_reviews`; `revision_requests(kind = code, source = human_review)` awaiting a Claude `revision_request` run (human text passed as quoted data) |
+| T32 | `AWAITING_HUMAN_APPROVAL` → `CHANGES_REQUESTED` | `human_review.changes_requested` | GitHub (operator identity) | A review with `state = CHANGES_REQUESTED` whose `user.id ∈ operator.github_user_ids`, on the current head; or a `mercury:revise` label whose label-event actor id is the operator (RE-21). Evaluated on each such fact **and once on entering this state** (T24, T42) against stored `github_reviews` on the current head (VC-07) | GitHub review id or label event id, snapshot sha | `github_reviews`; `revision_requests(kind = code, source = human_review)` awaiting a Claude `revision_request` run (human text passed as quoted data) |
 | T33 | `AWAITING_HUMAN_APPROVAL` → `CANCELLED` | `pr.closed_by_operator` | GitHub | PR closed, not merged, closed by an operator user id (issue events API) | PR snapshot sha | `cancel_reason = pr_closed_by_human`; cancel protocol without PR comment |
 | T41 | `AWAITING_HUMAN_APPROVAL` → `TESTING` | `pr.behind_base` | Coordinator (from GitHub observation) | `mergeable_state = behind` and the ruleset requires up-to-date branches (`strict_required_status_checks_policy`); no hold; repo mutating slot | head sha, base sha | `tasks.pending_merge_base = base_sha`; the dispatcher's first action in `TESTING` is `git_step(merge_base)`, a coordinator merge commit with trailer `Mercury-Merge-Base` (never GitHub `update-branch`, INV-09); then `verify`, push, new PL check and a full Claude re-review of the new head. The operator's approval is dismissed by GitHub on push and must be given again |
 
@@ -270,14 +271,17 @@ stateDiagram-v2
 
 | ID | From → To | Event | Initiator | Guards | Required evidence | Persistent side effects |
 |---|---|---|---|---|---|---|
-| G1a | any non-terminal → `CANCELLED` | `authorization.revoked` | Claude (`mode = reauthorize`, `decision = revoke`) or Operator (`mercury revoke`, recorded in `operator_revocations`, never in `authorizations`) | — | revocation authorization version or control request id | Cancel protocol (§8.6) |
-| G1b | any non-terminal → `CANCELLED` | `operator.cancel` | Operator | — | control request id | Cancel protocol |
+| G1a | any non-terminal except `MERGED` → `CANCELLED` | `authorization.revoked` | Claude (`mode = reauthorize`, `decision = revoke`) or Operator (`mercury revoke`, recorded in `operator_revocations`, never in `authorizations`) | — | revocation authorization version or control request id | Cancel protocol (§8.6) |
+| G1b | any non-terminal except `MERGED` → `CANCELLED` (T38 is its `BLOCKED` row) | `operator.cancel` | Operator | — | control request id | Cancel protocol |
 | G1c | any non-terminal except `MERGED` → `CANCELLED` | `linear.issue_cancelled` | Linear | Issue state type becomes `canceled` or `duplicate` (status changes may only *stop* work, INV-17) | issue snapshot sha | Cancel protocol |
-| G2 | any work or gate state → `BLOCKED` | `guard.failed` | Coordinator | A guard returned a non-hold failure (§6.1), e.g. `guard_integrity_failure`, `foreign_agent`, `reauthorization_required` after a restore | guard report | `blocked_reason`, `resume_state = current state`; notification (deduplicated) |
-| G3 | `IMPLEMENTING`, `TESTING`, `PR_OPEN`, `CLAUDE_PR_REVIEW`, `CHANGES_REQUESTED`, `BLOCKED` (with PR) → `MERGED` | `pr.merged` | GitHub | `merged = true` | PR snapshot sha | Stop active runs (cancel protocol without PR comment); verification classifies the result (§8.5) |
-| G4 | `PLAN_APPROVED` … `AWAITING_HUMAN_APPROVAL` → `PLAN_REVISION_REQUESTED` | `authorization.scope_amended` | Claude | New authorization version with `amendment_kind = scope` (from `mode = reauthorize`, `decision = amend_scope`) | new authorization version, sha | Stop active run; WorktreeResetPolicy if in `IMPLEMENTING`; `revision_requests(kind = plan, source = authorization_amended)`; the old approval no longer matches `scope_version`; deferred results are `discarded`; with a PR: `github.check.upsert(CR, action_required)` |
-| G5 | `PR_OPEN`, `CLAUDE_PR_REVIEW`, `AWAITING_HUMAN_APPROVAL` → `BLOCKED` | `pr.foreign_push` | GitHub | Observed head ≠ `pull_requests.local_head_sha` and not the `intended_sha` of a pending coordinator `git.push` (RC-28, §10.9 of components) | old and new SHA, pusher id if known | `blocked_reason = foreign_push`; old reviews invalid automatically; outbox `github.check.upsert(CR, action_required)` on the new head (explains why it is unmergeable); notification. Exits: `resume --adopt` ★ (task → `TESTING` on the new head: `verify`, PL check, Claude review) or `resume --reset` (coordinator pushes a **new fast-forward commit** whose tree equals its last SHA's tree; force-push is impossible under the branch ruleset, RE-28) |
-| G6 | `PR_OPEN`, `CLAUDE_PR_REVIEW`, `CHANGES_REQUESTED`, `IMPLEMENTING`, `TESTING`, `AWAITING_HUMAN_APPROVAL` → `BLOCKED` | `pr.closed_by_other` | GitHub | PR closed, not merged, by a non-operator user id | PR snapshot | `blocked_reason = pr_closed_unexpectedly`; SECURITY notification |
+| G2 | any work, gate or decision-point state, or `AWAITING_HUMAN_APPROVAL` → `BLOCKED` | `guard.failed` | Coordinator | A guard returned a non-hold failure (§6.1), e.g. `guard_integrity_failure`, `foreign_agent`, `reauthorization_required` after a restore | guard report | `blocked_reason`, `resume_state = current state`; notification (deduplicated) |
+| G3 | any non-terminal state except `AWAITING_HUMAN_APPROVAL` (T31) and `MERGED`, while `pull_requests.state = open` → `MERGED` | `pr.merged` | GitHub | `merged = true` | PR snapshot sha | Stop active runs (cancel protocol without PR comment); verification classifies the result (§8.5) |
+| G4 | `AWAITING_PLAN_REVIEW`, `PLAN_APPROVED` … `AWAITING_HUMAN_APPROVAL` → `PLAN_REVISION_REQUESTED` | `authorization.scope_amended` | Claude | New authorization version with `amendment_kind = scope` (from `mode = reauthorize`, `decision = amend_scope`) | new authorization version, sha | Stop active run; WorktreeResetPolicy if in `IMPLEMENTING`; `revision_requests(kind = plan, source = authorization_amended)`; the old approval no longer matches `scope_version`; deferred results are `discarded`; with a PR: `github.check.upsert(CR, action_required)` |
+| G5 | any non-terminal state except `MERGED` and `BLOCKED`, while `pull_requests.state = open` → `BLOCKED` | `pr.foreign_push` | GitHub | Observed head ≠ `pull_requests.local_head_sha` and not the `intended_sha` of a pending coordinator `git.push` (RC-28, §10.9 of components) | old and new SHA, pusher id if known | `blocked_reason = foreign_push`; old reviews invalid automatically; outbox `github.check.upsert(CR, action_required)` on the new head (explains why it is unmergeable); notification. Exits: `resume --adopt` ★ (task → `TESTING` on the new head: `verify`, PL check, Claude review) or `resume --reset` (coordinator pushes a **new fast-forward commit** whose tree equals its last SHA's tree; force-push is impossible under the branch ruleset, RE-28) |
+| G6 | any non-terminal state except `MERGED` and `BLOCKED`, while a task PR exists → `BLOCKED` | `pr.closed_by_other` | GitHub | PR closed, not merged, by a non-operator user id | PR snapshot | `blocked_reason = pr_closed_unexpectedly`; SECURITY notification |
+| G7 | any non-terminal state except `AWAITING_HUMAN_APPROVAL` (T33), `MERGED` and `BLOCKED`, while a task PR exists → `CANCELLED` | `pr.closed_by_operator` | GitHub | PR closed, not merged, closed by an operator user id (issue events API) | PR snapshot sha | As T33: `cancel_reason = pr_closed_by_human`; cancel protocol without PR comment (Phase 5 VC-02) |
+
+**Facts without a matching rule.** A GitHub or Linear fact whose `(state, event)` has no rule (for example `pr.foreign_push` while `BLOCKED`) is not an error: the inbox records it `ignored` with outcome `no_rule`, and the level snapshot (`pull_requests`, `linear_issues`) keeps the observed value, so the guards of the next transition see it. Examples are the T36 resume guards (§6.3), the T22 head equality and the push compare-and-set (GH §4.3).
 
 Events that are **not** transitions (holds, timers, no-ops):
 
@@ -527,7 +531,7 @@ A `mode = reauthorize` Claude run is triggered only by `spec_changed`, `authoriz
 | Decision | New authorization row | Effect |
 |---|---|---|
 | `reauthorize_same_scope` | `decision = amend`, `amendment_kind = spec_confirm` (spec changed) or `limits` (expiry only); `scope_version` unchanged; new `spec_sha256`, new `expires_at` | Release `spec_changed` / `authorization_expired`; existing approvals and reviews stay valid (they bind `scope_version`); deferred results are applied; CR check restored (H1) |
-| `amend_scope` | `decision = amend`, `amendment_kind = scope`, `scope_version + 1` | Pre-plan states: release the hold. Plan approved or later: G4. Deferred results discarded |
+| `amend_scope` | `decision = amend`, `amendment_kind = scope`, `scope_version + 1` | `AUTHORIZED`, `PLANNING`, `PLAN_REVISION_REQUESTED`: release the hold (a `PLANNING` run's deferred result is discarded and planning re-runs under the new version). `AWAITING_PLAN_REVIEW` or later: G4 (the plan under review was produced under the old `scope_version` and can never be approved, VC-05). `BLOCKED`: record the version; `resume_state = PLAN_REVISION_REQUESTED` if `blocked_from_state` is `AWAITING_PLAN_REVIEW` or later. Deferred results discarded |
 | `revoke` | `decision = revoke` | G1a |
 | `needs_human` | none | `BLOCKED(needs_human_decision)`, `resume_state` = current |
 
@@ -693,4 +697,4 @@ export interface HoldRule {
 }
 ```
 
-Engine algorithm (pseudocode in [`components.md` §10.2](components.md#102-transition-engine)): one `BEGIN IMMEDIATE` transaction per event; optimistic check on `tasks.state_version`; rule lookup by `(from, event)`; initiator check; guards; evidence completeness; insert transition, messages, outbox, holds, audit; update task; commit. Any failure rolls back everything. Side effects run after commit.
+Engine algorithm (pseudocode in [`components.md` §10.2](components.md#102-transition-engine)): one `BEGIN IMMEDIATE` transaction per event; optimistic check on `tasks.state_version`; rule lookup by `(from, event)` (a key carries more than one rule only when their discriminating guards are complementary, currently T24/T24p by the policy guard; the engine evaluates them in table order, applies the first whose discriminating guard holds, and `ruleHint` must agree); initiator check; guards; evidence completeness; insert transition, messages, outbox, holds, audit; update task; commit. Any failure rolls back everything. Side effects run after commit.

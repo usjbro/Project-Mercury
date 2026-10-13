@@ -346,6 +346,7 @@ Only module that opens the DB read-write (L2).
 export interface Store {
   write<T>(fn: (tx: WriteTx) => T): T;                 // BEGIN IMMEDIATE … COMMIT; fn must be synchronous
   read<T>(fn: (tx: ReadTx) => T): T;
+  open(): void;                                        // connection settings below; flock is taken earlier by the Supervisor (L1)
   migrate(target?: number): MigrationReport;           // backup first; sets user_version + schema_meta (RC-29)
   quickCheck(): IntegrityReport;                       // startup, main connection (fast)
   integrityCheckInWorker(): Promise<IntegrityReport>;  // daily; worker_thread with its own read connection (RD-11)
@@ -354,7 +355,7 @@ export interface Store {
 }
 ```
 
-`ReadTx`/`WriteTx` expose typed repositories for every table in §6.3 (`tasks`, `runs`, `authorizations`, `plans`, `planReviews`, `planApprovals`, `pullRequests`, `prReviews`, `githubReviews`, `findings`, `linearIssues`, `issueRelations`, `worktrees`, `snapshots`, `holds`, `outbox`, `inbox`, `cursors`, `artifacts`, `budgetGrants`, `messages`, `policyEscalations`, `policyAcks`, `mergeVerifications`, `anchors`, `auditEpochs`, `orphans`, `vocab`), plus `audit: AuditAppender` and `now()` (captured once per transaction).
+`ReadTx`/`WriteTx` expose typed repositories for every table in §6.3 (`tasks`, `runs`, `authorizations`, `plans`, `planReviews`, `planApprovals`, `pullRequests`, `prReviews`, `githubReviews`, `findings`, `linearIssues`, `issueRelations`, `worktrees`, `snapshots`, `holds`, `outbox`, `inbox`, `cursors`, `artifacts`, `budgetGrants`, `messages`, `policyEscalations`, `policyAcks`, `mergeVerifications`, `anchors`, `auditEpochs`, `orphans`, `vocab`, `transitions` (`task_transitions`), `operatorRevocations`, `revisionRequests`, `testResults`, `gateChecks`, `controlRequests`, `notifications`, `hostEvents`, `observationSeqs`, `instances` (`daemon_instances`), `leases`, `schemaMeta`), plus `audit: AuditAppender`, `facts(task)` (the task's level snapshots: PR, reviews, checks, Linear issue) and `now()` (captured once per transaction). Repository methods used in §10 (`get`, `insert`, `update`, `latest`, `openFor`, `nextDue`, `setDisposition`, `discardDeferred`, `insertIgnoreDuplicate`, …) are thin typed wrappers over single statements on these tables.
 
 Connection settings: `journal_mode=WAL`, `synchronous=FULL`, `fullfsync=ON`, `checkpoint_fullfsync=ON`, `foreign_keys=ON`, `busy_timeout=5000`, `trusted_schema=OFF`, `cell_size_check=ON`. Read-only connections (CLI offline mode, worker thread) open `mode=ro` with `query_only=ON`.
 
@@ -391,6 +392,9 @@ export interface HoldService {
   /** Refuses unless the initiator matches HOLD_RULES[kind].clearsVia (INV-26). Runs onRelease effects. */
   releaseInTx(tx: WriteTx, kind: HoldKind, scope: HoldScope, scopeRef: string, by: Initiator): void;
   ageingTick(tx: WriteTx, creditedNow: number): AgeingAction[];    // SM §5 H4, once per hold epoch
+  /** Convenience wrappers: open their own store.write transaction and call setInTx / releaseInTx (used in §10.6, §10.10). */
+  set(spec: Parameters<HoldService["setInTx"]>[1]): HoldId;
+  release(kind: HoldKind, scope: HoldScope, scopeRef: string, by: Initiator): void;
 }
 ```
 
@@ -405,6 +409,7 @@ export interface RunManager {
   finalize(runId: RunId, exit: ExitInfo): Promise<FinalizeOutcome>;   // idempotent on run_id; applies via AG@apply
   adoptOrReap(run: RunRow): Promise<AdoptionOutcome>;
   applyDeferred(taskId: TaskId): FinalizeOutcome[];  // after a same-scope re-authorization (SM §8.1.1)
+  markDeferredReady(tx: WriteTx, taskId: TaskId): void;   // flags deferred runs so the next tick calls applyDeferred
 }
 ```
 
@@ -655,6 +660,9 @@ Idempotency keys come from **GH-DEDUP**. Effect catalogue (C owns op names and o
 | `linear.labels` | set-to | BLOCKED/terminal projection |
 | `audit.anchor.commit` | anchor repo file path + line (`mercury-ops` App) | AnchorService (§4.16) |
 | `notify.local` / `ops.issue.comment` | `notifications.dedup_key` / marker on the ops issue | NotificationPolicy |
+| `ops.heartbeat` | set-to on the heartbeat issue body (`mercury-ops`); key `out:ops:heartbeat:<period>` | Supervisor, every heartbeat period (MS-PARAM) |
+
+The PR body key `out:gh:pr:body:<task_id>:<body_sha256>` (GH-DEDUP) is used by `github.pr.upsert` when it updates title or body; there is no separate body op.
 
 Successive desired states on the same head (success → action_required → success under a spec hold) get distinct keys through GH-DEDUP's `<cause>` component: the `task_transitions.transition_id` or `holds.hold_id` (+ `set`/`release`) that enqueued the item; `gate_checks.seq` is kept locally only for ordering and diagnostics.
 
@@ -713,7 +721,7 @@ Redaction applies to audit `data`, `runs.error_summary`, outbox payloads, `contr
 | Component | Interface (summary) | Responsibility |
 |---|---|---|
 | `ArtifactStore` | `put(bytes, kind, meta)`, `read(id)` (verifies hash), `path(id)` | Content-addressed files under `MERCURY_HOME` (MS §7.1); temp file, `fsync`, rename, dir `fsync`, `chmod 0400` |
-| `CredentialBroker` | `githubInstallationToken(repo, purpose)`, `opsToken()`, `linearToken()`, `modelKeyFd(agent)` | Reads Keychain items `com.usjbro.mercury.*` **once at start and on `mercury reload-credentials`**, holds them in memory (RD-18); registers each with the Redactor |
+| `CredentialBroker` | `loadOnce()`, `reload()`, `githubInstallationToken(repo, purpose)`, `opsToken()`, `linearToken()`, `modelKeyFd(agent)` | Reads Keychain items `com.usjbro.mercury.*` **once at start and on `mercury reload-credentials`**, holds them in memory (RD-18); registers each with the Redactor |
 | `HealthMonitor` | `tick(): {creditedMs, sleepGap, fullWake, network}` | §10.10; authenticated ETag probe; disk thresholds (MS-PARAM) |
 | `PresenceVerifier` | `confirm(method, scope, paramsSha256): Promise<Assertion>` | Spawns `mercury-presence` (§5.2, MS §9.5) |
 | `TimerService` | `due(now): TimerFire[]` | SM §7.3 under INV-20; coalesces wake summaries |
@@ -721,6 +729,11 @@ Redaction applies to audit `data`, `runs.error_summary`, outbox payloads, `contr
 | `MergeVerifier` | `verify(task)` | GH §8 predicate, SM §8.5 scoping |
 | `TriageService` | `maybeRunTriage(ctx)` | Shortlist → T01 within free WIP |
 | `ConfigLoader` | `load(path)` | TOML → schema → clamp → `config_sha256` |
+| `Clock` | `wallNow(): Date`, `monoNowMs(): number`, `kernWakeTime(): string` | Only source of time in `app/**` (D1/D2); `FakeClock` in §14.1 |
+| `GitHubPoller`, `LinearPoller` | `poll(ctx)`, `fullReconcile(): Promise<void>`, `scheduleImmediateFullReconcile(): void` | §4.13 cadence; full reconcile at startup (§10.6) and after a sleep gap (§10.10) |
+| `InboxProcessor` | `drain(max \| 'all')` | §10.9 |
+| `PowerHelperClient` | `events(): PowerEvent[]` (`did_wake full\|dark`, `will_sleep`), `reportedAwakeThroughout(from, to): boolean`, `holdAssertion(on)` | Client of `mercury-power` (MS §8.6); `FakeClock` simulates its events |
+| `Supervisor` internals | `loop()`, `loopSafe()` (safe mode: heartbeat, alerts, read methods only) | §4.2, §10.6 |
 
 ---
 
@@ -1649,6 +1662,14 @@ CREATE TRIGGER trg_policy_ack_presence BEFORE INSERT ON policy_acks
 WHEN NOT EXISTS (SELECT 1 FROM control_requests c WHERE c.control_request_id = NEW.control_request_id
                    AND c.principal = 'operator_presence' AND c.presence_assertion_sha256 = NEW.presence_assertion_sha256)
 BEGIN SELECT RAISE(ABORT, 'INV-22: policy ack requires operator presence'); END;
+CREATE TRIGGER trg_budget_grant_presence BEFORE INSERT ON budget_grants
+WHEN NOT EXISTS (SELECT 1 FROM control_requests c WHERE c.control_request_id = NEW.control_request_id
+                   AND c.principal = 'operator_presence' AND c.presence_assertion_sha256 = NEW.presence_assertion_sha256)
+BEGIN SELECT RAISE(ABORT, 'INV-22: budget grant requires operator presence'); END;
+CREATE TRIGGER trg_mvf_waiver_presence BEFORE INSERT ON merge_verifications
+WHEN NEW.result = 'waived' AND NOT EXISTS (SELECT 1 FROM control_requests c
+                   WHERE c.control_request_id = NEW.waived_by_control_request_id AND c.principal = 'operator_presence')
+BEGIN SELECT RAISE(ABORT, 'INV-22: merge verification waiver (T40) requires operator presence'); END;
 
 -- INV-14: removal only after archive and only for terminal tasks
 CREATE TRIGGER trg_worktree_remove_guard BEFORE UPDATE OF status ON worktrees
@@ -1976,12 +1997,13 @@ onClaudeAuthorizeRunFinished(run, result):            # V1–V4 passed (CL §6);
             insertAuthorization(tx, latest.version + 1, 'amend', kind = specChanged(ctx, latest) ? 'spec_confirm' : 'limits',
                                 scope_version = latest.scope_version, spec_sha256 = ctx.spec_sha256)
             holdService.releaseInTx(tx, 'spec_changed' | 'authorization_expired', 'task', t.task_id, initiator=claude)   # H1 effects
-            if t.state == 'BLOCKED' and t.blocked_reason == 'reauthorization_required': te.applyInTx(tx, T37 …)
+            if t.state == 'BLOCKED' and t.blocked_reason in ('reauthorization_required', 'needs_human_decision'): te.applyInTx(tx, T37 …)
             runManager.markDeferredReady(tx, t)        # applied on the next tick via applyDeferred
          'amend_scope':
             insertAuthorization(tx, latest.version + 1, 'amend', 'scope', scope_version = latest.scope_version + 1, …)
             tx.runs.discardDeferred(t); holdService.releaseInTx(tx, …)
-            if t.state in POSTPLAN: te.applyInTx(tx, G4 …)
+            if t.state in POSTPLAN: te.applyInTx(tx, G4 …)              # AWAITING_PLAN_REVIEW, PLAN_APPROVED … AWAITING_HUMAN_APPROVAL (SM §8.1.1)
+            elif t.state == 'BLOCKED' and atOrAfter(t.blocked_from_state, 'AWAITING_PLAN_REVIEW'): t.resume_state = 'PLAN_REVISION_REQUESTED'
          'revoke': insertAuthorization(tx, latest.version + 1, 'revoke', …); te.applyInTx(tx, G1a …)
          'needs_human': te.applyInTx(tx, block(needs_human_decision, resume_state = t.state))
   })
@@ -2026,13 +2048,14 @@ onPrReviewFinished(run, result):                         # code or security revi
   pr = github.getPull(repo, n)                           # fresh observation BEFORE the transaction
   store.write(tx => {
     tx.runs.finish(run, succeeded, output_sha256); tx.pullRequests.observe(pr)
+    a  = tx.authorizations.get(run.authorization_id, run.authorization_version)     # recorded on the review run at claim (§10.1 bindings)
     rv = tx.prReviews.insert({ kind, head_sha: run.head_sha, diff_sha256: out.binding.diff_sha256,
-                               snapshot_tree_sha, scope_version: run.scope_version, spec_sha256, ... })   # trigger INV-18
+                               snapshot_tree_sha, scope_version: a.scope_version, spec_sha256, ... })   # trigger INV-18
     tx.findings.insertAll(out.findings with head_sha, identity_sha256, withheld_publicly per OD-21)
     t = tx.tasks.get(run.task_id)
     if t.state != 'CLAUDE_PR_REVIEW': return
     if pr.head_sha != run.head_sha: return te.applyInTx(tx, G5 …)
-    other = tx.prReviews.latest(t, otherKind, head_sha = run.head_sha, scope_version = run.scope_version)
+    other = tx.prReviews.latest(t, otherKind, head_sha = run.head_sha, scope_version = a.scope_version)
     if other == null: return                                          # wait for (or dispatch) the second review
     pair = { code, security }
     if anyCriticalSecurity(pair) or anyDecision(pair, ['reject','needs_human']) or anyInjection(pair):
@@ -2187,7 +2210,7 @@ route:
   github.mergeable_changed→ behind + strict policy + AWAITING_HUMAN_APPROVAL: T41; conflict in PR_OPEN: T23
   github.review_submitted → insert github_reviews (user_id); operator CHANGES_REQUESTED on head in AWAITING_HUMAN_APPROVAL: T32
   github.label_changed    → mercury:revise by operator actor: T32 path; other actors: ignored (recorded)
-  github.pr_closed        → closed by operator id: T33; else G6
+  github.pr_closed        → closed by operator id: T33 (AWAITING_HUMAN_APPROVAL) or G7; else G6
   linear.state_changed    → canceled/duplicate: G1c; backlog: hold deprioritized; never forward progress (INV-17)
   linear.label_changed    → mercury removed: hold deprioritized; mercury:hold by operator: hold operator_hold; reverse: release
   linear.spec_changed     → spec_sha256 != current authorization spec_sha256 and task before COMPLETED: hold spec_changed (H1 effects)

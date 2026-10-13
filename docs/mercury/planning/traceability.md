@@ -41,6 +41,7 @@
 | Security gates | `G-S1…G-S5` | E (controls and SAC per gate, `security/threat-model.md` §8.10, §10.1); F (placement in the roadmap) | `planning/roadmap.md` §4 | Gate IDs, not requirements. `G-ORG`/`G-SPLIT`/`G-DETECT` are governance **modes** (ADR-014), not gates |
 | Implementation issues | `MERC-nnn` | F | `planning/issue-breakdown.md` | Proposals; not created in Linear by this design |
 | Failure modes / runbooks | `FM-nn`, `RB-nn` | D | `operations/recovery.md` | Unchanged |
+| Process-record IDs (not requirements) | `RA/RB/RC/RD/RE/RF-nn` Phase 3 findings; `RD-1…RD-20` reconciliation decisions | orchestrator / reviewers | `reviews/20…25-*.md`; `reviews/30-reconciliation.md` | **Collisions (Phase 5, VF-03):** `RB-nn` (Review B finding) vs runbook `RB-01…18` (D); `RD-nn` (Review D finding, two digits) vs decision `RD-n`. New text cites Review-B findings as `RB-nn (21)`, Review-D findings as `RD-nn (23)`; unqualified `RB-nn` means a runbook and unqualified `RD-n` a reconciliation decision |
 | Operational parameters | by **name** (`svc.*`, `run.*`, …) | D (values), F (registration) | `operations/macos-service.md` §2 | §7. Workflow policy (attempt counts, revision budgets, authorization expiry, state reminder timers) stays in `architecture/state-machine.md` §7, §9 and OD-08 (Addendum B.4) |
 
 ### 1.2 Numeric bands (F-owned prefixes)
@@ -257,7 +258,7 @@ Each brief item and discovery pain point maps to at least one requirement. Phase
 |---|---|---|---|---|---|---|
 | **FR-040** | Work is dispatched from a queue **derived** from `tasks.state`, holds and leases (no separate jobs table) by a claim transaction that re-checks version, holds and guards, such that at most one active **mutating** run exists per task and at most one active run per (task, kind); read-only Claude review runs may overlap (INV-02). | ADR-015; RC-18; RA-16 | M | PROP-05: 0 counterexamples; TC-CONC-004: 0 violations across 1,000 simulated lease expiries. | Test | TDD §8, §16 · `architecture/components.md` §7 |
 | **FR-041** | Configurable concurrency limits: global, per agent type (Claude, Codex) and per repository (defaults per OD-07). | Area A | M | TC-CONC-001: never exceeded over 1,000 simulated steps with 20 queued tasks. | Test | TDD §8, §23 · `architecture/components.md` §7.3 |
-| **FR-042** | The dispatcher orders authorized work by Claude priority, then authorization time, and does not starve tasks beyond the configured ageing bound. | Steps 2, 4 | S | Scheduler tests: order respected; no task waits beyond the bound in simulation. | Test | TDD §8 · `architecture/components.md` §7.4 |
+| **FR-042** | The dispatcher orders authorized work by Claude priority, then authorization time, and does not starve tasks beyond the configured ageing bound. | Steps 2, 4 | S | Scheduler tests: order respected; in 1,000 simulated steps with 20 queued tasks, 0 tasks wait longer than the ageing bound of `architecture/components.md` §7.4 (aging term). | Test | TDD §8 · `architecture/components.md` §7.4 |
 | **FR-043** | Each side-effecting step carries a deterministic idempotency key from the single dedup key catalogue so re-execution after a crash or retry has at most one external effect. | Area A/B; RD-18 | M | See NFR-001; TC-CON-015 checks keys against the catalogue. | Test | TDD §10, §20 · `integrations/github.md` §14; `architecture/components.md` §4.14 |
 | **FR-044** | The coordinator detects agent failure by awake-time deadline, stall and exit classification. Liveness = stdout growth **or** process-group CPU-time progress; a run is stalled only when both are flat for the kind's stall threshold, which is never shorter than the repository test timeout while a command runs. Termination is SIGINT → SIGTERM → SIGKILL of the whole group via `agent-ctl`. | Fact 8; RD-15 | M | Hung fake agent with 3 descendants: all terminated within deadline + grace; 0 survivors; a 20-minute quiet test command with CPU progress is **not** classified stalled (TC-AFS-009). | Test | TDD §13, §18 · `architecture/components.md` §8.4; parameter table (`run.<kind>.*`) |
 | **FR-045** | Each step has a bounded retry policy per the single retry matrix; non-transient failures route to `FAILED` or `BLOCKED` with escalation. | Area C; RD-18 | M | Retry-calculator tests match the matrix; injected permanent error → exactly one escalation. | Test | TDD §11, §20 · `integrations/github.md` §15 |
@@ -387,7 +388,7 @@ Each brief item and discovery pain point maps to at least one requirement. Phase
 
 | ID | Requirement | Rationale / source | Pri | Acceptance criterion (pass/fail) | Verification | Owning design |
 |---|---|---|---|---|---|---|
-| **FR-260** | `mercury trace <task|issue|pr>` answers the ten brief §I questions using the question → table/column → artifact mapping of `architecture/components.md` §5.4. | Area I; RF-35 | M | TC-E2E-010: 10/10 correct, including a crashed and restarted task. | Test | TDD §21 · `architecture/components.md` §5.4 |
+| **FR-260** | `mercury trace <task\|issue\|pr>` answers the ten brief §I questions using the question → table/column → artifact mapping of `architecture/components.md` §5.7. | Area I; RF-35 | M | TC-E2E-010: 10/10 correct, including a crashed and restarted task. | Test | TDD §21 · `architecture/components.md` §5.7 |
 | **FR-261** | Every state transition, agent run (argv without secrets, versions, exit, cost/tokens, model actually used), external write and operator action produces an audit event linked by correlation and causation IDs. | Area I; RD-18 | M | See NFR-060. | Test | TDD §21 · `architecture/components.md` §4.16 |
 | **FR-262** | At startup and daily the coordinator verifies the audit hash chain; a failure enters safe mode (no dispatch) and sends one SECURITY notification. | RD-4 | M | TC-SEC-161: single-row mutation → safe mode + 1 notification (SAC-08). | Test | TDD §21 · `ADR-018` |
 | **FR-263** | The chain head `(seq, hash)` is anchored off-host in App-posted artifacts: the Linear completion comment per task and a daily anchor in a private anchor repository via `mercury-ops`; the `MERCURY / claude-review` check-run summary carries it **only on private repositories** (Addendum B.2, OD-24). An overdue anchor (`audit.anchor_overdue_h`) raises an ops alert, never a halt. Anchoring is required before unattended operation (M7 exit). | RD-4; RF-10 | M | TC-SEC-163: anchors present at each carrier and absent from public check summaries; a local rewrite behind an anchor is detected by `audit verify`. | Test | TDD §21 · `ADR-018`; `architecture/components.md` §6 (`anchors`) |
@@ -429,7 +430,7 @@ Each brief item and discovery pain point maps to at least one requirement. Phase
 | **NFR-003** | Task-level stall: any task not waiting on a human with no progress beyond its state timeout is flagged within timeout + 2 poll intervals of awake time. | 14 h stall | M | 100 % of injected stalls detected within bound; pilot max undetected stall within bound (TC-PIL-004). | Test + Analysis | TDD §20, §21 · `architecture/state-machine.md` §7 |
 | **NFR-004** | Coordinator availability (per §1.5) ≥ 99 % during the supervised pilot and ≥ 99.5 % over the 30 days after cutover. | Monitoring gap; RF-04 | S | Heartbeat analysis per §1.5 (TC-PIL-002, TC-PERF-007). | Analysis | TDD §20 · `operations/macos-service.md` §11 |
 | **NFR-005** | Every durable event (review, merge, comment, check conclusion) and the final state of each tracked entity relevant to an active task is observed, including across network interruptions and sleep; transient intermediate states that polling cannot observe are out of scope. | Missed replies; RD-22 | M | Sandbox replay of 500 events with 20 injected interruptions and sleep gaps: 0 durable events or final states missed. | Test | TDD §12, §15, §20 · `integrations/github.md` §7 |
-| **NFR-006** | A dead agent run is detected within 60 s; a stalled run within its stall threshold + 60 s (liveness per FR-044). | REL-07/08; RF-20 | M | TC-AFS-002/009 and TC-REC-005 measurements within bounds. | Test | TDD §20 · parameter table (`run.<kind>.*`) |
+| **NFR-006** | A dead agent run is detected within 60 s; a stalled run within its stall threshold + 60 s (liveness per FR-044). | REL-07/08; RF-20 | M | TC-AFS-002/009 and TC-REC-005 measurements within bounds. | Test | TDD §20 · `operations/macos-service.md` §2 parameter table (`run.<kind>.*`) |
 | **NFR-007** | Retired → OPS-013 (downtime awareness is an operational watchdog target). | RD-10 | — | — | — | — |
 | **NFR-008** | Latency and availability metrics are computed only per the measurement rule §1.5 from `host_events`. | RD-16; RD-22 | M | TC-PERF-007: computed values equal the fixture oracle. | Test | TDD §23 · this file §1.5 |
 
@@ -438,13 +439,13 @@ Each brief item and discovery pain point maps to at least one requirement. Phase
 | ID | Requirement | Rationale / source | Pri | Acceptance criterion (pass/fail) | Verification | Owning design |
 |---|---|---|---|---|---|---|
 | **NFR-020** | After `kill -9`, power loss or reboot, 100 % of non-terminal tasks resume or reach a defined state, and the database passes `quick_check`. | Step 15 | M | TC-REC-001/002/004/020: 0 lost tasks; 0 integrity errors. | Test | TDD §20 · `operations/recovery.md` |
-| **NFR-021** | No task fails solely because of a sleep gap of any duration; the first poll after wake happens within `recovery.first_poll_max_s` of the network becoming reachable. | Fact 10 | M | TC-REC-003, TC-NET-004. | Test | TDD §18, §20 · parameter table |
+| **NFR-021** | No task fails solely because of a sleep gap of any duration; the first poll after wake happens within `recovery.first_poll_max_s` of the network becoming reachable. | Fact 10 | M | TC-REC-003, TC-NET-004. | Test | TDD §18, §20 · `operations/macos-service.md` §2 parameter table |
 | **NFR-022** | Online backup at least daily (RPO ≤ 24 h awake time plus before every upgrade/migration); restore drill ≤ 15 min of operator time. | Platform P2 | M | TC-INT-011, TC-OPS-006. | Test + Demo | TDD §20, §24 · `operations/recovery.md` |
 | **NFR-023** | Schema migrations follow the expand/contract model with a backup first; a failed migration leaves the prior DB usable. | Platform P2 | M | Injected migration failure → original DB intact (TC-INT-012). | Test | TDD §16, §24 · `operations/macos-service.md` §13.3 |
 | **NFR-024** | On SIGTERM the coordinator stops dispatch, interrupts non-adoptable runs, keeps adoptable runs, checkpoints and exits within `svc.exit_timeout_s` (internal budget `svc.shutdown_budget_s`). | Platform M1–M2; RD-11; RD-10 (D) | M | 10/10 trials within bounds; adoptable runs survive and are adopted on restart (TC-REC-007). | Test | TDD §18, §20 · `operations/macos-service.md` §12 |
-| **NFR-025** | Full reconciliation of all non-terminal tasks completes within `recovery.reconcile_max_s` after `ready` or after wake + network (for ≤ 50 open tasks). | REL-02; RF-20 | M | `recovery.completed` duration within bound in TC-REC-004 and TC-REC-003. | Test | TDD §20 · parameter table |
+| **NFR-025** | Full reconciliation of all non-terminal tasks completes within `recovery.reconcile_max_s` after `ready` or after wake + network (for ≤ 50 open tasks). | REL-02; RF-20 | M | `recovery.completed` duration within bound in TC-REC-004 and TC-REC-003. | Test | TDD §20 · `operations/macos-service.md` §2 parameter table |
 | **NFR-026** | Lost agent work (cost metric): 0 Codex/`verify`/`deps_install` runs lost on a coordinator crash (adoption); at most one re-run per lost step after reboot or power loss, classified `lost_by_host`. | REL-04/05; RD-11 | S | TC-REC-030/032 counts. | Test | TDD §20 · `ADR-020` |
-| **NFR-027** | Crash-loop containment: more than `svc.crash_loop_starts` within `svc.crash_loop_window_min` → safe mode (no dispatch, heartbeat `degraded`). | REL-15 | M | TC-REC-036. | Test | TDD §18 · parameter table |
+| **NFR-027** | Crash-loop containment: more than `svc.crash_loop_starts` within `svc.crash_loop_window_min` → safe mode (no dispatch, heartbeat `degraded`). | REL-15 | M | TC-REC-036. | Test | TDD §18 · `operations/macos-service.md` §2 parameter table |
 
 ### NFR — Latency while awake (measured per §1.5)
 
@@ -490,7 +491,7 @@ Each brief item and discovery pain point maps to at least one requirement. Phase
 |---|---|---|---|---|---|---|
 | **NFR-080** | Idle coordinator ≤ 250 MB RSS and ≤ 2 % of one core averaged over 1 h (stretch: 200 MB / 1 %). | RF-04 | S | 24 h soak (TC-PERF-001). | Test | TDD §23 · `operations/macos-service.md` §10 |
 | **NFR-081** | Non-304 GitHub reads ≤ 20 % of each identity's hourly primary limit at 10 active PRs; Linear ≤ 20 % of its limit; writes are capped by SEC-705. | RF-04 | M | TC-SBX-008, TC-NET-005. | Test | TDD §23 · `integrations/github.md` §15 |
-| **NFR-082** | Dispatch holds and run interruption at the disk thresholds of the parameter table (`disk.*`). | Resource safety | S | TC-PERF-005, TC-REC-015. | Test | TDD §23 · parameter table |
+| **NFR-082** | Dispatch holds and run interruption at the disk thresholds of the parameter table (`disk.*`). | Resource safety | S | TC-PERF-005, TC-REC-015. | Test | TDD §23 · `operations/macos-service.md` §2 parameter table |
 | **NFR-083** | Per-run agent limits (Claude turns/budget; Codex tokens; awake-time deadline) and per-task budget totals are enforced and recorded. | Runtimes §1.9 | M | Exceeding a limit ends the run with a classified reason; cost/tokens per run recorded (TC-AFS-001). | Test | TDD §13, §14, §23 · `integrations/claude.md` §3.1 |
 | **NFR-084** | A daily agent spend cap (OD-08) holds new dispatch when reached and notifies once. | RF-32 | S | E2E with fake costs: cap reached → `rate_limited`-class hold + 1 notification (TC-E2E-022). | Test | TDD §23 · `planning/roadmap.md` §7 (cost model) |
 | **NFR-085** | Event-loop lag p99 ≤ 250 ms and SQLite commit p99 ≤ 50 ms under one Codex run plus a test run; no false sleep-gap detection from measured blocking operations. | RD-17 (D) | S | TC-PERF-004/006. | Test | TDD §23 · `architecture/components.md` §10.10 |
@@ -500,17 +501,17 @@ Each brief item and discovery pain point maps to at least one requirement. Phase
 | ID | Requirement | Rationale / source | Pri | Acceptance criterion (pass/fail) | Verification | Owning design |
 |---|---|---|---|---|---|---|
 | **NFR-090** | Node.js, dependencies, Claude Code/Agent SDK and Codex CLI are pinned to exact versions and hashes (SEC-701); the startup self-test refuses mismatches. | Runtimes §6 | M | Self-test fails with a mismatched fake binary (TC-INT-013, TC-SEC-127). | Test | TDD §24 · `operations/macos-service.md` §13.5 |
-| **NFR-091** | SQLite access sits behind a repository interface; the suite runs against both drivers. | Platform P3 | S | CI matrix passes for both. | Test | TDD §16 · `architecture/components.md` §4.3 |
+| **NFR-091** | SQLite access sits behind a repository interface; the suite runs against both drivers. | Platform P3 | S | CI matrix: 100 % of L1/L4 tests pass on both `node:sqlite` and `better-sqlite3`. | Test | TDD §16 · `architecture/components.md` §4.3 |
 | **NFR-092** | All MERCURY paths (`MERCURY_HOME`, `WORK_ROOT`, logs) are outside TCC-protected folders and need no Full Disk Access. | Platform M6; RD-2 | M | Install self-check rejects protected paths (P0-021, TC-OPS-001). | Test + Inspection | TDD §18 · `operations/macos-service.md` §7.1 |
 | **NFR-093** | Agent CLI contract tests run against each pinned version before an upgrade is accepted. | Runtimes V6 | M | Upgrade blocked when the contract suite fails (TC-OPS-007). | Demo | TDD §24 · `integrations/codex.md` |
-| **NFR-094** | Supported macOS versions are those verified in Phase 0; sandbox, agent-uid and launchd self-tests re-run after each macOS update. | Runtimes V8 | S | Self-test report per OS build. | Demo | TDD §18, §24 · `operations/macos-service.md` |
+| **NFR-094** | Supported macOS versions are those verified in Phase 0; sandbox, agent-uid and launchd self-tests re-run after each macOS update. | Runtimes V8 | S | After each macOS update, the self-test report for the new OS build shows 100 % of sandbox, agent-uid (SEC-T-20 subset) and launchd self-tests passing before dispatch resumes; a failure sets `config_fatal`. | Demo | TDD §18, §24 · `operations/macos-service.md` |
 | **NFR-095** | The pinned-toolchain self-test at startup completes within 15 s. | NFR-MNT-01 | S | Startup log measurement (TC-INT-013). | Test | TDD §24 · `operations/macos-service.md` |
 
 ### NFR — Maintainability and testability
 
 | ID | Requirement | Rationale / source | Pri | Acceptance criterion (pass/fail) | Verification | Owning design |
 |---|---|---|---|---|---|---|
-| **NFR-100** | Claude, Codex, GitHub, Linear, clock, host events, process broker and spawner sit behind ports with fakes; state machine, guards and scheduler reach 100 % branch coverage, the rest ≥ 85 % lines. | Area J | S | CI coverage report. | Inspection | TDD §22 · `testing/verification-plan.md` §2.2 |
+| **NFR-100** | Claude, Codex, GitHub, Linear, clock, host events, process broker and spawner sit behind ports with fakes; state machine, guards and scheduler reach 100 % branch coverage, the rest ≥ 85 % lines. | Area J | S | CI coverage report shows 100 % branch coverage for state machine, guards and scheduler and ≥ 85 % line coverage overall; any shortfall fails the build (verification plan L1 exit). | Inspection | TDD §22 · `testing/verification-plan.md` §2.2 |
 | **NFR-101** | Deterministic simulation (virtual clock in both monotonic modes, seeded randomness) for state-machine, recovery and concurrency tests; every sleep-related test runs in both modes. | Area J; RD-16 | M | Same seed → identical trace 100/100; CI shows both modes for each sleep test. | Test | TDD §22 · `testing/verification-plan.md` §2.2 |
 
 ### OPS — Operational requirements
@@ -557,7 +558,7 @@ E owns each statement, level, tag and verification method in `security/threat-mo
 | SEC-107 | M | Act only on own PRs | SEC-406 | M | Safe removal |
 | SEC-108 | M | Governance drift monitor | SEC-407 | M | Push from mirror |
 | SEC-109 | M | Merge-actor enforcement | SEC-501 | M | Redaction at every sink |
-| SEC-110 | S | Separate author/review identities | SEC-502 | M | Pre-push secret scan |
+| SEC-110 | M | Separate author/review identities | SEC-502 | M | Pre-push secret scan |
 | SEC-111 | M | Bot commit identity and trailers | SEC-503 | M | Keychain custody |
 | SEC-112 | S | Tag ruleset | SEC-504 | M | Rotation |
 | SEC-113 | M | Required MERCURY check runs | SEC-505 | M | Masked run records; raw output lifetime |
@@ -568,12 +569,12 @@ E owns each statement, level, tag and verification method in `security/threat-mo
 | SEC-203 | M | Per-task generated `CODEX_HOME` | SEC-603 | S | HMAC on authority rows |
 | SEC-204 | M | Claude run profiles | SEC-604 | M | Off-host anchoring |
 | SEC-205 | M | Review snapshots | SEC-605 | M | `audit verify` |
-| SEC-206 | S | Agent egress control | SEC-606 | S | Log retention |
+| SEC-206 | M | Agent egress control (MUST part; SHOULD part tracked by P0-049) | SEC-606 | S | Log retention |
 | SEC-207 | M | Per-run scratch | SEC-607 | M | Restore epochs |
 | SEC-208 | M | Forbidden Codex flags | SEC-701 | M | Pinned agent binaries |
 | SEC-209 | M | Instruction-file integrity | SEC-702 | M | Dependency-change escalation |
 | SEC-210 | M | Pinned binaries and TCB | SEC-703 | M | Controlled dependency install |
-| SEC-211 | S | Codex network off | SEC-704 | M | Resource limits |
+| SEC-211 | M | Codex network off | SEC-704 | M | Resource limits |
 | SEC-212 | M | Wrapper contract | SEC-705 | M | External write budgets |
 | SEC-213 | M | Cross-run isolation | SEC-706 | M | MERCURY's own dependencies |
 | SEC-214 | M | Supervised lifetime | SEC-707 | S | Target workflow hygiene |
@@ -678,7 +679,7 @@ Columns: requirement → ADR(s) → test case(s) → milestone where first verif
 | CON-006 | M | ADR-011 | TC-UNIT-012, TC-SM-007 | M4 | BC |
 | CON-007 | M | ADR-008, ADR-014 | TC-GOV-117, TC-GOV-118, TC-PI-138, TC-GOV-110, TC-GOV-116 | P0c / M6 | BC |
 | CON-008 | M | ADR-008 | TC-SBX-002, TC-SBX-005, TC-SEC-113, P0-060 | P0c | BC |
-| CON-009 | M | ADR-010, ADR-020 | TC-SM-009, TC-REC-003, TC-REC-021, TC-REC-031 | M1 / M8 | BC |
+| CON-009 | M | ADR-010, ADR-020 | TC-SM-009, TC-REC-003, TC-REC-021, TC-REC-031, TC-REC-011 | M1 / M8 | BC |
 | CON-010 | M | — | TC-SEC-004, TC-OPS-009 | M1 | BC |
 | CON-011 | M | ADR-019 | TC-SBX-006 | M7 | BC |
 | CON-012 | M | — | TC-SM-008, TC-E2E-003 | M4 | BC |
@@ -697,32 +698,32 @@ Columns: requirement → ADR(s) → test case(s) → milestone where first verif
 | FR-007 | M | ADR-015 | TC-UNIT-005, TC-INT-030 | M2 | BC |
 | FR-008 | M | ADR-009 | TC-E2E-017 | M2 | BC |
 | FR-020 | M | ADR-004 | TC-CON-003, TC-E2E-001 | M3 | BC |
-| FR-021 | M | ADR-011 | TC-UNIT-010, TC-INT-020 | M1 / M3 | BC |
+| FR-021 | M | ADR-011 | TC-UNIT-010, TC-INT-020, TC-CON-013 | M1 / M3 | BC |
 | FR-022 | M | ADR-011 | TC-UNIT-011, TC-SM-004, TC-REC-038 | M3 | BC |
 | FR-023 | M | ADR-011 | TC-E2E-007 | M5 | BC |
 | FR-024 | M | ADR-011 | TC-UNIT-013, TC-SM-015, TC-E2E-008, TC-E2E-020 | M3 / M6 | BC |
-| FR-040 | M | ADR-015 | TC-INT-003, TC-CONC-004, TC-SM-004 | M1 | BC |
+| FR-040 | M | ADR-015 | TC-INT-003, TC-CONC-004, TC-SM-004, TC-INT-021 | M1 | BC |
 | FR-041 | M | — | TC-UNIT-022, TC-CONC-001, TC-CONC-002, P0-038 | M1 | BC |
 | FR-042 | S | — | TC-UNIT-022 | M1 | BC |
 | FR-043 | M | ADR-002 | TC-DUP-003, TC-REC-001, TC-CON-015 | M1 | BC |
 | FR-044 | M | ADR-013 | TC-UNIT-021, TC-INT-005, TC-AFS-002, TC-AFS-004, TC-AFS-009 | M1 / M4 | BC |
-| FR-045 | M | — | TC-UNIT-020, TC-AFS-001, TC-AFS-003, TC-AFS-006 | M1 | BC |
+| FR-045 | M | — | TC-UNIT-020, TC-AFS-001, TC-AFS-003, TC-AFS-006, TC-AFS-008 | M1 | BC |
 | FR-046 | M | — | TC-SM-010 | M1 | BC |
 | FR-047 | M | ADR-015 | TC-SM-011 | M1 | BC |
 | FR-048 | M | ADR-002 | TC-INT-004, TC-CONC-003 | M1 | BC |
 | FR-049 | M | — | TC-INT-010 | M1 | BC |
 | FR-050 | M | ADR-015 | TC-SM-012, TC-SM-013, TC-SM-014 | M1 | BC |
-| FR-051 | M | ADR-013 | TC-INT-025, TC-SEC-128, P0-026, P0-028 | P0b / M1 | BC |
+| FR-051 | M | ADR-013 | TC-INT-025, TC-SEC-128, P0-026, P0-028, TC-REC-022 | P0b / M1 | BC |
 | FR-052 | M | ADR-020 | TC-SM-023, TC-REC-012 | M1 / M8 | BC |
 | FR-053 | M | ADR-020 | TC-REC-032 | M1 | BC |
 | FR-054 | M | ADR-020 | TC-REC-030, TC-REC-038, TC-AFS-010 | M1 / M4 | BC |
-| FR-055 | M | ADR-020 | TC-REC-033 | M1 | BC |
+| FR-055 | M | ADR-020 | TC-REC-033, TC-REC-013 | M1 | BC |
 | FR-060 | M | ADR-003 | TC-UNIT-030, TC-CON-001 | M1 | BC |
-| FR-061 | M | ADR-003 | TC-CON-001 | M1 | BC |
-| FR-062 | M | ADR-004, ADR-005 | TC-CON-003, TC-CON-005, TC-CON-014, TC-AFS-005, TC-AFS-011, P0-209 | M3 | BC |
+| FR-061 | M | ADR-003 | TC-CON-001, TC-CON-009 | M1 | BC |
+| FR-062 | M | ADR-004, ADR-005 | TC-CON-003, TC-CON-005, TC-CON-014, TC-AFS-005, TC-AFS-011, P0-209, TC-CON-011 | M3 | BC |
 | FR-063 | M | ADR-002, ADR-003 | TC-INT-003, TC-DUP-003 | M1 | BC |
 | FR-064 | M | ADR-003, ADR-016 | TC-UNIT-031 | M1 | BC |
-| FR-065 | S | — | TC-CON-002 | M8 | BC |
+| FR-065 | S | — | TC-CON-002, TC-CON-010 | M8 | BC |
 | FR-066 | M | ADR-017 | TC-SEC-124, TC-E2E-001 | M3 | BC |
 | FR-080 | M | — | TC-SM-001, TC-SM-002 | M1 | BC |
 | FR-081 | M | ADR-002 | TC-SM-003, TC-SM-019 | M1 | BC |
@@ -783,10 +784,10 @@ Columns: requirement → ADR(s) → test case(s) → milestone where first verif
 | FR-262 | M | ADR-018 | TC-SEC-161 | M1 / M7 | BC |
 | FR-263 | M | ADR-018 | TC-SEC-163 | M7 | BC |
 | FR-264 | M | ADR-018 | TC-REC-019, TC-SM-022 | M7 | BC |
-| FR-280 | M | ADR-020 | TC-REC-001, TC-REC-004, TC-REC-035 | M1 | BC |
+| FR-280 | M | ADR-020 | TC-REC-001, TC-REC-004, TC-REC-035, TC-SM-027 | M1 | BC |
 | FR-281 | M | ADR-013 | TC-REC-005 | M1 | BC |
-| FR-282 | M | ADR-010, ADR-020 | TC-UNIT-062, TC-SM-009, TC-REC-031, TC-REC-003, TC-NET-004 | M1 / M8 | BC |
-| FR-283 | M | — | TC-NET-001, TC-NET-002, TC-NET-003, TC-NET-006, TC-NET-008 | M2 | BC |
+| FR-282 | M | ADR-010, ADR-020 | TC-UNIT-062, TC-SM-009, TC-REC-031, TC-REC-003, TC-NET-004, TC-REC-010, TC-REC-016 | M1 / M8 | BC |
+| FR-283 | M | — | TC-NET-001, TC-NET-002, TC-NET-003, TC-NET-006, TC-NET-008, TC-NET-007, TC-NET-009 | M2 | BC |
 | FR-300 | M | ADR-012 | TC-PIL-002, P0-073 | M9a | BC |
 | FR-301 | M | ADR-012 | TC-PIL-003 | M9c | BC |
 | FR-900 | W | ADR-019 | TC-SEC-008 | M8 | BC |
@@ -806,7 +807,7 @@ Columns: requirement → ADR(s) → test case(s) → milestone where first verif
 | NFR-020 | M | ADR-002 | TC-REC-002, TC-REC-004, TC-REC-008, TC-REC-020 | M8 | BC |
 | NFR-021 | M | ADR-010 | TC-REC-003, TC-NET-004 | M8 | BC |
 | NFR-022 | M | ADR-002 | TC-INT-011, TC-OPS-006 | M8 | BC |
-| NFR-023 | M | ADR-002 | TC-INT-012 | M1 | BC |
+| NFR-023 | M | ADR-002 | TC-INT-012, TC-INT-022 | M1 | BC |
 | NFR-024 | M | ADR-020 | TC-REC-007 | M8 | BC |
 | NFR-025 | M | — | TC-REC-003, TC-REC-004 | M8 | BC |
 | NFR-026 | S | ADR-020 | TC-REC-030, TC-REC-032 | M8 | BC |
@@ -843,13 +844,13 @@ Columns: requirement → ADR(s) → test case(s) → milestone where first verif
 | NFR-095 | S | — | TC-INT-013 | M1 | BC |
 | NFR-100 | S | — | TC-UNIT-011, TC-UNIT-012 | M1 | BC |
 | NFR-101 | M | — | TC-SM-005, TC-SM-009 | M1 | BC |
-| OPS-001 | M | — | P0-001…052 | P0a / P0b | BC |
+| OPS-001 | M | — | P0-001…048, P0-060…074, P0-201…241 | P0a / P0b / P0c | BC |
 | OPS-002 | M | ADR-008 | P0-060, P0-220, TC-GOV-008, TC-GOV-112 | P0c | BC |
 | OPS-003 | M | ADR-014 | TC-GOV-115, TC-OPS-005 | M2 / M5 | BC |
 | OPS-004 | M | — | TC-OPS-009, TC-SBX-001 | P0c | BC |
-| OPS-005 | M | — | TC-OPS-007 | M8 | BC |
+| OPS-005 | M | — | TC-OPS-007, TC-REC-018 | M8 | BC |
 | OPS-006 | S | — | TC-OPS-006 | M8 | BC |
-| OPS-007 | M | — | P0-035, TC-SEC-020 | M1 | BC |
+| OPS-007 | M | — | P0-035, TC-SEC-020, TC-REC-014 | M1 | BC |
 | OPS-008 | M | ADR-012 | TC-PIL-001, TC-PIL-002 | M9a / M9b | BC |
 | OPS-009 | M | ADR-012 | TC-PIL-003 | M9c | BC |
 | OPS-010 | M | — | TC-OPS-004 | M8 | BC |
@@ -879,7 +880,7 @@ TC aliases of E's `SEC-T-nn` follow §8.3 (TC-SEC-1nn, TC-GOV-11n, TC-PI-13n). "
 | SEC-107 | M | — | TC-UNIT-053 | M5 | G-S3 |
 | SEC-108 | M | ADR-014 | TC-GOV-115 | M2 (read) / M5 (halt) | G-S4 (SAC-09) |
 | SEC-109 | M | ADR-014 | TC-GOV-116, TC-GOV-004, TC-E2E-021 | M7 / M9c | G-S4 (mode), G-S5 (G-ORG) |
-| SEC-110 | S | ADR-008 | TC-GOV-112 | M8 | — |
+| SEC-110 | M | ADR-008 | TC-GOV-112 | M8 | — (release-blocking via M; level corrected Phase 5, VF-07) |
 | SEC-111 | M | — | TC-UNIT-041 | M5 | G-S3 |
 | SEC-112 | S | — | TC-GOV-110 | M8 | — |
 | SEC-113 | M | ADR-014 | TC-GOV-117, TC-PI-138, TC-E2E-019 | M5 (policy) / M6 (claude-review) | G-S3 (SAC-16, SAC-17) |
@@ -890,13 +891,13 @@ TC aliases of E's `SEC-T-nn` follow §8.3 (TC-SEC-1nn, TC-GOV-11n, TC-PI-13n). "
 | SEC-203 | M | ADR-005 | TC-INT-026, TC-SEC-122 | M4 | G-S1 |
 | SEC-204 | M | ADR-004 | TC-SEC-103, TC-SEC-123, TC-SEC-006 | M3 | G-S1 (SAC-03) |
 | SEC-205 | M | ADR-017 | TC-SEC-124 | M3 | G-S3 |
-| SEC-206 | S | ADR-013 | TC-SEC-125, P0-049 | M8 | — |
+| SEC-206 | M | ADR-013 | TC-SEC-125, P0-049 | M8 | — (MUST part also via SEC-211/215) |
 | SEC-207 | M | ADR-013 | TC-INT-025 | M3 | G-S2 |
 | SEC-208 | M | ADR-005 | TC-SEC-122, P0-048 | M4 | G-S1 |
 | SEC-209 | M | ADR-005 | TC-SEC-126 | M4 | G-S1 |
 | SEC-210 | M | ADR-004, ADR-005 | TC-SEC-127 | M3 | G-S2 |
-| SEC-211 | S | ADR-005 | TC-SEC-003 | M5 | — |
-| SEC-212 | M | ADR-013 | TC-SEC-128 | M1 | G-S2 (SAC-14) |
+| SEC-211 | M | ADR-005 | TC-SEC-003 | M5 | — (level corrected Phase 5) |
+| SEC-212 | M | ADR-013 | TC-SEC-128, TC-REC-022 | M1 | G-S2 (SAC-14) |
 | SEC-213 | M | ADR-013 | TC-SEC-194 | M4 | G-S2 |
 | SEC-214 | M | ADR-020 | TC-SEC-129, TC-REC-033 | M1 | G-S2 (SAC-19) |
 | SEC-215 | M | ADR-013 | TC-SEC-125, TC-SEC-171 | M5 | G-S2 (SAC-18) |
@@ -920,7 +921,7 @@ TC aliases of E's `SEC-T-nn` follow §8.3 (TC-SEC-1nn, TC-GOV-11n, TC-PI-13n). "
 | SEC-402 | M | ADR-006 | TC-SEC-141 | M5 | G-S3 (SAC-07) |
 | SEC-403 | M | ADR-006 | TC-SEC-142 | M5 | G-S3 |
 | SEC-404 | M | ADR-006 | TC-SEC-142 | M5 | G-S3 |
-| SEC-405 | M | ADR-016 | TC-SEC-120, TC-OPS-001 | M1 | G-S2 |
+| SEC-405 | M | ADR-016 | TC-SEC-120, TC-OPS-001, TC-REC-023 | M1 | G-S2 |
 | SEC-406 | M | ADR-016 | TC-SEC-143 | M7 | G-S5 |
 | SEC-407 | M | ADR-006 | TC-SEC-144, TC-INT-027 | M5 | G-S3 (SAC-07) |
 | SEC-501 | M | — | TC-SEC-150, TC-SEC-004 | M1 | G-S3 (SAC-06) |
@@ -931,7 +932,7 @@ TC aliases of E's `SEC-T-nn` follow §8.3 (TC-SEC-1nn, TC-GOV-11n, TC-PI-13n). "
 | SEC-506 | S | — | TC-SEC-114 | P0c | — |
 | SEC-507 | M | — | TC-SEC-154 | M6 | G-S4 (SAC-20) |
 | SEC-601 | M | ADR-018 | TC-SM-003, TC-SEC-160 | M1 | G-S5 |
-| SEC-602 | M | ADR-018 | TC-SEC-161 | M1 | G-S5 (SAC-08) |
+| SEC-602 | M | ADR-018 | TC-SEC-161, TC-INT-023 | M1 | G-S5 (SAC-08) |
 | SEC-603 | S | ADR-018 | TC-SEC-162 | M7 | — |
 | SEC-604 | M | ADR-018 | TC-SEC-163 | M7 | G-S5 |
 | SEC-605 | M | ADR-018 | TC-SEC-161 | M7 | G-S5 (SAC-08) |
@@ -953,7 +954,7 @@ TC aliases of E's `SEC-T-nn` follow §8.3 (TC-SEC-1nn, TC-GOV-11n, TC-PI-13n). "
 | SEC-806 | M | ADR-012 | TC-PIL-003 | M9c | — |
 | SEC-901 | M | ADR-019 | TC-SEC-190 | M7 | G-S4 |
 | SEC-902 | M | ADR-015 | TC-SEC-191 | M1 / M5 | G-S3 |
-| SEC-903 | M | — | TC-SEC-192 | M5 | G-S3 |
+| SEC-903 | M | — | TC-SEC-192, TC-REC-023 | M5 | G-S3 |
 | SEC-904 | M | ADR-014 | TC-UNIT-054, TC-E2E-019 | M6 | G-S4 |
 | SEC-905 | M | ADR-014 | TC-SEC-193, TC-GOV-004 | M7 | G-S4 (SAC-10) |
 | SEC-906 | M | ADR-015 | TC-SEC-191, TC-SM-017 | M5 / M7 | G-S5 |
@@ -970,8 +971,8 @@ Counted from §3 and §4.1 (`Retired` rows excluded; NFR-007 is retired).
 | FR | 107 | 94 | 6 | 1 | 6 |
 | NFR | 47 | 28 | 19 | 0 | 0 |
 | OPS | 19 | 16 | 3 | 0 | 0 |
-| SEC (E) | 90 | 82 | 8 | 0 | 0 |
-| **Total** | **281** | **238** | **36** | **1** | **6** |
+| SEC (E) | 90 | 85 | 5 | 0 | 0 |
+| **Total** | **281** | **241** | **33** | **1** | **6** |
 
 Checks run while generating this file (repeatable by the ID lint, TC-OPS-010):
 - Every `TC-*` and `P0-*` cited in the RTM is defined in `testing/verification-plan.md` §8.
@@ -1238,7 +1239,7 @@ OD-37 was added by Addendum C. Deduplication: the 60 raw items across A (5 + 2 q
 | ASM-D-09, ASM-A-02 (Keychain from LaunchAgent) | P0-035 | M1 | Open |
 | ASM-E-08, RE-29 (Keychain ACL trusts helper, not `/usr/bin/security`) — decides whether `mercury-keychain` is v1 | P0-036 | M1 | Open |
 | ASM-D-21, ASM-E-15, ASM-B-19 (Seatbelt denies Keychain, mirror writes, cross-run files) | P0-037 | M1 | Open |
-| ASM-A-05, ASM-B-18 (parallel per-task `CODEX_HOME`) | P0-038 | Codex concurrency 2 | Open |
+| P0-038 parallel per-task `CODEX_HOME` (ASM-A-05 superseded; ASM-B-18 withdrawn, github.md §19; check kept for concurrency 2) | P0-038 | Codex concurrency 2 | Open |
 | ASM-D-11 (`caffeinate -i`) | P0-039 | M1 | Open |
 | ASM-D-06 (local notifications) | P0-040 | M1 | Open |
 | ASM-D-33, RD-25 (Claude SDK custom spawn via `sudo agent-exec`) | P0-042 | M3 (else ALT-B-1) | Open |
