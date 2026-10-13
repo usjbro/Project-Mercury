@@ -310,3 +310,63 @@ Each check records what was checked, the method, the evidence and the result.
 - **Result: PASS with VE-16** (`gh` invocation in the upgrade path). Residual RISK-27: a compromised coordinator dependency reaches Zone H (OD-36).
 
 ---
+## 7. Residual risk statement and conditions for approval
+
+### 7.1 Residual risk (after the reconciled design is implemented and the named gates pass)
+
+| Risk | Residual | Why it remains |
+|---|---|---|
+| RISK-05 Subtle backdoor passes Claude reviews and the human | **Medium** (inherent) | Review quality is judgement; MERCURY maximises signal (policy gate, separate security review, neutralised text) but cannot prove absence of malice |
+| RISK-27 Coordinator code execution reaches the operator's `gh` credential | **Medium** | `mercuryd` shares the operator uid (RD-1). Attack surface is MERCURY's own parsers (JSON, git objects, diffs) and dependencies. OD-36 (U2) would reduce it to Low |
+| RISK-28 Operator's interactive agents approve or merge as the human (N1) | **Medium** (policy only) | GitHub cannot distinguish them from the human |
+| RISK-03 Agent reads credentials | **Critical until G-S2**, Low after | Rests on P0-027 / SEC-T-20 on the real Mac |
+| RISK-04 Non-human merge on a personal repo | Low (G-ORG) / Medium (G-DETECT, accepted in writing) | Detective only under G-DETECT |
+| RISK-29 Keychain ACL trusts `/usr/bin/security` | Low–Medium | P0-036; signed helper moves to v1 if needed (Addendum A) |
+| RISK-13 Dependency confusion / exfil via registry egress | Low–Medium | Depends on P0-049 outcome |
+
+### 7.2 Conditions
+
+| Before | Conditions (all must be true) |
+|---|---|
+| **M3** (first real Claude run, G-S1) | VE-04(b) and VE-06 fixed; P0-042 or the ALT-B-1 switch decided; CL §8 self-test passes on the Mac; P0-201 passes |
+| **M4** (Codex planning; G-S2 evidence) | VE-04(a) and VE-11 fixed; P0-026…032 green; **SEC-T-20, -21, -28, -29 pass on the real Mac** (SAC-05/13/14/19). No non-sandbox workspace-write, `verify` or `deps_install` run until then |
+| **M5** (first sandbox push, G-S3) | VE-05, VE-09, VE-10, VE-12, VE-13, VE-14, VE-15 resolved; SAC-01/02/06/07/11/16/17 green; P0-049 executed and a mechanism chosen if `deps_install` is enabled (SAC-18); P0-045 presence helper green, else the POL fallback is recorded and RISK-30 re-rated; P0c identities created per github.md §2 (VE-01, VE-03, VE-08 fixed first) |
+| **M9b** (supervised pilot, G-S4) | G-DETECT written risk acceptance **or** G-ORG; SAC-04/09/10/12/15/20 green; every ASM-E closed or replaced by an ADR (SAC-12); OD-E-02 deny rules applied to the operator's interactive agents (SEC-106) and Linear coding sessions disabled (SEC-804); dispatch only in declared supervision windows |
+| **Unattended / overnight** (G-S5, recorded at M9c entry) | **G-ORG** on every target repo; **OD-36 decided** (recommend at M8 exit; if option (b), implemented); SEC-604 anchoring live with no public embed (VE-02 fixed); SEC-906 scoping tested (SEC-T-91); VE-07 resolved (watchdog liveness is part of unattended safety); VE-16, VE-20 fixed; **SAC-01…20 all green** |
+
+---
+
+## 8. Security acceptance criteria status (SAC-01…20)
+
+"Design-verified" means the control and its test are fully specified in the final documents with a binary criterion. Every SAC still **requires implementation evidence**. None can pass on design alone (verification plan §7.2: results from fakes never verify Mac- or sandbox-level requirements).
+
+| SAC | Criterion (TM §10.1) | Gate | Design status | Evidence still required |
+|---|---|---|---|---|
+| SAC-01 | Unauthorized-merge suite | G-S3 | Design-verified (§5, GH §9–§10) | Sandbox: TC-GOV-116 (SEC-T-16 a–h), P0-233 |
+| SAC-02 | Token scope exact | G-S3 | Design-verified after VE-01/03 fixes | Sandbox: TC-GOV-112 |
+| SAC-03 | Hook/MCP planting, 0 executions in 50 runs | G-S1 | Design-verified (CL §8) | Mac: TC-SEC-103, P0-201 |
+| SAC-04 | Prompt-injection corpus thresholds | G-S4 | Design-verified (TM §7.7, PI-01…20; ≥ 60 variants to be written) | Eval: TC-PI-130 on pinned models |
+| SAC-05 | Credential canaries 0 reads | **G-S2** | Design-verified (MS §3, §16.2) | **Mac: P0-027, TC-SEC-120** |
+| SAC-06 | Secret leakage, 40 formats | G-S3 | Partial (VE-15) | TC-SEC-150/151 |
+| SAC-07 | Git hardening | G-S3 | Partial (VE-10) | TC-SEC-140…144 |
+| SAC-08 | Audit integrity | G-S5 | Design-verified (CMP §4.16, REC §4) | TC-SEC-161/163/164 |
+| SAC-09 | Drift detected ≤ 60 min awake | G-S4 | Design-verified (GH §9.6) | Sandbox: TC-GOV-115 |
+| SAC-10 | Merge-verification scoping ≤ 5 min | G-S4 | Design-verified (GH §8, SM §8.5, TM §8.9 aligned) | Sandbox: TC-SEC-193 |
+| SAC-11 | Binding and revocation | G-S3 | Design-verified (SM §8.1–§8.3) | TC-PI-134…136 |
+| SAC-12 | Phase 0 assumption closure | G-S4 | Design-verified (all ASM-E have P0 links, TM §10.3) | Phase 0 results |
+| SAC-13 | Env allowlist | G-S2 | Design-verified (MS §9.4) | Mac: TC-SEC-121 |
+| SAC-14 | Wrapper grammar fuzz, sudoers 2 commands | G-S2 | Design-verified (MS §3.4–§3.7); VE-04 to fix first | CI `test-wrappers` + Mac: TC-SEC-128 |
+| SAC-15 | Presence tier | G-S4 | Design-verified (CMP §5.2); VE-13 | Mac: TC-SEC-145, P0-045 |
+| SAC-16 | Policy gate incl. carry-forward | G-S3 | Design-verified (TM SEC-310 amended, GH §6.2, SM §8.7); VE-05 | TC-PI-138 |
+| SAC-17 | Required-check pinning | G-S3 | Design-verified (GH §9.1) | Sandbox: TC-GOV-117, ASM-B-56/57 |
+| SAC-18 | `verify`/deps sandboxes | G-S2 | Specified (TM §8.7; P0-049 procedure now in TM §10.4) | Mac: P0-049, TC-SEC-125/171 |
+| SAC-19 | Supervised lifetime | G-S2 | Design-verified (MS §3.5, §3.8) | Mac: TC-SEC-129, P0-031 |
+| SAC-20 | Disclosure policy | G-S4 | Design-verified (GH §6.4) | TC-SEC-154 |
+
+**Summary:** 17 of 20 SACs are design-verified, and 3 are partial pending Medium/Low fixes (SAC-06, SAC-07, SAC-18). 20 of 20 require implementation or Phase 0 evidence. The ones that can only be closed on the real Mac are SAC-03, 05, 13, 14, 15, 18 and 19.
+
+---
+
+## Appendix A. Threat-model changes made in this phase (fixed in place)
+
+`security/threat-model.md`, 2026-10-13: header status; A-12; §0/§3.3 item 11; SEC-101 (`statuses:read`; `mercury-ops` not on targets; `mercury-bot` `audit` token; OD-37); SEC-108; **SEC-113 (`action_required`; never `neutral`/`skipped`)**; SEC-115 (aligned to components §5.2/§5.4 and SM §6.1); SEC-209 (acknowledged-difference rule); SEC-310 (`.husky/**`, `.npmrc`, `.yarnrc*` block-class; digest carry-forward; stricter-only repo policy); SEC-604 and §8.5 (no public chain-head embed); SEC-905, L7, §8.9 and SEC-T-93 (GitHub numbering; M8 global); §6.3 rows; §7.5 pseudo-code; §8.10 G-S5 placement; SAC-16; §10.3 P0 links; **new §10.4 P0-049 procedure**.

@@ -669,7 +669,8 @@ Additional startup rules:
 
 - **Downtime notice** when the previous heartbeat is older than `recovery.downtime_notice_min`.
 - **Durability check** (INV-25): for each non-terminal task with `last_commit_sha`, `git cat-file -e` in the mirror; missing → the step's run is `lost_by_host`, WorktreeResetPolicy to the last durable commit, step re-run.
-- **DB restored from backup** (operator-initiated `audit.restore_epoch`, RD-4): every non-terminal task whose latest authority rows cannot be verified, or whose artifacts are missing, goes to `BLOCKED(reauthorization_required)`; never `guard_integrity_failure`.
+- **DB restored from backup** (operator-initiated `audit.restore_epoch`, RD-4): every non-terminal task whose latest authority rows cannot be verified, or whose artifacts are missing, goes to `BLOCKED(reauthorization_required)`; never `guard_integrity_failure`. **When history was lost** (the backup's audit head `seq` is below the last off-host anchor `seq`, or the restore reason is `new_host`), **every** non-terminal task goes to `BLOCKED(reauthorization_required)`, because a revocation, CLI cancel, consumed budget, grant or expiry recorded after the backup may have been lost (MS §14.4 step 3, REC §4 step 17; Phase 5 VD-01).
+- **Results finalized during startup** (adopted or dead-with-`exit.json` runs) are recorded with `result_disposition = deferred` and applied only after the first post-start Linear observation of the issue has refreshed `spec_sha256` (REC §4 steps 11 and 17), so AG@apply never checks a stale spec (VD-03).
 - **Orphan remote objects** (RC-07): `mercury/*` branches or MERCURY-authored PRs whose marker task id is unknown are recorded in `orphan_remote_objects` with one notification. They are never adopted automatically; `mercury orphan adopt <pr>` ★ creates a new task in `AWAITING_AUTHORIZATION` (`proposal_source = orphan_adoption`), and `mercury orphan close` closes them.
 
 ---

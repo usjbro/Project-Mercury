@@ -1880,7 +1880,7 @@ There are no "checkpoint commits": the only commits are the coordinator's pipeli
 
 ### 9.5 Snapshots (RD-7, ADR-017, SEC-205)
 
-Every tree Claude reads (authorization and plan review at `base_sha`, PR review at `head_sha`) is built by the SnapshotService from git objects in the mirror (`ls-tree -r` + `cat-file --batch`): no `.git`, gitattributes not applied (export-ignore cannot hide files, no filters or `export-subst`), symlinks and submodules rendered as placeholder files, files 0444, dirs 0555, under `WORK_ROOT/snapshots/<tree_sha>/`, shared by tree SHA, readable by the agent uid. `snapshots.manifest_sha256` and the tree SHA are recorded on review rows. Claude never runs inside a Codex worktree. Snapshots are removed when no holder remains and they are older than one day.
+Every tree Claude reads (authorization and plan review at `base_sha`, PR review at `head_sha`) is built by the SnapshotService from git objects in the mirror (`ls-tree -r` + `cat-file --batch`). The build is **atomic** (Phase 5 VD-06): it writes into `WORK_ROOT/snapshots/.tmp-<tree_sha>-<ulid>/`, fsyncs, computes `manifest_sha256` over (path, mode, blob sha) and `rename`s to the final path, and only then is the row set `ready`. A reused snapshot (`ensure` hitting an existing tree SHA) is re-verified against `ls-tree` and its manifest; a mismatch or a leftover `.tmp-*` directory is purged (`agent-ctl purge`) and rebuilt. Snapshot properties: no `.git`, gitattributes not applied (export-ignore cannot hide files, no filters or `export-subst`), symlinks and submodules rendered as placeholder files, files 0444, dirs 0555, under `WORK_ROOT/snapshots/<tree_sha>/`, shared by tree SHA, readable by the agent uid. `snapshots.manifest_sha256` and the tree SHA are recorded on review rows. Claude never runs inside a Codex worktree. Snapshots are removed when no holder remains and they are older than one day.
 
 ### 9.6 Git hardening (RD-17)
 
@@ -2073,51 +2073,61 @@ onPrReviewFinished(run, result):                         # code or security revi
 
 ### 10.6 Startup recovery
 
-Follows the exit/startup contract of MS §5.2 (exit codes 75/78 are never used):
+Implements the ordered procedure of REC §4, which is normative (MS §5.2). Step numbers in the comments are REC §4 step numbers. Exit codes 75/78 are never used.
 
 ```text
 startup():
-  if not flock(MERCURY_HOME/run/mercuryd.lock, LOCK_EX|LOCK_NB): log('daemon.duplicate'); exit(0)          # L1
-  if exists(run/fatal.json): exit(0)
-  store.open(); r = store.quickCheck()
-  if !r.ok: enterSafeMode(noDbWrites = true); return supervisor.loopSafe()          # stay alive; alerts
-  if schema_meta.min_reader_version > APP: writeFatal('schema_too_new'); exit(0)
-  store.migrate()                                                                    # backup first
-  cfg = configLoader.load(); credentialBroker.loadOnce()                             # keychain_locked hold if locked
+  if not flock(MERCURY_HOME/run/mercuryd.lock, LOCK_EX|LOCK_NB): log('daemon.duplicate'); exit(0)        # 1
+  aliveToucher.start()                                    # 1: touch WORK_ROOT/ctl/coordinator.alive from now on
+  mode = crashLoopGuard(run/starts.log)                   # 2: BEFORE the DB is opened or migrated (VD-04)
+  if exists(run/fatal.json): exit(0)                      # 3
+  cfg = configLoader.load(); paths.verifyAndTighten()     # 4: fatal → fatal.json, exit 0
+  store.open(); r = store.quickCheck()                    # 5
+  if !r.ok: enterSafeMode(noDbWrites = true); return supervisor.loopSafe()   # FM-09: reap every agent process, direct ops alert
+  if schema_meta.min_reader_version > APP: writeFatal('schema_too_new'); exit(0)     # 6
+  store.migrate()                                          # 6: backup first
   me = store.write(tx => tx.instances.insert({..., boot_session_uuid}); tx.leases.takeOver('daemon', me))
-  if crashLoopDetected(): holdService.set(global, 'integrity_check_failed' /* safe mode */ …)
+  if mode == 'crash_loop':                                 # VD-04: ops notice, not a SECURITY incident
+     holdService.set({ kind: 'integrity_check_failed', scope: 'global', reason: 'crash_loop', … })   # cleared by ★ unpause --safe-mode
+     notify ops('crash_loop')
 
-  # 0. Audit integrity (RD-4)
-  v = auditVerifier.verify({ fromSeq: lastVerifiedAnchor() })
-  if !v.ok and matchingRestoreJson(): mode = 'awaiting_restore_confirmation'        # until ★ audit.restore_confirm
-  else if !v.ok: holdService.set(global, 'integrity_check_failed'); notify SECURITY once
+  v = auditVerifier.verify({ fromSeq: lastVerifiedAnchor() })                          # 7
+  if !v.ok and matchingRestoreJson(): mode = 'awaiting_restore_confirmation'          # until ★ audit.restore_confirm
+  else if !v.ok: holdService.set(global 'integrity_check_failed', reason 'audit_chain'); notify SECURITY once
 
-  # 1. Agent-uid infrastructure (doctor subset): failure → config_fatal hold for agent dispatch
-  # 2. Processes
-  for run in store.read(tx => tx.runs.active()):
-     if run.status == 'starting' and run.pid == null: markLost(run, 'lost_by_coordinator_crash', consumes=0); continue
+  credentialBroker.loadOnce()                              # 8: keychain_locked hold if locked; missing → config_fatal
+  selfTests()                                              # 9: CLI pins, agent-uid infrastructure, helpers → config_fatal (agents)
+
+  rebooted = lastInstance.boot_session_uuid != currentBootSession()                  # 10: durability (INV-25)
+  for t in nonTerminal with last_commit_sha: if !gitOps.exists(repo, sha): lostByHostReplay(t)
+
+  for run in store.read(tx => tx.runs.active()):                                       # 11
+     if run.status == 'starting' and run.pid == null:
+        id = readProcJson(run.run_dir)                     # VD-02: crash after spawn, before the pid was recorded
+        if id == null: markLost(run, 'lost_by_coordinator_crash', consumes=0); continue
+        run = withIdentity(run, id)                        # then fall through: never re-dispatch while it may be alive
      if safeModeOrSecurityHalt(run): processSupervisor.kill(run.identity()); markLost(run, 'cancelled_by_coordinator', 0); continue
      p = await processSupervisor.probe(run.identity())
      if p == 'alive_match' and run.adoptable: runManager.adopt(run); audit('run.adopted')
      else if p == 'alive_match': await processSupervisor.kill(...); markLost(run, 'cancelled_by_coordinator', 0)
      else:
         exit = readExitFile(run.run_dir)
-        if exit and exit.reason == 'exited': runManager.finalize(run, exit)        # AG@apply inside
+        if exit and exit.reason == 'exited': runManager.finalize(run, exit, { deferUntilLinearRefresh: true })   # VD-03
         else if exit?.reason == 'supervisor_lost' or run.boot_session_uuid != currentBootSession(): markLost(run, 'lost_by_host', 0)
         else: markFailed(run, 'crash')
-  for proc in processSupervisor.listMarked() where proc.runId not adopted: kill or reap + audit('orphan_killed')
-
-  # 3. Durability (INV-25)
-  for t in nonTerminal with last_commit_sha: if !gitOps.exists(repo, sha): lostByHostReplay(t)
-
-  # 4. Outbox and inbox
-  for i in outbox where status = 'in_flight': i.status = 'pending'                  # handlers reconcile before retry
-  inboxProcessor.drain(all)
-
-  # 5. Worktrees and snapshots: resume creating/archiving/removing/reset steps idempotently; clear stale locks
-  # 6. Tasks: recoveryRule[t.state](t) (SM §10); restored DB → reauthorization_required; orphan remote objects
-  # 7. External reconcile: githubPoller.fullReconcile(); linearPoller.fullReconcile()   (recovery.reconcile_max_s)
-  supervisor.loop()
+  for proc in processSupervisor.listMarked() where proc.runId not adopted: kill or reap + audit('orphan_killed')   # 12
+  worktreeHygiene()                                        # 13: resume creating/archiving/removing; stale locks; quarantine strays
+  surfaces.start()                                         # 14: heartbeat, control socket, power helper; safe mode stops here
+  await connectivityGate()                                 # 15: network_down hold until probes pass
+  for i in outbox where status = 'in_flight': i.status = 'pending'                     # 16: handlers reconcile before retry
+  githubPoller.fullReconcile(); linearPoller.fullReconcile()                           # 17: facts via the inbox; inboxProcessor.drain(all)
+  if restoreEpochJustConfirmed():                          # 17: RD-4, VD-01
+     lost = restore.backup_audit_head_seq < lastAnchor.seq or restore.reason == 'new_host'
+     for t in nonTerminal: if lost or !authorityVerifiable(t): block(t, 'reauthorization_required')
+     recordOrphanRemoteObjects()
+  runManager.applyDeferredAfterLinearRefresh()             # VD-03: AG@apply against the fresh spec_sha256
+  timerService.coalescedAfterStart()                       # 18
+  dispatchGate.awaitFullWake(); supervisor.loop()          # 19–20: replayed steps first
 ```
 
 ### 10.7 Outbox delivery with idempotency
