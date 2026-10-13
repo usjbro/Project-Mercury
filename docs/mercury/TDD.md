@@ -263,6 +263,7 @@ A Linear or GitHub change may stop or hold work but **never start it**. Conflict
 | NotificationPolicy | Channel matrix, dedup, coalescing | components §4.15 |
 | AuditLog / AnchorService / Redactor | Hash chain, epochs, off-host anchors, redaction on every sink | components §4.16 |
 | Control socket + CLI | Principals `readonly`, `claude_session`, `operator`, `operator-presence` | components §5 |
+| Other services | TimerService, MergeVerifier, RecoveryManager, TriageService, PresenceVerifier, CredentialBroker, ArtifactStore, Clock, PowerHelperClient | components §4.17 |
 
 ## 9. Agent Responsibilities and Authority
 
@@ -271,7 +272,7 @@ A Linear or GitHub change may stop or hold work but **never start it**. Conflict
 | Claude `triage` | Ranked shortlist of eligible issues | Decision run, no tools | Output carries **no authority** |
 | Claude `authorization` | `authorize` (scope, limits, plan constraints) / `decline` / `defer` / `needs_spec` / `needs_human` | Decision run over base snapshot | Echoes issue id, `spec_hash`, repo, base SHA; coordinator rejects scope widening |
 | Claude `plan_review` | `approve` / `revise` / `reject` / `needs_human` with per-criterion results | Decision run, read-only snapshot tools | Approval bound to plan artifact SHA-256 |
-| Claude `pr_code_review`, `pr_security_review` | `pass` / `revise` / `needs_human`, findings | Two separate runs at exact head SHA | Bound to head SHA, diff hash, snapshot tree; posted as COMMENT |
+| Claude `pr_code_review`, `pr_security_review` | `approve` / `revise` / `reject` / `needs_human`, findings | Two separate runs at exact head SHA | Bound to head SHA, diff hash, snapshot tree; posted as COMMENT |
 | Claude `revision_request` | Codex instructions for non-Claude sources (CI, tests, human review, conflicts) | Decision run | Verbatim rendering used when source is a Claude review (RD-8) |
 | Codex plan / implement / revise | Plan document; code changes in worktree | `codex exec` as `_mercuryagent` | Read-only (plan) / workspace-write no network (implement); cannot commit or push |
 | MERCURY | Everything else in the loop | Deterministic code | No approve/merge/dismiss code path (SEC-102) |
@@ -425,7 +426,7 @@ stateDiagram-v2
     CANCELLED --> [*]
 ```
 
-Global transitions (cancel, revoke, pause/hold, spec change, foreign push, PR closed, integrity failure) apply from many states: state-machine §2.2, §3.7.
+Global transitions G1–G7 (cancel, revoke, pause/hold, spec change, foreign push, PR closed unexpectedly, PR closed by operator → `CANCELLED`, integrity failure) apply from many states; cancel and revoke are refused in `MERGED` (merge verification decides): state-machine §2.2, §3.7.
 
 ### 11.3 Transition authorization (summary)
 
@@ -435,7 +436,7 @@ Global transitions (cancel, revoke, pause/hold, spec change, foreign push, PR cl
 | Codex run result | Plan submitted; implementation result | Run row with valid authorization/approval binding; output schema-valid; authorization guard re-checked at result application |
 | Coordinator (deterministic) | Dispatch claims, commit, test outcome, push/PR, budget decisions, merge verification, holds | Guards per state-machine §8 |
 | External fact (GitHub/Linear poll) | Merge observed, human changes requested, PR closed, CI concluded, spec changed (hold), dependency changed (hold) | Dedup-keyed inbox fact |
-| Operator (CLI) | cancel, revoke, pause, request; ★ presence tier: grant, ack-merge, policy ack, security unhalt, adopt, retry, restore confirm | Socket principal; presence assertion for ★ |
+| Operator (CLI) | cancel, revoke, pause, request; ★ presence tier: grant, ack-merge, policy ack, security unhalt, adopt, retry, restore confirm, … (full list components §5.2) | Socket principal; presence assertion for ★ |
 
 **Invariants (selection; full list INV-01…27):** no Codex run without a valid, unrevoked authorization whose `spec_hash` matches; no implementation run without an approval bound to the current plan hash; a new plan version or new head SHA invalidates the earlier approval/review (approval/review rows are bound, not updated); at most one active task per issue and one active run per task; terminal states have no outgoing transitions (DB trigger); MERCURY never records a human approval.
 
@@ -470,8 +471,8 @@ Owner: [`integrations/claude.md`](integrations/claude.md); schemas `output.plan_
 - **Isolation:** Agent SDK pinned exactly; spawned through `agent-exec` as `_mercuryagent`; `settingSources: []`, no hooks, no MCP, explicit per-decision tool allowlist (none, or Read/Grep/Glob confined by realpath to the snapshot); no `fallbackModel` for authority decisions; model actually used recorded and checked. Fallback mechanism if the SDK cannot be spawned under the agent uid: Messages API with coordinator-implemented confined tools (ALT-B-1).
 - **What Claude reads:** git-object snapshots (no `.git`, no gitattributes processing, symlinks as placeholders, read-only) at the base SHA (authorization, plan review) or head SHA (PR review) — never a Codex worktree (ADR-017).
 - **Prompt envelope:** fixed system prompt + rubric; untrusted inputs wrapped in random-nonce provenance tags; instructions inside untrusted content are explicitly data.
-- **Plan evaluation criteria** (each a scored, machine-readable item): Linear spec compliance; AC coverage (every AC mapped to plan steps and tests); architectural consistency; dependencies; security considerations; test strategy; scope control (no out-of-scope files/features); feasibility; maintainability. **Approval condition:** verdict `approve` only if every criterion is `pass` or `pass_with_note`, no `blocking` finding, plan echo hash matches, and scope ⊆ authorization scope — enforced in code (V4 semantic checks), not only in the prompt.
-- **PR review:** separate code review and security review runs at the exact head SHA, bound to `diff_sha256` and snapshot tree; outputs posted as `COMMENT` reviews (never APPROVE/REQUEST_CHANGES); gate expressed by check run `MERCURY / claude-review` (success only when both pass for that SHA). Security findings: critical/high or outside-diff details withheld on public PRs (generic line + local report id).
+- **Plan evaluation criteria** (exactly nine machine-readable items `criteria[] = {criterion, result ∈ pass|fail|concern|not_applicable, notes}`): Linear spec compliance; AC coverage (every AC mapped to plan steps and tests); architectural consistency; dependencies; security considerations; test strategy; scope control (no out-of-scope files/features); feasibility; maintainability. **Approval condition:** `decision = approve` only if no criterion is `fail`, no finding is `blocking`/`critical`/`high`, `binding.plan_sha256` matches the stored plan, and scope ⊆ authorization scope — enforced in code (messages.md §5.2 V4), not only in the prompt.
+- **PR review:** separate code review and security review runs at the exact head SHA (`decision` ∈ approve/revise/reject/needs_human), bound to `diff_sha256` (normative definition: components.md) and snapshot tree; outputs posted as `COMMENT` reviews (never APPROVE/REQUEST_CHANGES); gate expressed by check run `MERCURY / claude-review` (success only when both pass for that SHA). Security findings: critical/high or outside-diff details withheld on public PRs (generic line + local report id).
 - **Revision loops:** plan revision invalidates prior approval (approval bound to plan hash); new head SHA invalidates prior review; budgets per §11.3; escalation via `BLOCKED` + one notification.
 
 ## 15. GitHub Integration and Merge Governance
@@ -521,7 +522,7 @@ erDiagram
 ```
 
 - **Engine:** SQLite, WAL, `synchronous=FULL`, `fullfsync=ON`, `busy_timeout`, single writer (one process; `flock` single-instance guard), `node:sqlite` behind a Store port (fallback `better-sqlite3`).
-- **Authority tables are append-only** (authorizations, plans, plan_reviews, plan_approvals, pr_reviews, task_transitions, audit_log): UPDATE/DELETE blocked by triggers; `runs` insert triggers check authorization/approval bindings (INV-03/04).
+- **Authority and evidence tables are append-only** (authorizations, plans, plan_reviews, plan_approvals, pr_reviews, task_transitions, audit_log, and the other evidence tables listed in INV-13 / components §6.4): UPDATE/DELETE blocked by triggers; `runs` insert triggers check authorization/approval bindings (INV-03/04).
 - **Artifacts** content-addressed under `MERCURY_HOME/artifacts/<sha256>`; DB stores hash + path.
 - **Outbox / inbox:** outbox rows with idempotency keys and leases; inbox facts with unique dedup keys (catalogue github.md §13).
 - **Durability beyond SQLite:** git commit → fsync → DB transaction; `exit.json` written with fsync + rename.
@@ -540,7 +541,7 @@ erDiagram
 | GitHub endpoints used, permissions, ruleset JSON, retry matrix, dedup keys | github.md |
 | Linear GraphQL operations | linear.md |
 
-Example agent-output contract (excerpt of `output.plan_review`): verdict ∈ {approve, revise, reject, needs_human}; `plan_sha256` echo; `criteria[]` with `{id ∈ spec_compliance|ac_coverage|architecture|dependencies|security|test_strategy|scope|feasibility|maintainability, result ∈ pass|pass_with_note|fail, rationale}`; `required_changes[]`; `findings[]` with severity. All schemas pass metaschema and strict-subset validation (validated by Agent C with `jsonschema` 4.26).
+Example agent-output contract (excerpt of `output.plan_review`; the schema file is normative): `decision` ∈ {approve, revise, reject, needs_human}; `binding.plan_sha256` (plus issue, `spec_sha256`, scope version) echo; `criteria[]` — exactly nine items `{criterion, result ∈ pass|fail|concern|not_applicable, notes}`; `required_changes[]`; `findings[]` with severity. All schemas pass metaschema and strict-subset validation (Agent C, `jsonschema` 4.26), re-verified in Phase 5: 26/26 metaschema, 153/153 `$ref`, 25/25 generated fixtures ([reviews/50](reviews/50-validation-C-feasibility.md) §5).
 
 ## 18. macOS Runtime and Service Management
 

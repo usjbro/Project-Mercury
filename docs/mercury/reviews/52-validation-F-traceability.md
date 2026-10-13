@@ -123,3 +123,54 @@ For each TC it checks that the Covers column cites ≥ 1 registered requirement,
 
 **Unverifiable in design.** Every pass/fail threshold is defined, but none has been measured. Mac-level criteria depend on Phase 0: SEC-T-20 (P0-027), launchd/sleep behaviour (P0-033…046) and the power-loss rig (P0-047). These are **UNVERIFIABLE IN DESIGN — Phase 0 P0-0xx/P0-2xx** as registered in traceability §10.2.
 
+## 3. Brief quality gates (reviews/00-brief.md "Quality gates")
+
+"Pass (design)" means the design specifies the control completely and consistently. It does **not** mean the control is implemented or measured; in the brief's words, design completeness is not validated implementation.
+
+| # | Gate | Status | Evidence | Method |
+|---|---|---|---|---|
+| Q1 | Every subagent delivered, or limitation recorded | **Pass** | Phase 2 reports `reviews/10…15`; Phase 3 reviews `20…25`; Phase 4 revisions `40…45`; Phase 5 `50`, `51`, `52`, `security/security-review.md` all exist; limitations listed in TDD §31 (six items) | Inspection + link lint |
+| Q2 | All major interfaces contracted | **Pass** (one Low) | Envelope + 16 message schemas + 8 strict `output.*` contracts + `common` (26 files; `output.*` have `additionalProperties:false`); control API and CLI (components §5.1–§5.5); `agent-exec`/`agent-ctl` grammar (macos-service §3.5, §3.7); GitHub endpoints and allowlist (github.md §10.4); Linear operations (linear.md); ports (components §4). TDD §10's envelope example omits 4 schema-required fields (VF-12) | Script over `protocols/schemas/` + inspection |
+| Q3 | Deterministic lifecycle | **Pass (design)** | Single transition table (state-machine §3, 54 rows T01…, G1…); FR-080/FR-084; PROP-10 replay determinism; TC-SM-001/002 | Script + inspection |
+| Q4 | Every transition has authorization rules | **Pass** | 54/54 rows have Initiator, Required evidence and Persistent side effects. Guards are "—" only on T38, G1a, G1b; these are authority-*removing* cancel/revoke transitions gated by principal (operator socket or Claude revoke run). INV-19; TDD §11.3; PROP-08 | Script over state-machine §3 |
+| Q5 | Persistence and recovery specified | **Pass (design)** | DDL and triggers (components §6, §6.4); durability ordering (macos-service §14.2); ordered startup recovery (recovery §4; components §10.6); per-state recovery (state-machine §10); FM-01…30, RB-01…18 | Inspection |
+| Q6 | Communication versioned and traceable | **Pass** | `envelope.schema.json` requires `schema`, `schema_version`, `message_id`, `correlation_id`, `causation_id`, `dedup_key`, `occurred_at`, `recorded_at`, `issue`, `repo`, `task_id`, `run_id`, `producer`, `actor`, `recorded_by`, `payload_sha256`, `payload`; N/N-1 rule (messages.md); FR-060/061/065 | Script |
+| Q7 | Claude authorization required before development | **Pass (design)** | CON-005, FR-022 (dispatch and result application), INV-03 trigger on `runs` insert, PROP-01, PROP-03, TC-SM-004. UNVERIFIABLE until M3 tests run | Trace |
+| Q8 | Codex cannot run unapproved work through the coordinator | **Pass (design)** | CON-006, INV-04/05, PROP-02, TC-UNIT-012, TC-SM-007; fresh implementation thread with hash-checked plan (codex.md) | Trace |
+| Q9 | Human approval enforced via GitHub permissions and protections | **Pass with condition** | Ruleset (github.md §9.1: CODEOWNERS, last-push approval, no bypass, App-pinned checks); endpoint allowlist SEC-102; ADR-014 modes; threat-model §5.2.2 path proof. **Condition:** on a personal-account repo only G-DETECT is possible (merge actor detected, not prevented); G-ORG (OD-01) is required before unattended use (G-S5). UNVERIFIABLE IN DESIGN — Phase 0 P0-072 (SEC-T-16 on the sandbox), P0-233/235/237 | Trace + inspection |
+| Q10 | Security independently reviewed | **Pass** | `reviews/24-review-E-security.md` (Phase 3); `security/security-review.md` (Phase 5, E); cross-review by C/D/F in `50`/`51`/`52` | Inspection |
+| Q11 | Failure scenarios documented | **Pass** | recovery §2 host classes, §5 FM catalogue, §7 runbooks, §8 "silent" tree; state-machine §7.1 failure classes; github.md §15 retry matrix | Inspection |
+| Q12 | Measurable verification criteria | **Pass** (after fixes) | §2 of this report: 192/192 requirements and 284/284 live TCs have pass/fail criteria; 4 criteria were tightened in place | Script |
+| Q13 | Roadmap reflects dependencies | **Pass** (after fixes) | §5 of this report: 80 issues, 0 dependency cycles, 1 phase-placement inversion fixed (MERC-005); security gates placed before first use | Script + inspection |
+| Q14 | Incremental implementability | **Pass (design)** | M1 fakes-first core with every invariant trigger; one external capability per milestone; DoR/DoD (traceability §12–§13); C's feasibility validation `reviews/50` | Inspection |
+| Q15 | Assumptions and open decisions documented | **Pass with findings** | ASM closure register (traceability §10.2); OD-01…37 (§9); RISK-01…34 + RISK-41…56; TDD §30. ADR/OD default contradictions in §6 (VF-14 Medium, VF-15 Low) | Script + inspection |
+| Q16 | "Do not confuse theoretical design completeness with validated implementation" | **Pass** | TDD header "Not approved for implementation"; requirement lifecycle (traceability §1.4: Baseline candidate, nothing Verified); every Mac-level item routed to Phase 0 | Inspection |
+
+## 4. Brief completeness (operating model, constraints, A–J, sections, diagrams)
+
+| Brief item | Present in | Result |
+|---|---|---|
+| Operating model 1–15 | traceability §2.1 maps each step to ≥ 1 requirement; TDD §1, §7.3, §9–§15, §20. Step 9 deviation ("Codex prepares a PR": the coordinator creates the PR) is documented with rationale in TDD §25 and ADR-006 | Pass |
+| Hard constraints (7) + no inbound + design-only | traceability §2.2 → CON-001…018; TDD §3, §6, §11.3, §15, §19 | Pass |
+| A Orchestration (authority, dispatch, concurrency, dependencies, status, failure detection, cancel/resume, duplicate prevention, multi-process, versioned authorization) | TDD §8, §9, §11, §23; components §7; state-machine §8; FR-001…055 | Pass |
+| B Communication: mechanism evaluation (JSON, queues, SQLite, CLI, MCP, files, IPC, HTTP) | TDD §10 summary; overview §7.1; ADR-003 | Pass |
+| B Schemas (14 listed in the brief) | task.authorization, task.assignment, plan (implementation plan), plan.review, plan.approval, plan.revision_request, implementation.progress, test.results, pr.created, code.review, security.findings, revision.request, task.completed, task.failed: **14/14 files present**, plus policy.escalation, triage.result, 8 output contracts | Pass |
+| B Required fields (correlation, schema version, timestamps, issue, repo, execution, dedup) | envelope required list (Q6) | Pass |
+| C 18 brief states | 17 task states plus issue-level `discovered`; mapping table TDD §11.1; each name present in state-machine.md (counts 8–81 occurrences); full transition table + Mermaid (TDD §11.2; state-machine 3 diagrams) | Pass |
+| D Plan-approval criteria (9) + machine-readable results + conditions + max cycles + escalation | TDD §14 (9 criteria = `output.plan_review` enum); V4 semantic checks (messages §5.2); OD-08 budgets; `BLOCKED` + `repeated_review_failure` | Pass |
+| E PR workflow + governance | TDD §13, §15; github.md §6, §8, §9, §10 | Pass |
+| F Local execution (launchd, login, supervision, shutdown, crash, DB integrity, checkpoints, connectivity, orphans, worktree cleanup, restart) | TDD §18, §20; macos-service; recovery | Pass |
+| G Notifications (7 brief events) | TDD §21 matrix and components §4.15: plan-review failure → `repeated_review_failure`; human judgement → `decision_needed`; security → `security_escalation`/`security_halt`; unrecoverable → `unrecoverable_failure`; PR ready → `pr_ready_for_approval`; CI → `ci_intervention_needed`; merge → `merge_completed`. Dedup keys per kind. One channel mismatch, TDD vs components (VF-18) | Pass |
+| H Security (16 topics, SW vs POL) | TDD §19 table; threat-model §5 tagged [SW]/[GH]/[OS]/[POL] | Pass |
+| I Ten audit questions | components §5.7 rows 1–10 map 1:1 to the brief's questions; TC-E2E-010 oracle; FR-260 (pointer corrected to §5.7) | Pass |
+| J Test types (14) | Verification plan L1–L14 cover all 14. TDD §22 summary omits generic integration (L4) and duplicate events (L10) (VF-13) | Pass (TDD summary Low) |
+| 32 TDD sections | `## 1.`…`## 32.` titles match the brief (26 is spelled out "Architecture Decision Records") | Pass |
+| Mermaid types: architecture, task workflows, message sequences, data relationships, state transitions, failure recovery | TDD §7.1/§7.2 (flowchart), §7.3 (flowchart), §10.1/§10.2 (sequenceDiagram), §16 (erDiagram), §11.2 (stateDiagram-v2), §20 (flowchart) | Present. **§10.2 does not parse (VF-01)** |
+
+**Mermaid lint (`mm/check.mjs`, `mmd/check.mjs`; mermaid 10.9.1 and 11.4.1 with jsdom, `mermaid.parse`).** 29 blocks in non-review docs.
+
+- **10.9.1:** 28/29 parse. The one failure is TDD.md block 5 (§10.2). In a `sequenceDiagram`, `;` acts as a statement separator, so `MD->>GH: push … from mirror; draft PR; check runs pending` (line 344) and line 348 split into invalid statements.
+- **11.4.1:** the same failure. Three flowcharts (issue-breakdown, roadmap, threat-model) raise "Element is not defined", which is a jsdom environment limitation; all three parse under 10.9.1.
+- **Fix, verified on a patched copy under both versions:** replace `;` with `,` in TDD lines 344 and 348.
+- **Limitation:** parse only, no rendering. Layout and readability are unchecked.
+

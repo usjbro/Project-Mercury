@@ -95,7 +95,7 @@ codex exec resume <impl_thread_id> --json --strict-config --ignore-rules \
 
 ### 3.5 Thread ids
 
-- Codex assigns the thread id (RT §4). The coordinator captures it from the first `thread.started` event and persists it (`runs.codex_thread_id`, `tasks.codex_*_thread_id`) in its own transaction before consuming further events.
+- Codex assigns the thread id (RT §4). The coordinator captures it from the first `thread.started` event and persists it (`runs.session_id`, `tasks.codex_*_thread_id`) in its own transaction before consuming further events.
 - If the coordinator crashes before persisting it, the adopted run's `stdout.jsonl` is re-read from the start on adoption (§12.2), so the id is recovered. `exec resume --last` is never used.
 
 ### 3.6 Output schemas: `codex-strict` wire copies (RD-15, RB-01)
