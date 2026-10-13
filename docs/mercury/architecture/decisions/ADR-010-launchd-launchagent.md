@@ -49,7 +49,7 @@ RA-22, RA-24, RD-10, RD-21, RD-28, RE-01 (coordinator placement part), RD-17.
 
 ## Operator decisions
 - **OD-14** power policy (default: `caffeinate -i` only while runs are active).
-- **OD-36** dedicated macOS account for the coordinator (default: not in v1).
+- **OD-36** dedicated macOS account for the coordinator (default: not in v1; **must be decided before unattended operation / gate G-S5**, reconciliation Addendum A).
 
 ## Revision history
 - Phase 4: values removed and referenced; scope limited to the coordinator; startup and exit contract per RD-11; SIGTERM keeps adoptable runs; U2 recorded as OD-36.

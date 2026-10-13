@@ -199,14 +199,14 @@ IDs are proposals for F (`TC-REC-*`, `TC-NET-*`, `TC-OPS-*`); Phase 2 `T-REC-nn`
 | Test | Scenario and method | Env | Pass criterion |
 |---|---|---|---|
 | TC-REC-001 (T-REC-01) | SIGKILL before and after every outbound call and every commit; 100 seeds | T2 | 0 duplicate remote objects; same final states as a fault-free run; git and SQLite consistent (`last_commit_sha` present) |
-| TC-REC-002 (T-REC-02) | Power-loss durability (see §6.1) | VM | 50/50 cycles: `integrity_check` ok; ledger matches; every recorded `last_commit_sha` present or the step classified `lost_by_host`; no torn `exit.json` accepted |
-| TC-REC-003 (T-REC-03) | Kill `mercuryd` mid-Codex run (fake agent writing JSONL for 2 min) under `agent-exec` | T2 / VM | Run adopted and finalized; no re-run; guard re-checked before acting |
-| TC-REC-004 (T-REC-04) | 2 h sleep gap, both monotonic modes | T1 | Budget unchanged; grace applied; one summary notice |
+| TC-REC-020 (was TC-REC-002) (T-REC-02) | Power-loss durability (see §6.1) | VM | 50/50 cycles: `integrity_check` ok; ledger matches; every recorded `last_commit_sha` present or the step classified `lost_by_host`; no torn `exit.json` accepted |
+| TC-REC-030 (was TC-REC-003) (T-REC-03) | Kill `mercuryd` mid-Codex run (fake agent writing JSONL for 2 min) under `agent-exec` | T2 / VM | Run adopted and finalized; no re-run; guard re-checked before acting |
+| TC-REC-031 (was TC-REC-004) (T-REC-04) | 2 h sleep gap, both monotonic modes | T1 | Budget unchanged; grace applied; one summary notice |
 | TC-REC-005 (T-REC-05) | Agent grandchildren that `setsid` away; kill `mercuryd` | VM | After restart: 0 `_mercuryagent` orphans (`agent-ctl list`) |
-| TC-REC-006 (T-REC-06) | Restore a 24 h-old backup while fake GitHub has newer PRs | T2 | Restore epoch recorded after presence confirmation; orphan remote objects reported; 0 duplicate PRs; 0 auto-adoptions; tasks with missing authority `BLOCKED(reauthorization_required)` |
-| TC-REC-007 (T-REC-07) | Fake Codex emits a schema-invalid final message | T2 | Classified per SM §7.1; `config_fatal`/circuit on repeat; no task FAILED for environment reasons |
-| TC-REC-008 (T-REC-08) | `launchctl kill TERM` with one Claude and one Codex fake run | T2 / VM | Exit within `svc.shutdown_budget_s`; Claude run `cancelled_by_coordinator`; Codex run still alive and adopted on restart |
-| TC-REC-009 | Supervisor lease: stop `mercuryd` permanently with an active run | VM | Run ended after `supervisor.lease_stale_min` of credited time with `reason: supervisor_lost`; next start classifies `lost_by_host`, 0 attempts consumed |
+| TC-REC-019 (was TC-REC-006) (T-REC-06) | Restore a 24 h-old backup while fake GitHub has newer PRs | T2 | Restore epoch recorded after presence confirmation; orphan remote objects reported; 0 duplicate PRs; 0 auto-adoptions; tasks with missing authority `BLOCKED(reauthorization_required)` |
+| TC-AFS-008 (was TC-REC-007) (T-REC-07) | Fake Codex emits a schema-invalid final message | T2 | Classified per SM §7.1; `config_fatal`/circuit on repeat; no task FAILED for environment reasons |
+| TC-REC-007 (was TC-REC-008) (T-REC-08) | `launchctl kill TERM` with one Claude and one Codex fake run | T2 / VM | Exit within `svc.shutdown_budget_s`; Claude run `cancelled_by_coordinator`; Codex run still alive and adopted on restart |
+| TC-REC-033 (was TC-REC-009) | Supervisor lease: stop `mercuryd` permanently with an active run | VM | Run ended after `supervisor.lease_stale_min` of credited time with `reason: supervisor_lost`; next start classifies `lost_by_host`, 0 attempts consumed |
 | TC-REC-010 | Lid-close sleep ≥ 2 h during `codex_implement` | T4 ⓗ | `network_down`/`transient_api`, resumed or replayed; 0 attempts consumed; token re-minted |
 | TC-REC-011 | Idle-sleep assertion present only while runs are active | T4 | Assertion present/absent as expected |
 | TC-REC-012 | Dark wake (Power Nap) with tasks queued | T4 ⓗ | 0 dispatches during dark wake; dispatch after full wake |
@@ -217,7 +217,6 @@ IDs are proposals for F (`TC-REC-*`, `TC-NET-*`, `TC-OPS-*`); Phase 2 `T-REC-nn`
 | TC-REC-017 | BTM "Allow in the Background" off | T4 ⓗ | `doctor` reports it; watchdog alerts with pending work |
 | TC-REC-018 | Upgrade during a real Codex run | T4 | Adopted; finalized; 0 re-runs |
 | TC-REC-019 | Restore with anchors ahead of the backup, including a revocation and a CLI cancel recorded after the backup | T2 | Epoch recorded; 0 cancelled tasks; every non-terminal task `BLOCKED(reauthorization_required)`; 0 Codex dispatches before re-authorization; authority only shrinks |
-| TC-REC-020 | Power-loss VM cycles (= TC-REC-002 at scale) | VM | As TC-REC-002 |
 | TC-REC-021 | Merged while asleep > 24 h | T2 virtual clock | Verified, not BLOCKED (RD-14 timer rule) |
 | TC-REC-022 | Wrapper rejects: tampered `spec.json` mode, symlinked `--run-dir`, unknown flag, key on fd 3 for `verify` | VM | 100 % rejected with exit 125; nothing executed; `config_fatal` hold |
 | TC-REC-023 | Agent strips ACLs in its worktree | VM | `policy_violation`; `BLOCKED(security_policy_violation)`; nothing committed |

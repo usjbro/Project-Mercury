@@ -112,7 +112,7 @@ Requirement areas and their anchors:
 | Security (SEC) | Agent uid isolation; endpoint allowlist; snapshot reviews; injection defences; audit chain and anchoring |
 | Operations (OPS) | Install/upgrade/rollback/restore runbooks, liveness watchdog, `mercury doctor` |
 
-Every brief requirement (operating model 1–15, hard constraints, content areas A–J, quality gates) maps to at least one requirement ID; the coverage matrix is in [`reviews/25-review-F-coverage.md` §3](reviews/25-review-F-coverage.md) and the RTM in §29.
+Every brief requirement (operating model 1–15, hard constraints, content areas A–J, quality gates) maps to at least one requirement ID; the normative coverage map is [`planning/traceability.md` §2](planning/traceability.md) (Phase 3 matrix in `reviews/25-review-F-coverage.md` §3 kept as history) and the RTM is in §29.
 
 ## 6. Architecture Principles
 
@@ -284,7 +284,7 @@ A Linear or GitHub change may stop or hold work but **never start it**. Conflict
 
 **Mechanism evaluation (summary).** Structured JSON messages persisted in SQLite and exchanged with agents through per-run files on the agent uid's `WORK_ROOT/runs/<run_id>/{in,out}` were chosen over: Slack-like chat (the failure being replaced), MCP as a bus (`codex mcp-server` removed; adds a live channel and tool surface to injected agents), HTTP/IPC servers (inbound surface, no benefit on one host), and direct agent-to-agent calls (breaks authority mediation). Agent CLI execution is the transport; strict output schemas (`--json-schema` / SDK `outputFormat`; Codex `--output-schema`) are the contract. See [ADR-003](architecture/decisions/ADR-003-coordinator-mediated-agent-communication.md), [`architecture/overview.md` §7](architecture/overview.md).
 
-**Envelope** (every persisted message; agents never write envelopes — the coordinator wraps validated agent output):
+**Envelope** (illustrative; `envelope.schema.json` is normative. Every persisted message; agents never write envelopes — the coordinator wraps validated agent output):
 
 ```json
 {
@@ -295,6 +295,10 @@ A Linear or GitHub change may stop or hold work but **never start it**. Conflict
   "causation_id": "run_01J...",
   "dedup_key": "plan.review:tsk_01J...:pln_01J...:v3",
   "occurred_at": "2026-10-12T18:04:05.123Z",
+  "recorded_at": "2026-10-12T18:04:05.456Z",
+  "recorded_by": "mercuryd",
+  "actor": {"kind": "claude_run", "id": "run_01J..."},
+  "payload_sha256": "9f2c...",
   "issue": {"id": "uuid", "identifier": "JAM-204"},
   "repo": "usjbro/network_monitor",
   "task_id": "tsk_01J...",
@@ -342,11 +346,11 @@ sequenceDiagram
     MD->>MD: diff gate, secret scan, policy pre-checks, plumbing commit
     MD->>VR: verify at commit SHA (no network)
     VR-->>MD: test.results pass
-    MD->>GH: push mercury/jam-n-slug from mirror; draft PR; check runs pending
+    MD->>GH: push mercury/jam-n-slug from mirror, draft PR, check runs pending
     GH-->>MD: poll: non-MERCURY CI concluded
     MD->>CL: code review + security review at head SHA (snapshot)
     CL-->>MD: verdicts pass (echo head SHA, diff hash)
-    MD->>GH: COMMENT reviews; MERCURY / claude-review success; PR ready; request review
+    MD->>GH: COMMENT reviews, MERCURY / claude-review success, PR ready, request review
     GH-->>OP: review request (GitHub Mobile)
     OP->>GH: approve + merge
     GH-->>MD: poll: merged
@@ -626,7 +630,7 @@ Key guarantees: recovery only removes authority, never grants it; adopted output
 | Event | Channel | Dedup / rate |
 |---|---|---|
 | PR ready for human approval | GitHub review request on the PR | Once per head SHA |
-| CI failure needing intervention (after fix budget) | GitHub PR comment @operator + Linear comment | Once per block |
+| CI failure needing intervention (after fix budget) | GitHub PR comment @operator (channel matrix: components §4.15) | Once per block |
 | Repeated plan-review failure (budget exhausted) | Linear comment @operator + label `mercury:needs-human` | Once per block |
 | Architecture/scope decision needing human judgement (`needs_human`) | Linear comment @operator | Once per decision |
 | Security escalation, `security_halt`, merge verification failure | `mercury-ops` issue (security) + PR/Linear comment | Once per incident |
@@ -643,6 +647,7 @@ Owner: [`testing/verification-plan.md`](testing/verification-plan.md) (test leve
 | Level | Environment | Example pass/fail criterion |
 |---|---|---|
 | Unit | Fakes, FakeClock (both clock modes) | 100 % of guards and validators covered by positive and negative cases |
+| Integration (generic) | macOS runner, both SQLite drivers | One positive and one negative case per DB trigger; 0 surviving child processes after each test |
 | State machine / property | Generated sequences | 0 invariant violations in 10,000 generated sequences |
 | Contract | Schemas + fixtures + wire copies | Every schema validates fixtures; unknown fields rejected; wire copies accepted by pinned CLIs (Phase 0) |
 | Crash injection | Fakes, every crash point | 0 duplicate PRs, comments, reviews or Linear writes across 1,000 randomized crash runs; final state equals no-crash run |
@@ -651,6 +656,7 @@ Owner: [`testing/verification-plan.md`](testing/verification-plan.md) (test leve
 | Agent failure simulation | Scripted fake agents | Timeouts, stalls, schema violations, crashes classified correctly |
 | Network interruption | Fault proxy | No attempts consumed by network loss; delivery resumes |
 | Sleep / restart / power loss | Real Mac (T4); macOS guest VM for power loss | No run killed due to sleep; 0 lost commits after 50 forced VM stops |
+| Duplicate events | Replayed and reordered poll facts | Each duplicate input → exactly one effect; 0 repeated notifications in 100 unchanged polls; A→B→A flips observed |
 | Concurrency | Load property tests | Limits never exceeded; no starvation beyond aging bound |
 | Security boundary | Real Mac + sandbox | SEC-T-20 credential canaries unreadable from every agent kind; hook-planting; endpoint allowlist |
 | Unauthorized merge attempts | Sandbox repo with production ruleset | Every MERCURY credential fails to approve, merge, bypass, or change rules |
@@ -701,11 +707,11 @@ Index with statuses: [`architecture/decisions/README.md`](architecture/decisions
 
 Owner: [`planning/roadmap.md`](planning/roadmap.md). Phases: **P0** environment verification, identities and governance setup (P0a Mac and agent CLI checks; P0b agent-uid infrastructure and SEC-T-20; P0c identities, sandbox repo/team governance; P0d MERCURY repo CI) → **M1** core (DDL + all invariant triggers + audit chain, state machine + holds, derived queue, AgentLauncher, control socket/CLI, fakes, property suite) → **M2** read-only pollers + drift monitor → **M3** Claude adapter under agent uid, snapshot builder, authorization records → **M4** Codex planning, plan review loop → **M5** implementation, verify, git hardening, secret scan, policy pre-checks, PR (security gate before first sandbox push) → **M6** Claude code + security review, check runs, revision loops → **M7** merge verification, Linear per mode, notifications, audit trace and anchors, watchdog → **M8** hardening (crash injection, real-Mac sleep/restart, injection corpus, SAC) → **M9a** shadow → **M9b** supervised pilot (requires target-repo governance; G-DETECT risk acceptance or G-ORG) → **M9c** cutover. Unattended operation additionally requires G-ORG and a decision on OD-36.
 
-**Effort (Agent F, Phase 4):** base 156 P50 / ~214 P90 engineer-days, +12/22 for conditional issues; ~7 months P50, 9–10 months P90 calendar for one engineer-equivalent. The critical path runs through P0 (operator time on the Mac and identity/governance setup) → M1 core → M3 → M4 → M5 security gates → M6 → M7 → M8. Delivery risks RISK-41…56 are in roadmap.md.
+**Effort (Agent F, re-estimated in Phase 5):** 157 P50 / ~216 P90 engineer-days, plus contingency for conditional issues; ~7 months P50, 9–10 months P90 calendar; dependency critical path ≈ 51 days of the issue graph. The critical path runs through P0 (operator time on the Mac and identity/governance setup) → M1 core → M3 → M4 → M5 security gates → M6 → M7 → M8. Delivery risks RISK-41…56 are in roadmap.md.
 
 ## 28. Issue Breakdown and Dependencies
 
-Owner: [`planning/issue-breakdown.md`](planning/issue-breakdown.md) (80 proposed issues `MERC-nnn` in 13 epics, 3 conditional; epics → issues → subtasks with dependencies, requirement IDs, acceptance criteria, effort with uncertainty, critical path). These are proposals; **no Linear issues have been created**.
+Owner: [`planning/issue-breakdown.md`](planning/issue-breakdown.md) (82 proposed issues `MERC-nnn` — 79 base + 3 conditional — in 13 epics; epics → issues → subtasks with dependencies, requirement IDs, acceptance criteria, effort with uncertainty, critical path). These are proposals; **no Linear issues have been created**.
 
 ## 29. Requirements Traceability Matrix
 
@@ -721,10 +727,10 @@ Owner: [`planning/traceability.md`](planning/traceability.md): requirement → d
 
 | OD | Decision | Default | Needed by |
 |---|---|---|---|
-| OD-01 | Merge-actor mode | G-DETECT (sandbox/pilot, written acceptance); **G-ORG before unattended** | P0 / M9b |
+| OD-01 | Merge-actor mode | G-DETECT (sandbox/pilot, written acceptance); **G-ORG before unattended** | P0c / M9b / M9c (G-ORG) |
 | OD-03/04 | Claude / Codex billing and keys | Dedicated API keys with spend limits | P0 |
 | OD-05 | Linear identity | OAuth app `actor=app` | P0 |
-| OD-06 | Linear `Done` owner | `integration_owns_done` | M7 |
+| OD-06 | Linear `Done` owner | `integration_owns_done` | M4 (branch naming) / M7 |
 | OD-07 | Concurrency | Codex 1, Claude 2, 1/repo | M1 |
 | OD-08 | Revision budgets, expiry | 3/3/3/5; 7 days | M4 |
 | OD-09 | Codex network; deps scripts | Never; `--ignore-scripts` | M5 |
@@ -736,8 +742,8 @@ Owner: [`planning/traceability.md`](planning/traceability.md): requirement → d
 | OD-20 | `mercury-ops` App, HMAC position | Yes; HMAC SHOULD | P0 |
 | OD-21 | Security findings on public PRs | Withhold critical/high/pre-existing | M6 |
 | OD-35 | Policy checklist (2FA, no PATs, Linear coding sessions off, Actions settings, rotate leaked Slack token) | Do in P0 | P0 |
-| **OD-36** | Dedicated macOS account for the coordinator (U2) | **Decide before unattended operation** | Unattended |
-| OD-37 | `actions:read` for `mercury-bot` | Not granted | M6 |
+| **OD-36** | Dedicated macOS account for the coordinator (U2) | **Decide before unattended operation** | M8 exit (decision); in force at G-S5 / M9c |
+| OD-37 | `actions:read` for `mercury-bot` | Not granted | P0c / M6 |
 
 **Open questions** (not blocking design approval): whether `statuses:write` is required for check pinning; strict-mode keyword support in provider structured outputs (mitigated by wire copies); whether a completed check run's conclusion can be changed (ASM-B-56); `k_auth` escrow vs re-authorization on a new Mac (OD-D-07).
 

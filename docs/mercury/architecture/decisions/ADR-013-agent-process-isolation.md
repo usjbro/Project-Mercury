@@ -58,4 +58,4 @@ RF-01, RD-01, RE-01 (Critical), RA-02, RA-24, RB-08, RC-09, RD-02, RD-25, RD-26,
 ## Operator decisions
 - **OD-18** agents under a separate macOS uid (default: adopt; this ADR assumes it).
 - **OD-31** Keychain `-T /usr/bin/security` ACL (acceptable only together with OD-18).
-- **OD-36** optional dedicated account for the coordinator (default: not in v1).
+- **OD-36** optional dedicated account for the coordinator (default: not in v1; **must be decided before unattended operation / gate G-S5**, reconciliation Addendum A).

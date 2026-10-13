@@ -24,7 +24,7 @@
    - **G-SPLIT:** no MERCURY credential has merge capability (pushes by deploy key, PR operations by an App without `contents:write`). Allowed only if Phase 0 verifies ASM-E-01, ASM-E-02, ASM-E-07 and B's two pinning tests (RB-06).
    - **G-DETECT:** personal repository; merge actor verified after the fact.
 2. **Mode by stage (OD-01):** G-DETECT is acceptable for the sandbox and the supervised pilot **with written operator risk acceptance**. **G-ORG is required before unattended or overnight operation** on target repositories.
-3. **Ruleset in all modes** (rulesets, not classic protection, so drift is readable by `mercury-ops`): PR required; 1 approval; Code Owner review with `CODEOWNERS` naming only the operator; approval of the most recent reviewable push; dismiss stale approvals; no bypass; block force-push and deletion; `allow_auto_merge=false`; review-thread resolution per OD-22; and the two required checks below. The exact ruleset JSON is in `github.md` §9.
+3. **Ruleset in all modes** (rulesets, not classic protection, so drift is readable with a `mercury-bot` token narrowed to `metadata:read`): PR required; 1 approval; Code Owner review with `CODEOWNERS` naming only the operator; approval of the most recent reviewable push; dismiss stale approvals; no bypass; block force-push and deletion; `allow_auto_merge=false`; review-thread resolution per OD-22; and the two required checks below. The exact ruleset JSON is in `github.md` §9.
 4. **Two required check runs**, created by `mercury-bot` and **pinned to its integration id**:
    - **`MERCURY / claude-review`**: `success` only when both the Claude code review and the Claude security review pass for the exact head SHA. Any new push resets it.
    - **`MERCURY / policy`**: deterministic pre-checks only (protected paths, dependency and lockfile changes, build scripts, instruction files; list in `threat-model.md` SEC-310). It stays `neutral` or `failure` until the operator acknowledges the change through `mercury policy ack`, a **human-presence** command ([ADR-019](ADR-019-notifications-and-operator-presence.md)). Until acknowledged, the task is `BLOCKED(policy_ack_required)` and no `deps_install` uses a changed lockfile.
@@ -67,6 +67,6 @@ RA-04, RA-06, RA-17, RA-18, RB-03, RB-04, RB-05, RB-06, RC-01, RC-02, RC-17, RE-
 ## Operator decisions
 - **OD-01** governance mode (default: G-DETECT with written acceptance for sandbox and pilot; G-ORG before unattended operation).
 - **OD-21** security findings on public PRs.
-- **OD-22** require review-thread resolution (default on).
+- **OD-22** require review-thread resolution (default **off**; if turned on, MERCURY posts body-only reviews, github.md §6.3) — aligned with the register, github.md ruleset and SEC-100 (VF-14).
 - **OD-28** operator merges before the Claude review (default: verification policy notice and `ack-merge`).
 - **OD-35** policy checklist (ruleset, Actions settings, interactive-agent restrictions).
