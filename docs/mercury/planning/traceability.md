@@ -569,7 +569,7 @@ E owns each statement, level, tag and verification method in `security/threat-mo
 | SEC-203 | M | Per-task generated `CODEX_HOME` | SEC-603 | S | HMAC on authority rows |
 | SEC-204 | M | Claude run profiles | SEC-604 | M | Off-host anchoring |
 | SEC-205 | M | Review snapshots | SEC-605 | M | `audit verify` |
-| SEC-206 | M | Agent egress control (MUST part; SHOULD part tracked by P0-049) | SEC-606 | S | Log retention |
+| SEC-206 | M | Agent egress control (MUST incl. `deps_install` registry egress; P0-049 gates G-S2 when `deps_install` is enabled for a non-sandbox repo) | SEC-606 | S | Log retention |
 | SEC-207 | M | Per-run scratch | SEC-607 | M | Restore epochs |
 | SEC-208 | M | Forbidden Codex flags | SEC-701 | M | Pinned agent binaries |
 | SEC-209 | M | Instruction-file integrity | SEC-702 | M | Dependency-change escalation |
@@ -891,7 +891,7 @@ TC aliases of E's `SEC-T-nn` follow §8.3 (TC-SEC-1nn, TC-GOV-11n, TC-PI-13n). "
 | SEC-203 | M | ADR-005 | TC-INT-026, TC-SEC-122 | M4 | G-S1 |
 | SEC-204 | M | ADR-004 | TC-SEC-103, TC-SEC-123, TC-SEC-006 | M3 | G-S1 (SAC-03) |
 | SEC-205 | M | ADR-017 | TC-SEC-124 | M3 | G-S3 |
-| SEC-206 | M | ADR-013 | TC-SEC-125, P0-049 | M8 | — (MUST part also via SEC-211/215) |
+| SEC-206 | M | ADR-013 | TC-SEC-125, P0-049 | M4 (G-S2 evidence, if `deps_install` enabled) / M8 | G-S2 (P0-049, when `deps_install` is enabled for a non-sandbox repo) |
 | SEC-207 | M | ADR-013 | TC-INT-025 | M3 | G-S2 |
 | SEC-208 | M | ADR-005 | TC-SEC-122, P0-048 | M4 | G-S1 |
 | SEC-209 | M | ADR-005 | TC-SEC-126 | M4 | G-S1 |
@@ -1250,7 +1250,7 @@ OD-37 was added by Addendum C. Deduplication: the 60 raw items across A (5 + 2 q
 | ASM-D-35, RD-18 (dark-wake detection via power helper) | P0-046 | M5 (D) / M1 logic | Open |
 | ASM-F-11, RD-24 (macOS guest VM power-loss rig) | P0-047 | M8 | Open |
 | ASM-E-10 (managed settings, `requirements.toml`) | P0-048 | M3 | Open |
-| ASM-E-06 (agent-uid egress control) | P0-049 (E specifies) | SEC-206 (SHOULD); G-S2 if chosen for `deps_install` | Open |
+| ASM-E-06 (agent-uid egress control) | P0-049 (procedure: `security/threat-model.md` §10.4) | SEC-206: the `deps_install` registry-egress part is **MUST**; **P0-049 gates G-S2 whenever `deps_install` is enabled for a non-sandbox repository** (VE-17) | Open |
 | ASM-B (Codex output-schema failure behaviour) | P0-209 | M4 | Open |
 | ASM-E-17 (`disableAllHooks` vs SDK hooks) | P0-201 | G-S1 | Open |
 | RD-15 (wire-copy schemas accepted by both providers) | P0-211 | M3 | Open |

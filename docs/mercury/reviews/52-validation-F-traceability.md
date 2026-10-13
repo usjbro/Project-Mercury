@@ -50,7 +50,7 @@ Triage of the 64 raw unresolved citations:
 | Registry band endpoints and wildcards | CON-099, FR-999, NFR-109, OPS-099, RISK-35/40/99, P0-050/079, NFR-04x/08x, TC-GOV-11n/11x, TC-PI-13n/13x | Not citations. Pass |
 | Retired or withdrawn rows listed as such | SEC-001…099 (traceability §4.2); TC-SEC-002/005/007, TC-GOV-003/007, TC-PI-005 (VP §8.18); ASM-B-03/15/17/18/20 (github.md §19 "Withdrawn"); ASM-D-15/22/23 (macos-service §16 "Withdrawn") | Pass. One exception: ASM-B-18 is listed as withdrawn but is still cited as a live assumption in traceability §10.2 (row "ASM-A-05, ASM-B-18 → P0-038"). **Fixed in place** (VF-07) |
 | Phase-2 two-digit P0 aliases | P0-01, P0-25 (alias statement, valid); **P0-26…P0-32** in overview.md:626/630, ADR-013:31, ADR-020:56, threat-model §10.3 (958–996) | Meaning is unambiguous (1:1 with P0-026…032). However, D declares aliases only for `P0-01…P0-25`, and the registry rule says new text uses canonical IDs. **VF-05 (Low, A/E)** |
-| Truly undefined | **P0-049**: cited in 8 places (gates SEC-206, G-S2 "if chosen") but it has no procedure row ("to be specified by E"). **P0-052**: endpoint in OPS-001's RTM row. **ASM-C-01, ASM-C-02**: cited by components.md:50 and traceability §10.2, but defined only in the process record `reviews/12-agent-C-report.md`. **TC-REC-022/023**: defined in recovery.md §6 but not in the verification plan catalogue | P0-049 → **VF-06 (Low, E/D)**. P0-052 → **fixed in place** (VF-07). ASM-C → **VF-08 (Low, C)**. TC-REC-022/023 → **fixed in place** (VF-04) |
+| Truly undefined | **P0-049**: cited in 8 places (gates SEC-206, G-S2 "if chosen") but it has no procedure row ("to be specified by E"). **P0-052**: endpoint in OPS-001's RTM row. **ASM-C-01, ASM-C-02**: cited by components.md:50 and traceability §10.2, but defined only in the process record `reviews/12-agent-C-report.md`. **TC-REC-022/023**: defined in recovery.md §6 but not in the verification plan catalogue | P0-049 → **VF-06 (Low, E/D; resolved during Phase 5: E added the procedure as `security/threat-model.md` §10.4 (VE-17), and F updated the gate registration, see §8)**. P0-052 → **fixed in place** (VF-07). ASM-C → **VF-08 (Low, C)**. TC-REC-022/023 → **fixed in place** (VF-04) |
 | Namespace collisions | **RB-06a/b, RB-19…RB-26** are Review-B findings (`reviews/21`, RB-01…27). They share the RB prefix with D's runbooks RB-01…18, so RB-01…18 citations are ambiguous: linear.md §7.3 heading "(RD-18, RB-13)" means Review-B finding 13, not runbook RB-13. Likewise **RD-nn** (Review-D findings, RD-01…31) collides with reconciliation decisions **RD-1…RD-20**. Examples: traceability §1.5 "RD-16, RD-22"; reconciliation RD-15 cites "RD-13, RD-15" as findings | **VF-03 (Medium)** |
 
 **TC-REC semantic collision (VF-04, Medium, D).** `operations/recovery.md` §6 labels seven scenarios with TC-REC IDs that mean something else in the verification plan, the sole TC owner:
@@ -71,7 +71,7 @@ recovery.md says its IDs are "proposals for F", so the verification plan governs
 
 **Method.** The script checks:
 
-- every non-URL `[text](path#anchor)` outside code fences: the file must exist, and the anchor must match a GitHub-style heading slug;
+- every non-URL Markdown link (text in brackets, target in parentheses) outside code fences: the file must exist, and the anchor must match a GitHub-style heading slug;
 - every plain-text pointer of the form `<doc>[.md] §N[.N…]` (including continuation lists) and the abbreviations SM/GH/MSG/CL/CX/LN/VP/TM/TR/RM: the cited section number must exist as a heading in the target file.
 
 All non-review documents were scanned.
@@ -80,7 +80,7 @@ All non-review documents were scanned.
 
 | Class | Count | Detail | Verdict |
 |---|---|---|---|
-| Missing link target | 5 | TDD §19, §32 → `security/security-review.md`, `reviews/50-…`, `51-…`, `52-…` | Phase 5 outputs being written in parallel; this file resolves 52. **VF-09 (Low, orchestrator)**: re-run the lint after Phase 5 lands. The brief layout also lists `security/security-review.md`, so it must exist before sign-off |
+| Missing link target | 5 at first run; **0 at re-run** | TDD §19, §32 → `security/security-review.md`, `reviews/50-…`, `51-…`, `52-…` | All four Phase 5 outputs now exist. **VF-09 (Low, orchestrator, resolved)**: re-run the lint once more at sign-off, because TDD.md was edited during Phase 5 (re-run on the current TDD: 1,511 pointers, 0 genuine misses) |
 | Missing anchor | 1 | `reviews/12-agent-C-report.md:31` → `components.md#9-worktree-management` (heading is now "9. Worktrees, snapshots and git hardening") | Process record; informational |
 | Missing section | 0 genuine | Two script hits were false positives (traceability:228 "TDD §5, 0 references"; components:965 "§4.1/§4.15 of this document") | Pass |
 | TDD.md pointers into supporting docs | all resolve | e.g. components §4.2–§4.16, §5, §5.7, §6.4, §6.5, §10.2–§10.10; state-machine §2.2, §3.7, §4, §7.3, §8, §10; macos-service §2, §2.3, §2.5, §3, §7.1, §9.1, §10, §11, §13–§14; github.md §8, §13; threat-model §3, §5, §5.2.2, §8.10, §9, §10.1; overview §2, §4, §5.3, §7, §9, §11, §14; messages §5 | Pass |

@@ -223,7 +223,7 @@ E owns each gate's controls (`security/threat-model.md` §8.10) and each SAC thr
 | Gate | Placed before | SAC evidence (TCs) |
 |---|---|---|
 | **G-S1** | Any real agent run on the Mac (M1 exit; M1–M4 runs on the sandbox only) | SAC-03 (TC-SEC-103); SEC-204/208/203 self-tests (TC-SEC-122, TC-SEC-123, TC-INT-026); P0-201; P0-074 (policy checklist) |
-| **G-S2** | First workspace-write Codex, `verify` or `deps_install` on a non-sandbox repository (CON-018); evidence collected at M4 | SAC-05 (TC-SEC-120, P0-027), SAC-13 (TC-SEC-121), SAC-14 (TC-SEC-128), SAC-18 (TC-SEC-125, TC-SEC-171), SAC-19 (TC-SEC-129) |
+| **G-S2** | First workspace-write Codex, `verify` or `deps_install` on a non-sandbox repository (CON-018); evidence collected at M4 | P0-049 (agent-uid egress, required whenever `deps_install` is enabled for a non-sandbox repo; VE-17); SAC-05 (TC-SEC-120, P0-027), SAC-13 (TC-SEC-121), SAC-14 (TC-SEC-128), SAC-18 (TC-SEC-125, TC-SEC-171), SAC-19 (TC-SEC-129) |
 | **G-S3** | First sandbox push (M5 exit) | SAC-01 (TC-GOV-116), SAC-02 (TC-GOV-112), SAC-06 (TC-SEC-150/151), SAC-07 (TC-SEC-140…144), SAC-11 (TC-PI-134…136), SAC-16 (TC-PI-138), SAC-17 (TC-GOV-117); TC-SEC-124; TC-GOV-111 |
 | **G-S4** | Supervised pilot on a target repository (M9b entry) | G-DETECT written acceptance or G-ORG (OPS-017); SAC-04 (TC-PI-130), SAC-09 (TC-GOV-115), SAC-10 (TC-SEC-193), SAC-12 (traceability §10.2 ASM-E rows closed), SAC-15 (TC-SEC-145), SAC-20 (TC-SEC-154) |
 | **G-S5** | Unattended or overnight operation (M9c entry; controls built in M7) | G-ORG on every target (OD-01); OD-36 decided (Addendum A); SAC-08 (TC-SEC-161, -163, -164); SEC-604 anchoring live (TC-SEC-163); SEC-906 (TC-SEC-191); **SAC-01…SAC-20 all green** |
@@ -244,7 +244,7 @@ E owns each gate's controls (`security/threat-model.md` §8.10) and each SAC thr
 
 ### 8.1 TC-P0 (Phase 0 register)
 
-`P0-001…049`: D's Mac register (`operations/macos-service.md` §16) — read-only P0-001…025, agent uid P0-026…032 **[ROOT]**, experiments P0-033…048, egress P0-049 (E specifies). `P0-201…241`: B's agent-CLI, GitHub and Linear checks (`integrations/github.md` Phase 0 table, one ASM-B per row with its gate). Each row in those tables carries its procedure, pass criterion and gate; closure is tracked in traceability §10.2. F-allocated checks (governance and programme):
+`P0-001…049`: D's Mac register (`operations/macos-service.md` §16) — read-only P0-001…025, agent uid P0-026…032 **[ROOT]**, experiments P0-033…048, egress P0-049 (procedure in `security/threat-model.md` §10.4; gates G-S2 whenever `deps_install` is enabled for a non-sandbox repository, VE-17). `P0-201…241`: B's agent-CLI, GitHub and Linear checks (`integrations/github.md` Phase 0 table, one ASM-B per row with its gate). Each row in those tables carries its procedure, pass criterion and gate; closure is tracked in traceability §10.2. F-allocated checks (governance and programme):
 
 | P0 | Check | Env | Pass criterion | Covers |
 |---|---|---|---|---|
