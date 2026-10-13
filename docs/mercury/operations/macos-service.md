@@ -986,7 +986,7 @@ A second SIGTERM jumps to t = 13. Exception: in safe mode or under `security_hal
 ### 13.1 Release and install
 
 1. CI produces `mercury-<semver>.tgz` + `SHA256SUMS` + a build-provenance attestation (§15). The release manifest also lists the SHA-256 of the wrappers and helpers.
-2. `mercury upgrade <semver>`: download → verify SHA-256 (and optionally `gh attestation verify` with the operator's own `gh`) → extract to `app/releases/<semver>/` → `npm ci --omit=dev --ignore-scripts` from the bundled lockfile → `selftest.js` (config parse, schema files, migration dry-run on a **copy** of the DB).
+2. `mercury upgrade <semver>`: download → verify SHA-256 → (MERCURY never invokes `gh`; if desired the operator runs `gh attestation verify` as a separate manual step before `mercury upgrade`, SEC-103, VE-16) → extract to `app/releases/<semver>/` → `npm ci --omit=dev --ignore-scripts` from the bundled lockfile → `selftest.js` (config parse, schema files, migration dry-run on a **copy** of the DB).
 3. The Node runtime is upgraded separately (`mercury runtime upgrade`: new `runtime/node-<ver>/`, plist re-render, `bootout`/`bootstrap`); the old runtime is kept for rollback.
 
 ### 13.2 Upgrade procedure

@@ -398,7 +398,7 @@ Onboarding refuses the repository until every item passes; the result is stored 
 | O3 | Rulesets §9.1 and §9.3 active (and §9.2 under G-ORG); no classic branch protection | `GET /rulesets`, `GET /rulesets/{id}`; `bypass_actors` visible to a metadata reader (**ASM-B-66**) |
 | O4 | The required contexts in `GET /rules/branches/{default}` include both MERCURY contexts pinned to `mercury-bot`'s App id, plus the repo's CI contexts | Branch rules |
 | O5 | Repository settings §9.5, including `allow_auto_merge = false` and squash-only | `GET /repos/{o}/{r}` with the `mercury-bot` read token (field visibility: **ASM-B-68**) |
-| O6 | Both Apps installed with exactly the permissions of §2 and the expected repository selection | App JWT: `GET /app/installations/{id}` |
+| O6 | `mercury-bot` installed with exactly the permissions of §2.2; `mercury-ops` **not** installed (Addendum C, SEC-110) | App JWT: `GET /app/installations/{id}` |
 | O7 | Linear mode prerequisites (`linear.md` §6) and team mapping | Config |
 | O8 | Toolchain manifest, test and setup commands configured; `verify` passes on the base SHA as `_mercuryagent` | `mercury toolchain sync`, then a `verify` run |
 | O9 | Actions settings (SEC-105) and secret scanning with push protection (SEC-506) | Operator attestation (POL; reading Actions settings needs `administration:read`, which no MERCURY identity holds) |

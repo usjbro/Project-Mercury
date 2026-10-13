@@ -142,7 +142,7 @@ Governance modes are not gates: **G-DETECT** is allowed for the sandbox (P0c) an
 - *Issue level:* the dependency chain in `planning/issue-breakdown.md` §3 (≈ 44 P50 days) is the shortest build with unlimited capacity; because one operator-engineer builds MERCURY, capacity — not dependencies — sets the calendar, and the chain sets priority inside each milestone.
 - *Inside M1:* store → DDL/triggers → engine → queue/outbox → adoption → PROP suite, with the broker (MERC-107, H uncertainty) started first because P0b can change it.
 
-**Re-plan points.** Re-estimate at P0a/P0b exit (MERC-005) and at M4 exit (after the first real agent runs).
+**Re-plan points.** Re-estimate at Phase 0 close (MERC-005, after P0b/P0c) and at M4 exit (after the first real agent runs).
 
 ---
 
@@ -215,7 +215,7 @@ From traceability §9 (defaults there):
 |---|---|
 | P0a | OD-03, OD-04 |
 | P0b | OD-18 |
-| P0c | OD-01 (sandbox acceptance), OD-02, OD-05, OD-13, OD-17, OD-20, OD-22, OD-35, OD-37 |
+| P0c | OD-01 (sandbox acceptance), OD-02, OD-05, OD-13, OD-17, OD-20, OD-22, OD-35, OD-37 (permission set; used in M6) |
 | M1 | OD-07, OD-27, OD-31 |
 | M2 | OD-10 |
 | M3 | OD-19, OD-25, OD-29, OD-33, OD-34 |
