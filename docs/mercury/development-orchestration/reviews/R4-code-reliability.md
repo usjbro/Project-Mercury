@@ -1,11 +1,129 @@
-# R4 — Code and reliability review (devorch.py, resume, configuration)
+# R4: Code and reliability review (devorch.py, resume procedure, configuration)
 
-Status: IN PROGRESS (saved early after a container restart; adversarial tests being run).
+Reviewer roles: `mdev-code-reviewer` + `mdev-reliability-engineer` (independent; read-only on the repository).
+Branch: `claude/dev-orchestration` (working tree clean at review time). Date: 2026-10-15.
 
-Preliminary findings (to be confirmed by tests):
-- check-result skips all path/branch checks when `commits` is empty.
-- `ready` keys tasks by merc_issue; review contracts share the merc_issue of the implementation.
-- record does not detect an in-place contract edit (security_sensitive flip) without contract_revised.
-- verify-ledger parses every file in ledger/ (LOCK, ESCALATIONS.md live there).
-- git diff --name-only with rename detection hides the source path of a rename.
-- fnmatch: `**/x` does not match root files; `*` crosses `/`.
+## 1 Scope and method
+
+In scope:
+
+- `tools/devorch/devorch.py`: the transition table compared with the 01 §5 diagram and with 07; `gates_of` reset semantics; `record`, `check-result`, `check-contract`, `verify-ledger`, `ready`, `status`; hash-chain canonicalisation; error handling.
+- The resume procedure (02 §6, 07 §4–§6). I walked through it as if the session died at each step of the main loop (02 §5).
+- Configuration: frontmatter of `.claude/agents/*.md`, `.claude/settings.json`, the three schemas (Draft 2020-12 metaschema check), the examples, and `gen_agents.py` reproducibility.
+- `tools/devorch/schedule_model.py`, briefly.
+
+Method: I read the code and the docs. I then ran adversarial scenarios against throw-away git repositories and a fresh `DEVORCH_HOME=$(mktemp -d)` per scenario. The scripts are `t1.sh` (check-result), `t2.sh` (record and ledger) and `t3.sh` (ready), under the session scratchpad (`.../scratchpad/r4/`). I made no edits to the repository apart from this file.
+
+## 2 Verdict
+
+**Not ready.** In its current state the tooling does not hold the guarantees that the documents attribute to it:
+
+- a result can bypass the path checks;
+- a security-sensitive task can skip G4;
+- `verify-ledger` crashes once the mandatory `ledger/LOCK` exists;
+- a forged or self-recorded ledger verifies as OK;
+- `ready` can hide or re-list issues;
+- `FAILED` and the `interface_frozen` path are dead ends.
+
+No finding gives an agent human merge or approval authority. G7 still depends on the orchestrator reading GitHub, and `main` is protected by the operator. The fixes are small and local to `devorch.py`, roughly one day of work. The package becomes **Ready with conditions** once F01–F09 are fixed and the scenarios in §4 are added as regression tests.
+
+## 3 Findings
+
+| ID | Severity | Location | Finding | Concrete fix |
+|---|---|---|---|---|
+| F01 | High | devorch.py `cmd_check_result` L413 | All git checks run only `if r.get("commits")`: branch/head, ancestry, allowed/restricted paths and `modified_files`. A result with `commits: []` passes even though the branch carries a commit that edits `docs/**`, which is restricted. **Scenario A: VALID.** | Always derive the change set from git for code-producing kinds. Compare `git rev-parse <branch>` with `base_commit`. If they differ, `head_commit` and `commits` are mandatory and must equal `git rev-list base..head`. Never gate checks on agent claims. |
+| F02 | High | L426 | `git diff --name-only` uses rename detection by default, so only the destination of a rename is listed. Moving `src/ports/clock.ts` (restricted) to `src/core/config/clock.ts` (allowed) passes. **Scenario B: VALID.** A plain deletion is caught (scenario I). | Use `git diff --no-renames --no-ext-diff --name-only -z base head` and split on NUL. This also fixes F25. |
+| F03 | High | `review_gates_needed`, `cmd_record`, `cmd_check_contract` | A security-sensitive task can skip G4. (a) `check-contract` accepts a MERC-101 contract with `security_sensitive:false` and no G4, although `dag.json` marks MERC-101 `security: true`: **VALID**. (b) `record` re-reads the contract file on every event and does not detect in-place edits. After G3 I set `security_sensitive:false` in `tasks/DT-0001.json` and recorded `code_review_passed` again: the task went to AWAITING_INTEGRATION without G4. A `contract_version` 1→2 bump without `contract_revised` was also recorded silently. | Store `contract_sha256` in every record. Refuse any event except `contract_revised` when the current contract hash differs from the last record's. Make `check-contract` require `security_sensitive:true`, G4 in `required_gates` and `mdev-security-engineer` in `required_reviewers` when the DAG issue has the Security label. Compute the needed review gates as the union over the contract history plus the DAG label. |
+| F04 | High | `cmd_verify_ledger` L332, `cmd_status` L354; 07 §6, 02 §1 #17 | `ledger/LOCK` and `ledger/ESCALATIONS.md` are specified to live in `ledger/`. `verify-ledger` parses every file there as JSONL and crashes (`JSONDecodeError`); `status` prints bogus rows. Resume step 3 (02 §6), "any failure → stop", therefore always fails once a lock or an escalation exists. | Process only `*.jsonl` files whose name matches the task-id pattern. Better, move LOCK and ESCALATIONS.md to `$DEVORCH_HOME/` and update 02/07. |
+| F05 | High | `cmd_verify_ledger`, `cmd_record` `--actor` | Self-certification and tampering pass verification. `verify-ledger` checks hashes and the from/to pairs, but does not replay gate prerequisites. A hand-built chain RUNNING→`interface_frozen`(G1)→G3→`pr_prepared`(G6)→`human_merged`(G7) with no G2 or G5 verifies as `ledger OK`, and `status` shows COMPLETED, which unblocks dependents in `ready`. Truncating the ledger is also undetected (cut to 3 records → OK). `--actor` is free text, and any specialist with Bash can run `devorch.py record` or write under `$DEVORCH_HOME`, which it must be able to do because `evidence_dir` lives there. | (1) Move the transition, gate and contract logic into one `apply(records, event)` function used by both `record` and `verify-ledger`. (2) Restrict `actor` to `principal-orchestrator` or `operator`. (3) Put `evidence_dir` outside the ledger worktree (for example `../mercury-evidence/`); the orchestrator copies results in after checking them. (4) At tick start, refuse to continue if `git -C $DEVORCH_HOME status`/`diff` since the last pushed commit contains ledger or task changes this session did not write; the session keeps the record hashes it wrote. (5) Operator ruleset on `devorch/state`: no force-push and no deletion, which anchors truncation detection to the remote. (6) Put the ledger head hashes in each tick commit message. |
+| F06 | High | `cmd_ready` L366–370 | `by_merc` is keyed by `merc_issue`, and the last contract read wins. Review contracts carry the implementation's `merc_issue` (`contract-code-review.json` has MERC-101), and `os.listdir` order is arbitrary. Forcing the review contract to be read last makes MERC-102 disappear from READY and MERC-101 read as NEW, so it can be re-listed and dispatched twice. A stray non-JSON file in `tasks/` crashes `ready`. | Count only primary contracts: kind ∉ {code_review, security_review}, no `review_target`, no `-rN`/`-iN` suffix. Treat more than one primary contract per `merc_issue` as an error (02 §1 #13). Iterate `sorted(glob("*.json"))`. |
+| F07 | High | TRANSITIONS: FAILED terminal; 07 §3, 13 RB-D7 | `failed → escalate` (07 §3) and `contract_revised → BLOCKED → READY` after FAILED (RB-D7) are both illegal. Tested: `contract_revised`, `escalated` and `cancelled` from FAILED are all refused. A failed task can only be replaced by a new task id, which then collides with merc_issue uniqueness (F06). This is an unrecoverable state. | Add `FAILED --contract_revised--> BLOCKED`, `FAILED --escalated--> BLOCKED` and `FAILED --cancelled--> CANCELLED`. Alternatively, record budget exhaustion as `escalated` into BLOCKED, and let only the operator mark a task FAILED. |
+| F08 | High | TRANSITIONS / REQUIRED_BEFORE; 02 §3.1; 06 §4 | The `interface_frozen` (G1) path is a dead end. It leads to AWAITING_REVIEW, but AWAITING_INTEGRATION requires G2, and G2 (`tests_passed`) is only legal from RUNNING. A design task that records G1 can never complete. Tested: `cannot enter AWAITING_INTEGRATION: missing gate evidence ['G2']`. There is also no way to evaluate an `INTERFACE_FROZEN` (or stacked `AWAITING_HUMAN`) dependency: `ready` uses only `dag.json` deps and the COMPLETED state, and ignores contract `dependencies[].required_state`. | Make REQUIRED_BEFORE depend on `kind`: design tasks need G1 instead of G2. In `ready`, evaluate contract `dependencies[]`: INTERFACE_FROZEN means G1 is present and not reset; AWAITING_HUMAN means state ≥ AWAITING_HUMAN, with stack depth ≤ 2. |
+| F09 | High | `cmd_check_result` (review kinds), task-result schema; 02 §2, 07 rule 2 | The binding of a review to the head commit is not enforced anywhere mechanically. For review kinds, `check-result` skips all git checks. The result schema has no field for the reviewed head (the example review result has none). `record` does not compare `review_target.head_commit` with the current branch head when recording G3/G4. A stale review, or a reviewer that committed into the implementer's worktree with Bash, is not detected. | Add `reviewed_head_commit` to task-result (required for review kinds). In `check-result`, require it to equal `review_target.head_commit`, that value to equal the current implementation branch head, and the worktree to be clean. Add `--head` to `record` for G3/G4/G5/G6 and refuse the record if the head differs from the head recorded at G2. |
+| F10 | Medium | L428–431 (fnmatch) | `fnmatch` gives `*` the meaning "any characters including `/`", and `**/x` does not match a top-level `x`. Scenario C: restricted `**/*.md` does not catch `README.md`, and allowed `*` allows everything. Scenario D: allowed `src/core/*.ts` admits `src/core/deep/er/x.ts`. Allowed-path checks are too permissive and restricted-path checks too narrow. | Use git pathspec semantics: `git diff --name-only -z base head -- ':(glob)<pattern>'` for each pattern, or a small gitignore-style matcher in which `*` excludes `/` and `**/` matches zero or more directories. Add the scenarios as unit tests. |
+| F11 | Medium | `cmd_check_result` | Uncommitted and untracked changes in the worktree are not checked (scenario E: dirty restricted file → VALID). The G2 re-run then tests a tree that differs from `head_commit`. | Require `git status --porcelain --untracked-files=all` to be empty in `check-result`, and before every G2 run. |
+| F12 | Medium | `cmd_record` L305–309 | Evidence files are hashed only if the ref resolves relative to the **current directory**. Refs written as `evidence/<task>/…` (relative to DEVORCH_HOME, as in the docs) are never hashed: 7 of the 14 example records have no `sha256`. An empty ref (`--evidence log`) is accepted. This contradicts 07 rule 1 ("files are hashed"). | Resolve refs against `$DEVORCH_HOME`, then the repo. Require the file to exist for `result_file`, `review_file`, `test_run` and `log`. Reject empty refs. |
+| F13 | Medium | `cmd_record` append; `read_ledger` | The append is not crash-safe. A partial last line (simulated) makes `verify-ledger`, `status` and `record` all abort with a traceback instead of reporting "bad record". RB-D6 then rolls back to the pushed history and loses the tick's records. | `flush()` and `os.fsync()` after each append. Have `read_ledger` detect an incomplete final line and report it. Add `verify-ledger --repair-tail`, which truncates only an unterminated final line after operator acknowledgement. |
+| F14 | Medium | `cmd_record` | Budgets are not enforced. `attempt_failed`, correction loops and environmental retries are unlimited, and `attempt` is copied from the contract without checking that it increased on a correction. | Count attempts and cycles in the ledger, and refuse once `budget.max_attempts` or the 07 §3 cycle limits are exceeded. Require `attempt` to increase on every return to RUNNING. |
+| F15 | Medium | 06 §2 (`-rN`/`-iN` ids), TRANSITIONS | Review and integration tasks have their own contracts but no defined ledger lifecycle. If they are recorded they can never reach COMPLETED, because COMPLETED requires G2–G7. If they are not recorded, their dispatch is invisible to resume (F16). | Either add a minimal lifecycle for review/integration kinds (READY→RUNNING→COMPLETED on a VALID result), or record `review_dispatched`/`integration_dispatched` self-loops (with session id and contract hash) on the implementation task. |
+| F16 | Medium | 02 §5 steps 4/5/7, 07 §4 | Duplicate dispatch on resume. (a) Reviewer and integration dispatches are not recorded, so after a restart step 4 re-dispatches them. (b) After a restart every RUNNING task is immediately stale ("no record of having dispatched it" is always true). Background-agent survival is UNVERIFIED, so if the old agent survived, a second agent is dispatched into the same worktree. | Record every dispatch with session id and time. Before `reclaimed`, require the worktree to be quiet for at least 15 minutes (no commits, no file mtime changes, no heartbeat). Have agents touch `evidence_dir/heartbeat` at each step. Check `ps` for a live `claude` subagent process on the host. |
+| F17 | Medium | 02 §5 step 3, 02 §6 step 5 | Until the orchestrator saves the result JSON, it exists only in the conversation. A crash between the completion notification and the save loses it, so finished work is reclaimed and redone. | Have the agent write `evidence_dir/result.json` itself before it returns (it may already write there). The orchestrator checks that the file equals the returned block. |
+| F18 | Medium | 07 §6 | The lock has a 2-hour age but no refresh rule, so a session idle for more than 2 hours loses it while still alive. The resumed session's comparison of its own session id with the lock is unspecified. The lock's location breaks verification (F04). | Refresh LOCK in every tick commit. On resume, if `LOCK.session != self`, require operator confirmation whatever the lock's age. Move LOCK to `$DEVORCH_HOME/LOCK`. |
+| F19 | Medium | devorch.py L30–34 | The `DEVORCH_HOME` default is derived from the script's location. Run from a task worktree (`../mercury-wt/DT-0042/tools/devorch/devorch.py`), it resolves to `../mercury-wt/mercury-devorch`, and `record` silently creates a new ledger there with `makedirs`. Schemas are also loaded from the worktree copy, which the task branch may have changed. | Require `DEVORCH_HOME` to be set, or verify that it is a git worktree on `devorch/state`. Create `ledger/` only through an explicit `init`. Load schemas from `$DEVORCH_HOME` or a pinned commit. |
+| F20 | Medium | `.claude/agents/mdev-principal-orchestrator.md` `tools: Agent` | `Agent` is unrestricted, so the orchestrator can spawn the built-in general-purpose subagent, which has none of the specialists' `disallowedTools`. `settings.json` denies only merge, auto-merge and review-write, so Linear writes, `push_files`, `create_or_update_file`, `delete_file` and `create_branch` would be available to it. | Use the `Agent(mdev-lead-architect, mdev-tpm, …)` allowlist form in the orchestrator's `tools`. Add to the `settings.json` deny list the Linear write tools and the GitHub write tools the orchestrator does not need; it pushes with git and creates PRs with `create_pull_request`. |
+| F21 | Medium | `cmd_check_contract`; 02 §1 #5 | Path-ownership overlap with RUNNING, AWAITING_REVIEW or AWAITING_INTEGRATION tasks is not checked, although the docs say such a contract "is refused". Allowed ∩ restricted is not checked. `security_review` is not tied to `mdev-security-engineer`. | Add these checks to `check-contract`: an overlap test using the same glob engine as F10 on literal prefixes, and the kind→agent mapping. |
+| F22 | Medium | L434–438 | The required-tests rule applies to review kinds too. A `changes_required` review whose re-runs fail (the usual case) is INVALID. The shipped `result-review-changes-required.json` is INVALID against `contract-code-review.json`. | For review kinds, require a recorded outcome for each required test but not a pass. For `recommendation: accept`, require all of them to pass. |
+| F23 | Low | TRANSITIONS vs 01 §5 diagram | The table also allows `escalated` from AWAITING_INTEGRATION and AWAITING_HUMAN; `failed` from AWAITING_REVIEW and AWAITING_INTEGRATION; the `stale_detected` self-loops; `reclaimed` RUNNING→READY; and `unblocked` alongside `resumed`. None of these is in the diagram. | Generate the diagram from TRANSITIONS, or list the extra edges under it. |
+| F24 | Low | record | Duplicate gate events are accepted (G3 twice, G5 twice in one run). | Refuse a gate that is already present since the last reset, or make the duplicate a no-op. |
+| F25 | Low | L426 | `core.quotePath` quotes non-ASCII paths (`"src/core/config/\303\251.ts"`), which gives a false INVALID (scenario G). | Use `-z` (see F02). |
+| F26 | Low | `validate()` | `FormatChecker` does not enforce `date-time` without `rfc3339-validator`: `"notadate"` passes. | Parse `created_at` and `at` explicitly, or require the format extra. |
+| F27 | Low | `canon()` | The canonical form is Python `json.dumps` (sorted keys, compact, non-ASCII kept), not RFC 8785. It is stable for this one implementation. | Document it, or use JCS if a second verifier is ever written. |
+| F28 | Low | `cmd_check_result` | A malformed contract raises `KeyError` with a traceback (exit 1, same as INVALID). The contract is not schema-validated. `commits` that are not in `base..head` are accepted (scenario H). | Validate the contract first; require `set(commits) == rev-list base..head`. |
+| F29 | Low | `.claude/settings.json` | The rule syntax is valid, but the Bash push patterns miss `git push origin dev:main`, `+main`, `git -C . push origin main`, other remote names and `env gh …`. This is a known limitation: Bash rules are not a security boundary. | Keep relying on the operator's branch protection on `main`, and state that in 08. Optionally add a PreToolUse hook that parses `git push` refspecs. |
+| F30 | Low | schedule_model.py | `IndexError` (pop from empty heap) when `mac_cap=0` or when a base issue depends on a conditional one, because the deadlock is not detected. Tasks waiting for the Mac lane poll every 0.25 days, which bypasses the priority order. The one-line style is dense. | Detect an empty heap with tasks remaining and report the blocked tasks. Use a priority queue for the Mac lane. Run a formatter over the file. |
+
+Counts: Critical 0, High 9, Medium 13, Low 8.
+
+## 4 Checks performed with evidence
+
+| # | Check | Command / scenario | Result |
+|---|---|---|---|
+| 1 | `commits: []` with a restricted commit on the branch | `t1.sh` A | VALID (F01) |
+| 2 | Rename restricted → allowed | `t1.sh` B (`git mv src/ports/clock.ts src/core/config/`) | VALID (F02) |
+| 3 | `**/*.md` vs `README.md`; `*` allowed | `t1.sh` C | VALID (F10) |
+| 4 | `src/core/*.ts` vs nested path | `t1.sh` D | VALID (F10) |
+| 5 | Dirty worktree (uncommitted restricted edit) | `t1.sh` E | VALID (F11) |
+| 6 | `status: partial`, no tests | `t1.sh` F | VALID (acceptable) |
+| 7 | Non-ASCII filename | `t1.sh` G | INVALID, false reject (F25) |
+| 8 | Commit not in `base..head` listed | `t1.sh` H | VALID (F28) |
+| 9 | Delete a restricted file | `t1.sh` I | INVALID, correct |
+| 10 | Happy path with G3 before G4 (security-sensitive) | `t2.sh` 1 | Stays in AWAITING_REVIEW, correct; then the in-place flip to non-sensitive gives AWAITING_INTEGRATION without G4 (F03) |
+| 11 | Correction resets gates | example ledger + `t2.sh` | `code_review_changes_required` → RUNNING clears gates; G3 is illegal from RUNNING. Correct |
+| 12 | G7 without G2–G6 via `record` | `t2.sh` | Impossible: `pr_prepared` needs AWAITING_INTEGRATION, which needs G2, G3 (+G4); AWAITING_HUMAN needs G5 and G6. Correct |
+| 13 | Same through a forged chain | `t2.sh` 6 (python forge) | `verify-ledger` → `ledger OK`, `status` → COMPLETED (F05) |
+| 14 | Truncated ledger | `t2.sh` 6 | `ledger OK` (F05) |
+| 15 | `contract_version` bump without `contract_revised` | `t2.sh` 4 | Recorded silently (F03) |
+| 16 | LOCK and ESCALATIONS.md in `ledger/` | `t2.sh` 5 | `verify-ledger` crashes with JSONDecodeError; `status` prints bogus rows (F04) |
+| 17 | Design task G1 path | `t2.sh` 7 | `missing gate evidence ['G2']` (F08) |
+| 18 | FAILED → `contract_revised`/`escalated`/`cancelled` | ad hoc | All illegal (F07) |
+| 19 | Partial final ledger line | ad hoc | `verify-ledger`, `status` and `record` all crash with a traceback (F13) |
+| 20 | Evidence kind validation | `t2.sh` | Unknown kind refused, correct; empty ref accepted (F12) |
+| 21 | Path traversal in `--task ../../etc/x` | `t2.sh` 11 | Refused by the schema pattern before the write. Correct |
+| 22 | `ready` with a review contract sharing the merc_issue | `t3.sh` + forced listdir order | MERC-102 hidden, MERC-101 read as NEW (F06); stray file crashes |
+| 23 | Review example vs check-result | `check-result result-review-changes-required.json contract-code-review.json` | INVALID: "required tests not passed" (F22) |
+| 24 | Malformed contract | `check-result … {}` | `KeyError: 'worktree'` (F28) |
+| 25 | Schemas against the Draft 2020-12 metaschema | `Draft202012Validator.check_schema` | All 3 OK |
+| 26 | Examples against the schemas | jsonschema with format checker | All 5 JSON examples and 14 ledger records valid; the example ledger verifies OK |
+| 27 | Agent frontmatter | PyYAML parse of 13 files | Only documented fields (name, description, tools, disallowedTools, model, effort, color). Names match the file names. No tools/disallowedTools overlap. Descriptions are JSON-quoted and parse as valid YAML. Colors and effort values are in the documented sets. MCP tool names match the live GitHub and Linear tool names. All specialists deny `Agent`. The orchestrator's `Agent` is unrestricted (F20) |
+| 28 | `settings.json` | `json.load` | Valid JSON; rule syntax well formed (`Bash(prefix *)`, `Read(~/…/**)`, `Read(**/.env)`). The schemastore schema could not be fetched (proxy), so it was not validated against it. Gaps listed in F29 |
+| 29 | `gen_agents.py` reproducibility | `git archive HEAD` → temp repo → `python3 -I tools/devorch/gen_agents.py` → `git status --porcelain` | Prints `12`, empty diff: byte-identical. The orchestrator file is hand-maintained and not generated |
+| 30 | `ledger-DT-0001` resume bootstrap | bare origin + `git fetch origin devorch/state && git worktree add ../mercury-devorch devorch/state` | Works: creates a local tracking branch through DWIM |
+| 31 | schedule_model | run plus edge cases | Prints its table in 0.13 s and reproduces the documented numbers; `mac_cap=0` or a base dependency on a conditional issue → IndexError (F30) |
+
+### Resume walkthrough (session dies at each main-loop step, 02 §5)
+
+| Dies during/after | Durable state on resume | Recoverable? | Duplicate risk | Notes |
+|---|---|---|---|---|
+| 1 pull/verify | unchanged | Yes | none | Fails permanently once LOCK or ESCALATIONS.md exists (F04) |
+| 2 status/escalations | unchanged | Yes | none | Answers transcribed from chat but not yet committed are lost; the operator must restate them |
+| 3 result received, not saved | RUNNING, branch has commits, no `result.json` | Yes, but the work is redone | Re-dispatch of finished work | F17 |
+| 3 saved, before `implementation_completed` | RUNNING + `result.json` | Yes: re-run `check-result` | none (idempotent) | |
+| 3 after `implementation_completed`, during G2 | RUNNING | Yes: re-run G2 | A duplicate `implementation_completed` self-loop is accepted (harmless) | |
+| 4 reviewer dispatched | AWAITING_REVIEW, no record of the dispatch | Yes | **Second reviewer** if the first survived (F15, F16) | Read-only, so mostly cost; but two G3 results for different heads (F09) |
+| 5 integration done, before G5 | AWAITING_INTEGRATION | Yes | Integration re-dispatched | For a batch, G5 can be partly recorded across tasks; re-derive per task |
+| 5 PR created, before G6 | AWAITING_INTEGRATION + G5; PR exists | Yes: the PR lookup by `head=` (07 §5) | none if the lookup is done | Ledger-before-effect is not specified; it works only because of the lookup |
+| 6 `human_merged` recorded, before `closed` | COMPLETED | Yes: `closed` is a legal repeat | none | |
+| 7 `assigned`, before dispatch | RUNNING, nothing on the branch | Yes: stale → reclaimed | none | |
+| 7 dispatched, agent alive | RUNNING | Yes | **Two agents in one worktree** if the background agent survived (F16) | Survival is UNVERIFIED; the design assumes the unsafe case for duplicates |
+| 8 before push (container loss) | Every record of the tick is lost, along with unpushed worktrees | Yes, by re-derivation | External effects (pushed `dev/*`, PRs) are reconciled by lookup | Push the ledger before any external effect, or push WIP task branches |
+| Crash inside `record` (partial line) | Corrupt tail | Only through RB-D6, losing the tick | — | F13 |
+
+The single-orchestrator lock is workable as a convention, because fast-forward-only pushes turn a violation into a detected conflict. It does need the fixes in F04 and F18. Recorded `gates_of` resets are sound for every path back to RUNNING. A correction or a human change request always clears G2–G6, and every way back to an AWAITING state from BLOCKED goes through `assigned`, which resets the gates.
+
+## 5 Items needing operator decision
+
+1. **Ledger write protection (F05).** Should the operator add a GitHub ruleset on `devorch/state` (no force-push, no deletion)? Should `evidence_dir` move outside the ledger worktree? Within one OS user this is detection, not prevention; please confirm that is acceptable.
+2. **Behaviour when a background agent survives a restart (F16).** Choose between waiting for quiescence (slower resume) and immediate reclaim (risk of two agents in one worktree). I recommend quiescence plus a heartbeat file.
+3. **FAILED semantics (F07).** Should FAILED stay terminal (new task id, with an explicit exception to merc_issue uniqueness), or become revivable through `contract_revised`?
+4. **Restricting the orchestrator's `Agent` tool (F20).** This is an allowlist of the 12 specialists; it removes the general-purpose fallback.
+5. **Glob semantics for `allowed_paths`/`restricted_paths` (F10).** Adopt gitignore/pathspec semantics. Contracts already written with `dir/*` would then cover less than they do now.
