@@ -1,14 +1,139 @@
-{"_doc":"Primary specialist per MERC issue (secondary reviewers per 08 §2). 'mac' = Mac validation queue (operator-run); agents prepare scripts.",
-"MERC-001":"mac","MERC-002":"mac","MERC-003":"mac","MERC-004":"mdev-tpm","MERC-005":"mdev-tpm",
-"MERC-010":"mac","MERC-011":"mac","MERC-012":"mac",
-"MERC-020":"operator","MERC-021":"operator","MERC-022":"operator","MERC-023":"mdev-devops-engineer","MERC-024":"mdev-security-engineer",
-"MERC-030":"mdev-devops-engineer",
-"MERC-101":"mdev-backend-engineer","MERC-102":"mdev-database-engineer","MERC-103":"mdev-database-engineer","MERC-104":"mdev-backend-engineer","MERC-105":"mdev-backend-engineer","MERC-106":"mdev-backend-engineer","MERC-107":"mdev-security-engineer","MERC-1K1":"mdev-security-engineer","MERC-108":"mdev-reliability-engineer","MERC-109":"mdev-backend-engineer","MERC-110":"mdev-backend-engineer","MERC-111":"mdev-backend-engineer","MERC-112":"mdev-test-automation-engineer","MERC-113":"mdev-test-automation-engineer",
-"MERC-201":"mdev-platform-integration-engineer","MERC-202":"mdev-platform-integration-engineer","MERC-203":"mdev-platform-integration-engineer","MERC-204":"mdev-backend-engineer","MERC-205":"mdev-platform-integration-engineer","MERC-206":"mdev-test-automation-engineer",
-"MERC-402a":"mdev-security-engineer","MERC-301":"mdev-backend-engineer","MERC-302":"mdev-ai-integration-engineer","MERC-3A1":"mdev-ai-integration-engineer","MERC-303":"mdev-ai-integration-engineer","MERC-304":"mdev-backend-engineer","MERC-305":"mdev-security-engineer","MERC-306":"mdev-platform-integration-engineer",
-"MERC-401":"mdev-ai-integration-engineer","MERC-402b":"mdev-backend-engineer","MERC-403":"mdev-security-engineer","MERC-404":"mdev-backend-engineer","MERC-405":"mdev-reliability-engineer","MERC-406":"mac",
-"MERC-501":"mdev-ai-integration-engineer","MERC-502":"mdev-security-engineer","MERC-503":"mdev-security-engineer","MERC-504":"mdev-security-engineer","MERC-505":"mdev-security-engineer","MERC-506":"mdev-security-engineer","MERC-507":"mdev-platform-integration-engineer","MERC-508":"mdev-security-engineer",
-"MERC-601":"mdev-ai-integration-engineer","MERC-602":"mdev-platform-integration-engineer","MERC-603":"mdev-backend-engineer","MERC-604":"mdev-backend-engineer",
-"MERC-701":"mdev-platform-integration-engineer","MERC-702":"mdev-platform-integration-engineer","MERC-703":"mdev-platform-integration-engineer","MERC-704":"mdev-database-engineer","MERC-705":"mdev-database-engineer","MERC-706":"mdev-devops-engineer","MERC-707":"mdev-backend-engineer","MERC-708":"mdev-integration-release-engineer",
-"MERC-801":"mdev-reliability-engineer","MERC-802":"mdev-reliability-engineer","MERC-803":"mac","MERC-804":"mdev-security-engineer","MERC-805":"mac","MERC-806":"mdev-reliability-engineer","MERC-807":"mdev-devops-engineer","MERC-807b":"mdev-devops-engineer",
-"MERC-901":"mac","MERC-902":"mdev-integration-release-engineer","MERC-903":"mac","MERC-904":"mac","MERC-905":"operator","MERC-906":"operator"}
+{
+ "_doc": "Primary specialist per MERC issue ('mac' = operator-run Mac validation lane with agent-prepared scripts; 'operator' = operator action). Secondary reviewers per 08 \u00a72. _tdd_gates: extra READY preconditions. _notes: split responsibilities.",
+ "MERC-001": "mac",
+ "MERC-002": "mac",
+ "MERC-003": "mac",
+ "MERC-004": "mdev-tpm",
+ "MERC-005": "mdev-tpm",
+ "MERC-010": "mac",
+ "MERC-011": "mac",
+ "MERC-012": "mac",
+ "MERC-020": "operator",
+ "MERC-021": "operator",
+ "MERC-022": "operator",
+ "MERC-023": "operator",
+ "MERC-024": "mdev-security-engineer",
+ "MERC-030": "mdev-devops-engineer",
+ "MERC-101": "mdev-backend-engineer",
+ "MERC-102": "mdev-database-engineer",
+ "MERC-103": "mdev-database-engineer",
+ "MERC-104": "mdev-backend-engineer",
+ "MERC-105": "mdev-backend-engineer",
+ "MERC-106": "mdev-backend-engineer",
+ "MERC-107": "mdev-security-engineer",
+ "MERC-1K1": "mdev-security-engineer",
+ "MERC-108": "mdev-backend-engineer",
+ "MERC-109": "mdev-backend-engineer",
+ "MERC-110": "mdev-backend-engineer",
+ "MERC-111": "mdev-backend-engineer",
+ "MERC-112": "mdev-test-automation-engineer",
+ "MERC-113": "mdev-test-automation-engineer",
+ "MERC-201": "mdev-platform-integration-engineer",
+ "MERC-202": "mdev-platform-integration-engineer",
+ "MERC-203": "mdev-platform-integration-engineer",
+ "MERC-204": "mdev-backend-engineer",
+ "MERC-205": "mdev-platform-integration-engineer",
+ "MERC-206": "mdev-backend-engineer",
+ "MERC-402a": "mdev-security-engineer",
+ "MERC-301": "mdev-backend-engineer",
+ "MERC-302": "mdev-ai-integration-engineer",
+ "MERC-3A1": "mdev-ai-integration-engineer",
+ "MERC-303": "mdev-ai-integration-engineer",
+ "MERC-304": "mdev-backend-engineer",
+ "MERC-305": "mdev-security-engineer",
+ "MERC-306": "mdev-platform-integration-engineer",
+ "MERC-401": "mdev-ai-integration-engineer",
+ "MERC-402b": "mdev-backend-engineer",
+ "MERC-403": "mdev-security-engineer",
+ "MERC-404": "mdev-backend-engineer",
+ "MERC-405": "mdev-ai-integration-engineer",
+ "MERC-406": "mac",
+ "MERC-501": "mdev-ai-integration-engineer",
+ "MERC-502": "mdev-security-engineer",
+ "MERC-503": "mdev-security-engineer",
+ "MERC-504": "mdev-security-engineer",
+ "MERC-505": "mdev-security-engineer",
+ "MERC-506": "mdev-security-engineer",
+ "MERC-507": "mdev-platform-integration-engineer",
+ "MERC-508": "mdev-security-engineer",
+ "MERC-601": "mdev-ai-integration-engineer",
+ "MERC-602": "mdev-platform-integration-engineer",
+ "MERC-603": "mdev-backend-engineer",
+ "MERC-604": "mdev-backend-engineer",
+ "MERC-701": "mdev-platform-integration-engineer",
+ "MERC-702": "mdev-platform-integration-engineer",
+ "MERC-703": "mdev-platform-integration-engineer",
+ "MERC-704": "mdev-database-engineer",
+ "MERC-705": "mdev-database-engineer",
+ "MERC-706": "mdev-devops-engineer",
+ "MERC-707": "mdev-backend-engineer",
+ "MERC-708": "mac",
+ "MERC-801": "mdev-reliability-engineer",
+ "MERC-802": "mdev-reliability-engineer",
+ "MERC-803": "mac",
+ "MERC-804": "mdev-security-engineer",
+ "MERC-805": "mac",
+ "MERC-806": "mdev-reliability-engineer",
+ "MERC-807": "mdev-devops-engineer",
+ "MERC-807b": "mdev-devops-engineer",
+ "MERC-901": "mac",
+ "MERC-902": "mdev-backend-engineer",
+ "MERC-903": "mac",
+ "MERC-904": "mac",
+ "MERC-905": "operator",
+ "MERC-906": "operator",
+ "_notes": {
+  "MERC-030": "Split: DevOps prepares CI/CODEOWNERS/PR template files in a PR; the operator applies the ruleset and repository settings (agents never change settings). The development identity (DOD-03) and the main ruleset are an operator bootstrap BEFORE MERC-030 (RB-D1).",
+  "MERC-023": "Operator applies sandbox rulesets; DevOps prepares the ruleset JSON as a reviewed file.",
+  "MERC-108": "Backend implements; Reliability validates (reliability_review).",
+  "MERC-708": "Operator-lane live-agent smoke; Integration and Release prepares the script.",
+  "MERC-507": "Proposed RA-D8: split its T3 sandbox-push acceptance into a step after MERC-508 (G-S3)."
+ },
+ "_tdd_gates": {
+  "_doc": "TDD security gates (threat-model \u00a78.10) that must be recorded as operator facts (devorch.py fact --kind tdd_gate) before the issue becomes READY, in addition to gates named in issue-breakdown.",
+  "MERC-305": [
+   "G-S1"
+  ],
+  "MERC-406": [
+   "G-S1"
+  ],
+  "MERC-501": [
+   "G-S1"
+  ],
+  "MERC-601": [
+   "G-S3"
+  ],
+  "MERC-602": [
+   "G-S3"
+  ],
+  "MERC-603": [
+   "G-S3"
+  ],
+  "MERC-604": [
+   "G-S3"
+  ],
+  "MERC-701": [
+   "G-S3"
+  ],
+  "MERC-708": [
+   "G-S3"
+  ],
+  "MERC-901": [
+   "G-S2",
+   "G-S3"
+  ],
+  "MERC-903": [
+   "G-S2",
+   "G-S3"
+  ],
+  "MERC-904": [
+   "G-S4"
+  ],
+  "MERC-905": [
+   "G-S5"
+  ],
+  "MERC-906": [
+   "G-S5"
+  ]
+ }
+}

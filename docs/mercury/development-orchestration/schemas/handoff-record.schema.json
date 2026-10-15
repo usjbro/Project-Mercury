@@ -6,17 +6,18 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
+    "actor",
+    "at",
+    "contract_core_sha256",
+    "event",
+    "evidence",
+    "from_state",
+    "hash",
+    "prev_hash",
     "schema",
     "seq",
     "task_id",
-    "at",
-    "event",
-    "from_state",
-    "to_state",
-    "actor",
-    "evidence",
-    "prev_hash",
-    "hash"
+    "to_state"
   ],
   "properties": {
     "schema": {
@@ -36,33 +37,36 @@
     },
     "event": {
       "enum": [
-        "created",
-        "unblocked",
         "assigned",
-        "started",
-        "implementation_completed",
-        "tests_passed",
-        "tests_failed",
-        "code_review_passed",
-        "code_review_changes_required",
-        "security_review_passed",
-        "security_review_blocked",
-        "integration_verified",
-        "integration_failed",
-        "pr_prepared",
+        "attempt_failed",
         "awaiting_human",
+        "cancelled",
+        "closed",
+        "code_review_changes_required",
+        "code_review_passed",
+        "contract_revised",
+        "created",
+        "dispatched",
+        "env_retry",
+        "escalated",
+        "failed",
         "human_changes_requested",
         "human_merged",
-        "closed",
-        "attempt_failed",
-        "escalated",
-        "resumed",
-        "cancelled",
-        "failed",
+        "implementation_completed",
+        "integration_failed",
+        "integration_verified",
         "interface_frozen",
-        "contract_revised",
+        "pr_prepared",
+        "reclaimed",
+        "result_accepted",
+        "resumed",
+        "security_review_blocked",
+        "security_review_passed",
         "stale_detected",
-        "reclaimed"
+        "started",
+        "tests_failed",
+        "tests_passed",
+        "unblocked"
       ]
     },
     "from_state": {
@@ -93,8 +97,11 @@
       ]
     },
     "actor": {
-      "type": "string",
-      "description": "principal-orchestrator | operator | <agent name> (agents never write records; actor names whose result triggered it)"
+      "enum": [
+        "principal-orchestrator",
+        "operator"
+      ],
+      "description": "agents never write ledger records"
     },
     "contract_version": {
       "type": "integer"
@@ -126,17 +133,18 @@
         "properties": {
           "kind": {
             "enum": [
-              "commit",
-              "test_run",
-              "result_file",
-              "review_file",
               "ci_run",
-              "pr",
+              "commit",
+              "design_ref",
               "github_merge",
               "ledger",
+              "log",
               "operator_statement",
-              "design_ref",
-              "log"
+              "pr",
+              "result_file",
+              "review_file",
+              "subtask",
+              "test_run"
             ]
           },
           "ref": {
@@ -160,6 +168,26 @@
     "hash": {
       "type": "string",
       "pattern": "^[0-9a-f]{64}$"
+    },
+    "contract_core_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "sha256 of the contract without status/attempt; may change only via contract_revised"
+    },
+    "head_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "session": {
+      "type": "string",
+      "maxLength": 200
+    },
+    "frozen_files": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$"
+      }
     }
   }
 }

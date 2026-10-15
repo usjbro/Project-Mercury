@@ -66,7 +66,7 @@ flowchart TB
 | Principal Orchestrator | Select READY tasks, write contracts, dispatch specialists, verify results mechanically, record ledger transitions, push `dev/*` branches, open PRs, write progress reports | Merge, approve, change settings, protections or credentials; mark a gate passed without evidence; modify design documents outside an approved task |
 | Specialists | Work inside their worktree and allowed paths; commit to their task branch; return results | Push, merge, spawn agents, message each other, pick work, change frozen interfaces |
 | Code Reviewer | Read and re-run tests | Edit anything |
-| `devorch.py` | Enforce the transition table, gate prerequisites, result checks and hash chain | Decide anything |
+| `devorch.py` | Enforce the transition table, gate prerequisites, budgets, contract integrity, result checks and hash chain; push only `dev/*` with G1–G5 | Decide anything |
 
 ## 4. Authoritative source per state category
 
@@ -74,47 +74,86 @@ flowchart TB
 |---|---|---|
 | Design (requirements, contracts, ADRs) | `docs/mercury/**` on `main` after operator merge. Before that, the approved design commit recorded in each contract (`approved_design_refs …@<sha>`) | — |
 | Backlog definition | `planning/issue-breakdown.md` (DAG via `devorch.py dag`) until Linear issues exist, **then Linear** (DOD-05) | — |
-| Development task state (READY…CLOSED), attempts, gate records | **Ledger** (`devorch/state:ledger/<task>.jsonl`, hash-chained) | — |
+| Development task state (READY…CLOSED), attempts, gate records | **Ledger** (`devorch/state:ledger/<task>.jsonl`, hash-chained, replay-verified, compared with the pushed branch) | Pushed history is the tamper reference (`verify-ledger --remote`) |
 | Code, branches, commits | Git (task branches; reviewed head SHAs recorded in the ledger) | — |
 | CI results | GitHub Checks | — |
 | Human approval and merge | **GitHub only** (`merged_by`, approving review on the merged head) | — |
-| Mac validation evidence | Evidence files committed to the ledger branch by the orchestrator from operator-provided output | — |
+| Mac validation evidence, TDD gate status (G-S1…G-S5), Phase 0 checks, development identity | Operator-recorded facts (`devorch.py fact`, `facts.jsonl`) plus evidence files imported into the ledger branch | Only the operator records facts |
 
 A Linear status change never starts development work. Only a ledger `assigned` record, written by the orchestrator for a READY task, does.
 
 ## 5. Development task state machine
 
+Two lifecycles, selected by contract `kind`. The machine-readable source is `T_FULL` / `T_SHORT` and `check_transition()` in `tools/devorch/devorch.py`. `record` and `verify-ledger` run the **same** rules, so a ledger that was not produced by those rules fails verification.
+
+**Full lifecycle**: `implementation`, `test`, `reliability`, `design`, `release`. These kinds produce code and a PR.
+
 ```mermaid
 stateDiagram-v2
     [*] --> BLOCKED: created
-    BLOCKED --> READY: dependencies COMPLETED, gates and prerequisites met
-    READY --> RUNNING: assigned (contract, worktree, base commit)
-    RUNNING --> RUNNING: attempt_failed (budget left)
-    RUNNING --> AWAITING_REVIEW: tests_passed (G2 re-run by orchestrator) or interface_frozen (G1)
+    BLOCKED --> READY: unblocked, G1 design refs approved, deps, facts
+    READY --> RUNNING: assigned
+    RUNNING --> RUNNING: dispatched, started, env_retry, attempt_failed, tests_failed
+    RUNNING --> AWAITING_REVIEW: tests_passed G2 (orchestrator re-run, head recorded)
+    AWAITING_REVIEW --> AWAITING_REVIEW: code_review_passed G3 or security_review_passed G4
+    AWAITING_REVIEW --> AWAITING_INTEGRATION: both G3 and G4 recorded
     AWAITING_REVIEW --> RUNNING: changes required or security block
-    AWAITING_REVIEW --> AWAITING_INTEGRATION: G3 and, if security sensitive, G4
+    AWAITING_INTEGRATION --> AWAITING_INTEGRATION: integration_verified G5
     AWAITING_INTEGRATION --> RUNNING: integration_failed
-    AWAITING_INTEGRATION --> AWAITING_HUMAN: G5 integration verified, G6 PR prepared
+    AWAITING_INTEGRATION --> AWAITING_HUMAN: pr_prepared G6 (pushed head equals reviewed head)
     AWAITING_HUMAN --> RUNNING: human changes requested
-    AWAITING_HUMAN --> COMPLETED: G7 operator merged the reviewed head
-    RUNNING --> FAILED: budget exhausted
-    RUNNING --> BLOCKED: escalated
-    AWAITING_REVIEW --> BLOCKED: escalated
-    BLOCKED --> READY: resumed by orchestrator after escalation answered
+    AWAITING_HUMAN --> COMPLETED: human_merged G7
+    RUNNING --> READY: reclaimed
+    RUNNING --> FAILED: failed (budget exhausted)
+    FAILED --> BLOCKED: contract_revised
+    BLOCKED --> READY: resumed
     COMPLETED --> [*]
-    FAILED --> [*]
     CANCELLED --> [*]
 ```
 
-Any non-terminal state can also move to `CANCELLED` (operator), and to `BLOCKED` on `contract_revised`. A revised contract invalidates prior results and gates. The machine-readable table is `TRANSITIONS` in `tools/devorch/devorch.py`. A return to `RUNNING` clears the gates recorded since the last entry into RUNNING, so a correction always repeats review.
+**Short lifecycle**: `code_review`, `security_review`, `design_review`, `reliability_review`, `integration` subtasks, plus `planning`, `mac_validation` and `operator_action`.
+
+```mermaid
+stateDiagram-v2
+    [*] --> BLOCKED: created
+    BLOCKED --> READY: unblocked G1
+    READY --> RUNNING: assigned
+    RUNNING --> RUNNING: dispatched, env_retry, attempt_failed
+    RUNNING --> COMPLETED: result_accepted (validated result or operator evidence)
+    RUNNING --> READY: reclaimed
+    COMPLETED --> [*]
+```
+
+**Edges not drawn above.**
+- **Any non-terminal state:** → `BLOCKED` (`escalated`, `contract_revised`) and → `CANCELLED`.
+- **RUNNING, AWAITING_REVIEW, AWAITING_INTEGRATION:** → `FAILED`, plus `stale_detected` self-loops.
+- **FAILED:** → `CANCELLED`.
+- **AWAITING_HUMAN or COMPLETED:** `interface_frozen` self-loops on design tasks, recording the frozen file hashes.
+
+Operator and Mac tasks (MERC-001, 020, …) complete through `result_accepted` with operator evidence. This lets their 40–70 dependents become READY.
+
+**Gate rules enforced by the tool:**
+
+| Gate | Rule |
+|---|---|
+| G1 | Recorded at `unblocked`, needs `design_ref` evidence; required before RUNNING |
+| G2 | Needs `test_run` evidence from the orchestrator's own re-run and records `head_commit` |
+| G3 / G4 | Need a COMPLETED review subtask whose accepted result has `reviewed_head_commit` = the recorded head, `recommendation` accept, and no blocking finding. G3 also needs every reviewer listed in `required_reviewers`. **G4 is required for every full-lifecycle task**: TDD DoD D6 asks for a security review on every issue, kept light for non-sensitive changes |
+| G5 | Needs a COMPLETED integration subtask that covers the task at the same head |
+| G6 | Pushed head = reviewed head |
+| G7 | `github_merge` evidence at the G6 head |
+| Reset | A return to RUNNING clears G2–G7 (G1 survives); duplicate gates are refused |
+| Contract integrity | The contract core (everything except `status`/`attempt`) is hashed into every record. Changing it without `contract_revised` is refused |
+| Budgets | `budget.max_attempts`, 3 review cycles, 2 security cycles, 2 integration cycles and 5 environmental retries are counted from the ledger, and refused beyond the limit |
+| Writers | `actor` ∈ {principal-orchestrator, operator}. Agents never write the ledger; the specialist guard hook blocks the tool for them |
 
 **Evidence stages required by the brief → ledger events:**
 
 | Stage | Event | Gate |
 |---|---|---|
 | Task assigned | `assigned` | — |
-| Task started | `started` | — |
-| Implementation completed | `implementation_completed` (valid result, `check-result` VALID) | — |
+| Task started | `dispatched` / `started` | — |
+| Implementation completed | `implementation_completed` (`check-result` VALID) | — |
 | Tests passed | `tests_passed` | G2 |
 | Code review completed | `code_review_passed` | G3 |
 | Security review completed | `security_review_passed` | G4 |

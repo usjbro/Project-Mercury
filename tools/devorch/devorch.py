@@ -1,79 +1,114 @@
 #!/usr/bin/env python3
-"""devorch — durable task ledger and verifier for the temporary MERCURY
-*development* orchestration system (docs/mercury/development-orchestration/).
+"""devorch v2 — durable task ledger, gate enforcement and result verification for the temporary
+MERCURY *development* orchestration system (docs/mercury/development-orchestration/).
 
-This is development tooling, not part of the production MERCURY coordinator.
-Standard library only; uses `jsonschema` for full schema validation when it is
-installed, otherwise falls back to required-field checks and says so.
+Development tooling only; NOT part of production MERCURY. Python 3.9+ standard library; full JSON
+Schema validation when `jsonschema` (tested: 4.26.0) is installed, else structural checks (reported).
 
-State lives in DEVORCH_HOME (default: ../mercury-devorch next to the repo),
-a separate git worktree on branch `devorch/state`:
+Layout (all paths absolute):
+  REPO            the main checkout that contains this script (never a task worktree)
+  DEVORCH_HOME    required; a git worktree of branch `devorch/state` (ledger, contracts, imported evidence)
+      tasks/<task>.json  ledger/<task>.jsonl  evidence/<task>/attempt-N/  dag.json  facts.jsonl
+      LOCK  ESCALATIONS.md  baseline.json  reports/
+  DEVORCH_EVIDENCE  agent-writable evidence root, OUTSIDE DEVORCH_HOME (default: <parent of REPO>/mercury-evidence)
 
-    DEVORCH_HOME/
-      tasks/<task_id>.json          current contract (versioned)
-      ledger/<task_id>.jsonl        append-only, hash-chained handoff records
-      evidence/<task_id>/attempt-N/ results, logs, review reports
-      dag.json                      generated from planning/issue-breakdown.md
-      reports/                      TPM reports
+Writers: only the Principal Orchestrator (and the operator) run `record`, `fact`, `import-evidence`,
+`push`. Specialists are blocked from running this tool by tools/devorch/hooks/specialist_guard.py
+(a tripwire, not a security boundary — see 08-quality-gates-and-security.md §4).
 
-Commands (all read-only except `record`, `init-task`, `dag`):
-    dag            parse issue-breakdown.md -> dag.json; detect cycles
-    ready          list tasks whose dependencies and gates are satisfied
-    status         current state of every task (derived from the ledger)
-    check-contract validate a contract file
-    check-result   validate a result against its contract and the git repo
-    record         append a ledger record after validating the transition
-    verify-ledger  verify every task's hash chain
+Ledger records are canonical JSON (json.dumps sort_keys, separators (',',':'), ensure_ascii=False),
+hash-chained per task (sha256 over the record without "hash"); not RFC 8785.
 """
-import argparse, datetime, fnmatch, hashlib, json, os, re, subprocess, sys
+import argparse, datetime, fnmatch, hashlib, json, os, re, shutil, subprocess, sys
 
-REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+REPO = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 DOC = os.path.join(REPO, "docs", "mercury", "development-orchestration")
 SCHEMAS = os.path.join(DOC, "schemas")
 BREAKDOWN = os.path.join(REPO, "docs", "mercury", "planning", "issue-breakdown.md")
-HOME = os.environ.get("DEVORCH_HOME", os.path.abspath(os.path.join(REPO, "..", "mercury-devorch")))
+ASSIGN = os.path.join(REPO, "tools", "devorch", "assignments.json")
+HOME = os.environ.get("DEVORCH_HOME", "")
+EVIDENCE_ROOT = os.environ.get("DEVORCH_EVIDENCE", os.path.join(os.path.dirname(REPO), "mercury-evidence"))
+TEST_MODE = os.environ.get("DEVORCH_TEST_MODE") == "1"   # scratch tests only: skips the devorch/state branch check
 
-# Development orchestration state machine (01-development-architecture.md §5).
-# (from_state, event) -> (to_state, required_gate or None)
-TRANSITIONS = {
-    ("NEW", "created"): ("BLOCKED", None),
-    ("BLOCKED", "unblocked"): ("READY", None),
-    ("READY", "assigned"): ("RUNNING", None),
-    ("RUNNING", "started"): ("RUNNING", None),
-    ("RUNNING", "attempt_failed"): ("RUNNING", None),
-    ("RUNNING", "implementation_completed"): ("RUNNING", None),
-    ("RUNNING", "tests_failed"): ("RUNNING", None),
-    ("RUNNING", "tests_passed"): ("AWAITING_REVIEW", "G2"),
-    ("RUNNING", "interface_frozen"): ("AWAITING_REVIEW", "G1"),
-    ("AWAITING_REVIEW", "code_review_changes_required"): ("RUNNING", None),
-    ("AWAITING_REVIEW", "security_review_blocked"): ("RUNNING", None),
-    # review gate events: to-state is resolved in review_target_state() — AWAITING_INTEGRATION once
-    # G3 and (if the contract is security_sensitive) G4 are both recorded, else stay AWAITING_REVIEW
-    ("AWAITING_REVIEW", "code_review_passed"): ("AWAITING_REVIEW|AWAITING_INTEGRATION", "G3"),
-    ("AWAITING_REVIEW", "security_review_passed"): ("AWAITING_REVIEW|AWAITING_INTEGRATION", "G4"),
-    ("AWAITING_INTEGRATION", "integration_failed"): ("RUNNING", None),
-    ("AWAITING_INTEGRATION", "integration_verified"): ("AWAITING_INTEGRATION", "G5"),
-    ("AWAITING_INTEGRATION", "pr_prepared"): ("AWAITING_HUMAN", "G6"),
-    ("AWAITING_HUMAN", "human_changes_requested"): ("RUNNING", None),
-    ("AWAITING_HUMAN", "human_merged"): ("COMPLETED", "G7"),
-    ("COMPLETED", "closed"): ("COMPLETED", None),
-}
+FULL_KINDS = {"implementation", "test", "reliability", "design", "release"}
+SUB_KINDS = {"code_review", "security_review", "design_review", "reliability_review", "integration"}
+SHORT_KINDS = SUB_KINDS | {"planning", "mac_validation", "operator_action"}
+READ_ONLY_KINDS = {"code_review", "security_review", "design_review", "reliability_review", "planning",
+                   "mac_validation", "operator_action"}
+KIND_AGENT = {"code_review": {"mdev-code-reviewer"}, "security_review": {"mdev-security-engineer"},
+              "design_review": {"mdev-lead-architect"}, "reliability_review": {"mdev-reliability-engineer"},
+              "integration": {"mdev-integration-release-engineer"}, "planning": {"mdev-tpm"},
+              "mac_validation": {"mac-validation-queue"}, "operator_action": {"operator"},
+              "release": {"mdev-integration-release-engineer", "mdev-devops-engineer"}}
+REVIEW_GATE = {"code_review": "G3", "design_review": "G3", "reliability_review": "G3", "security_review": "G4"}
+REVIEWER_KIND = {"mdev-code-reviewer": "code_review", "mdev-lead-architect": "design_review",
+                 "mdev-reliability-engineer": "reliability_review", "mdev-security-engineer": "security_review"}
+ACTORS = {"principal-orchestrator", "operator"}
+LIMITS = {"attempt": None, "review": 3, "security": 2, "integration": 2, "env": 5}  # attempt: contract budget
 NON_TERMINAL = {"BLOCKED", "READY", "RUNNING", "AWAITING_REVIEW", "AWAITING_INTEGRATION", "AWAITING_HUMAN"}
-for s in NON_TERMINAL:
-    TRANSITIONS[(s, "escalated")] = ("BLOCKED", None)
-    TRANSITIONS[(s, "cancelled")] = ("CANCELLED", None)
-    TRANSITIONS[(s, "contract_revised")] = ("BLOCKED", None)
-for s in ("RUNNING", "AWAITING_REVIEW", "AWAITING_INTEGRATION"):
-    TRANSITIONS[(s, "failed")] = ("FAILED", None)
-    TRANSITIONS[(s, "stale_detected")] = (s, None)
-TRANSITIONS[("RUNNING", "reclaimed")] = ("READY", None)
-TRANSITIONS[("BLOCKED", "resumed")] = ("READY", None)
-# Gates that must already be recorded before entering a state.
-REQUIRED_BEFORE = {
-    "AWAITING_INTEGRATION": ["G2", "G3"],
-    "AWAITING_HUMAN": ["G2", "G3", "G5", "G6"],
-    "COMPLETED": ["G7"],
+
+# (from_state, event) -> to_state.  "*" entries are expanded below.  FULL lifecycle unless noted.
+T_FULL = {
+    ("NEW", "created"): "BLOCKED",
+    ("BLOCKED", "unblocked"): "READY",          # G1 recorded here (design refs approved, DoR met)
+    ("READY", "assigned"): "RUNNING",
+    ("RUNNING", "started"): "RUNNING",
+    ("RUNNING", "dispatched"): "RUNNING",       # (re)dispatch of an agent, with session id
+    ("RUNNING", "env_retry"): "RUNNING",        # environmental failure; not charged to attempts
+    ("RUNNING", "attempt_failed"): "RUNNING",   # charged; next attempt needs contract attempt+1
+    ("RUNNING", "implementation_completed"): "RUNNING",
+    ("RUNNING", "tests_failed"): "RUNNING",
+    ("RUNNING", "tests_passed"): "AWAITING_REVIEW",                  # G2, records head_commit
+    ("AWAITING_REVIEW", "code_review_changes_required"): "RUNNING",
+    ("AWAITING_REVIEW", "security_review_blocked"): "RUNNING",
+    ("AWAITING_REVIEW", "code_review_passed"): "AWAITING_REVIEW",    # G3 (resolved below)
+    ("AWAITING_REVIEW", "security_review_passed"): "AWAITING_REVIEW",  # G4 (resolved below)
+    ("AWAITING_INTEGRATION", "integration_failed"): "RUNNING",
+    ("AWAITING_INTEGRATION", "integration_verified"): "AWAITING_INTEGRATION",  # G5
+    ("AWAITING_INTEGRATION", "pr_prepared"): "AWAITING_HUMAN",       # G6
+    ("AWAITING_HUMAN", "human_changes_requested"): "RUNNING",
+    ("AWAITING_HUMAN", "human_merged"): "COMPLETED",                 # G7
+    ("COMPLETED", "closed"): "COMPLETED",
+    ("RUNNING", "reclaimed"): "READY",
+    ("BLOCKED", "resumed"): "READY",
 }
+T_SHORT = {
+    ("NEW", "created"): "BLOCKED",
+    ("BLOCKED", "unblocked"): "READY",
+    ("READY", "assigned"): "RUNNING",
+    ("RUNNING", "dispatched"): "RUNNING",
+    ("RUNNING", "env_retry"): "RUNNING",
+    ("RUNNING", "attempt_failed"): "RUNNING",
+    ("RUNNING", "result_accepted"): "COMPLETED",   # valid result (or operator evidence) accepted
+    ("RUNNING", "reclaimed"): "READY",
+    ("BLOCKED", "resumed"): "READY",
+    ("COMPLETED", "closed"): "COMPLETED",
+}
+for T in (T_FULL, T_SHORT):
+    for s in NON_TERMINAL:
+        T[(s, "escalated")] = "BLOCKED"
+        T[(s, "cancelled")] = "CANCELLED"
+        if s != "BLOCKED":
+            T[(s, "contract_revised")] = "BLOCKED"
+        if s in ("RUNNING", "AWAITING_REVIEW", "AWAITING_INTEGRATION"):
+            T[(s, "failed")] = "FAILED"
+            T[(s, "stale_detected")] = s
+    T[("BLOCKED", "contract_revised")] = "BLOCKED"
+    T[("FAILED", "contract_revised")] = "BLOCKED"   # RB-D7: revise and retry
+    T[("FAILED", "cancelled")] = "CANCELLED"
+T_FULL[("COMPLETED", "interface_frozen")] = "COMPLETED"    # freeze only after G7 (merged) ...
+T_FULL[("AWAITING_HUMAN", "interface_frozen")] = "AWAITING_HUMAN"  # ... or after G1-G6 (stack base)
+
+GATE_OF = {"unblocked": "G1", "tests_passed": "G2", "code_review_passed": "G3", "security_review_passed": "G4",
+           "integration_verified": "G5", "pr_prepared": "G6", "human_merged": "G7"}
+REQUIRED_BEFORE = {"RUNNING": ["G1"], "AWAITING_INTEGRATION": ["G1", "G2", "G3", "G4"],
+                   "AWAITING_HUMAN": ["G1", "G2", "G3", "G4", "G5", "G6"], "COMPLETED": ["G1", "G2", "G3", "G4", "G5", "G6", "G7"]}
+RETURN_EVENTS = {"code_review_changes_required", "security_review_blocked", "integration_failed", "human_changes_requested"}
+FILE_EVIDENCE = {"result_file", "review_file", "test_run", "log"}
+
+
+class Refused(Exception):
+    pass
 
 
 def die(msg, code=2):
@@ -86,30 +121,105 @@ def load(path):
         return json.load(f)
 
 
+def now():
+    return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def git(args, cwd, check=False):
+    r = subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "-c", "core.quotePath=false", *args], cwd=cwd,
+                       capture_output=True, text=True)
+    if check and r.returncode != 0:
+        raise Refused(f"git {' '.join(args)} failed: {r.stderr.strip()}")
+    return r
+
+
+def require_home():
+    if "/mercury-wt/" in REPO + "/":
+        die("devorch must be run from the main checkout, not from a task worktree")
+    if not HOME:
+        die("DEVORCH_HOME is not set")
+    if not os.path.isdir(HOME):
+        die(f"DEVORCH_HOME {HOME} does not exist (see 13-runbook.md RB-D1)")
+    if not TEST_MODE:
+        br = git(["rev-parse", "--abbrev-ref", "HEAD"], HOME).stdout.strip()
+        if br != "devorch/state":
+            die(f"DEVORCH_HOME must be a worktree of branch devorch/state (found '{br}')")
+
+
+def hpath(*p):
+    return os.path.join(HOME, *p)
+
+
+# ---------------------------------------------------------------- schema validation
+def parse_dt(s):
+    try:
+        datetime.datetime.fromisoformat(s.replace("Z", "+00:00"))
+        return True
+    except Exception:
+        return False
+
+
 def validate(obj, schema_name):
     schema = load(os.path.join(SCHEMAS, schema_name + ".schema.json"))
+    errs = []
     try:
-        import jsonschema  # optional
+        import jsonschema
+        v = jsonschema.Draft202012Validator(schema)
+        errs = [f"{'/'.join(map(str, e.path)) or '<root>'}: {e.message}" for e in v.iter_errors(obj)]
+        mode = "full"
     except ImportError:
-        missing = [k for k in schema.get("required", []) if k not in obj]
-        extra = [k for k in obj if k not in schema.get("properties", {})]
-        errs = [f"missing field {k}" for k in missing] + [f"unknown field {k}" for k in extra]
+        mode = "structural-only (install jsonschema==4.26.0 for full validation)"
+        errs += [f"missing field {k}" for k in schema.get("required", []) if k not in obj]
+        errs += [f"unknown field {k}" for k in obj if k not in schema.get("properties", {})]
         if obj.get("schema") != schema["properties"]["schema"]["const"]:
             errs.append("wrong schema id")
-        return errs, "structural-only (install jsonschema for full validation)"
-    v = jsonschema.Draft202012Validator(schema, format_checker=jsonschema.FormatChecker())
-    return [f"{'/'.join(map(str, e.path)) or '<root>'}: {e.message}" for e in v.iter_errors(obj)], "full"
+    for f in ("created_at", "at"):
+        if f in obj and not parse_dt(str(obj[f])):
+            errs.append(f"{f}: not an RFC 3339 date-time")
+    return errs, mode
 
 
-def git(args, cwd):
-    return subprocess.run(["git", "-c", "core.hooksPath=/dev/null", *args], cwd=cwd,
-                          capture_output=True, text=True)
+# ---------------------------------------------------------------- glob semantics (git-like)
+def glob_re(pat):
+    """'**/' = zero or more directories, '**' = anything, '*' and '?' never match '/'."""
+    i, out = 0, ""
+    while i < len(pat):
+        if pat.startswith("**/", i):
+            out += "(?:.*/)?"; i += 3
+        elif pat.startswith("**", i):
+            out += ".*"; i += 2
+        elif pat[i] == "*":
+            out += "[^/]*"; i += 1
+        elif pat[i] == "?":
+            out += "[^/]"; i += 1
+        else:
+            out += re.escape(pat[i]); i += 1
+    return re.compile("^" + out + "$")
+
+
+def matches(path, patterns):
+    return any(glob_re(p).match(path) for p in patterns)
+
+
+def literal_prefix(p):
+    m = re.search(r"[*?\[]", p)
+    return p if not m else p[:m.start()]
+
+
+def overlap(a_patterns, b_patterns):
+    """Conservative: two pattern sets overlap if any literal prefixes are prefix-related."""
+    for a in a_patterns:
+        for b in b_patterns:
+            pa, pb = literal_prefix(a), literal_prefix(b)
+            if pa.startswith(pb) or pb.startswith(pa):
+                return True
+    return False
 
 
 # ---------------------------------------------------------------- dag
 def parse_breakdown(path=BREAKDOWN):
     issues, cur, epic = {}, None, None
-    for line in open(path):
+    for line in open(path, encoding="utf-8"):
         line = line.rstrip("\n")
         m = re.match(r"### (E\w+) — ", line)
         if m:
@@ -119,9 +229,8 @@ def parse_breakdown(path=BREAKDOWN):
         if m:
             cur = m.group(1)
             conditional = "*(conditional)*" in m.group(2)
-            title = m.group(2).replace("*(conditional)*", "").strip()
-            issues[cur] = {"id": cur, "title": title, "epic": epic, "deps": [], "p50": None, "p90": None,
-                           "env": "", "gates": "", "security": False,
+            issues[cur] = {"id": cur, "title": m.group(2).replace("*(conditional)*", "").strip(), "epic": epic,
+                           "deps": [], "p50": None, "p90": None, "env": "", "gates": "", "security": False,
                            "conditional": conditional}
             continue
         if not cur:
@@ -143,6 +252,7 @@ def parse_breakdown(path=BREAKDOWN):
         env = i["env"]
         i["needs_mac_or_operator"] = any(t in env for t in ("T4", "T5", "ⓗ", "ROOT")) or i["id"] in ("MERC-004", "MERC-005", "MERC-020")
         i["root"] = "ROOT" in env
+        i["p0_refs"] = sorted(set(re.findall(r"P0-\d+", i["gates"])))
     return issues
 
 
@@ -175,21 +285,12 @@ def critical_path(issues):
         for d in v["deps"]:
             if d in succ:
                 succ[d].append(k)
-    lp = {}
+    lp, down = {}, {}
 
     def LP(k):
         if k not in lp:
             lp[k] = base[k]["p50"] + max([LP(c) for c in succ[k]] + [0])
         return lp[k]
-
-    for k in base:
-        LP(k)
-    roots = [k for k in base if not [d for d in base[k]["deps"] if d in base]]
-    cur, path = max(roots, key=lambda k: lp[k]), []
-    while cur:
-        path.append(cur)
-        cur = max(succ[cur], key=lambda k: lp[k]) if succ[cur] else None
-    down = {}
 
     def D(k):
         if k not in down:
@@ -200,7 +301,12 @@ def critical_path(issues):
         return down[k]
 
     for k in base:
-        D(k)
+        LP(k); D(k)
+    roots = [k for k in base if not [d for d in base[k]["deps"] if d in base]]
+    cur, path = max(roots, key=lambda k: lp[k]), []
+    while cur:
+        path.append(cur)
+        cur = max(succ[cur], key=lambda k: lp[k]) if succ[cur] else None
     return path, lp, {k: len(v) for k, v in down.items()}
 
 
@@ -208,167 +314,430 @@ def cmd_dag(a):
     issues = parse_breakdown(a.breakdown)
     cycles = find_cycles(issues)
     path, lp, down = critical_path(issues)
-    out = {"source": os.path.relpath(a.breakdown, REPO), "generated_at": now(), "issue_count": len(issues),
+    out = {"source": os.path.relpath(a.breakdown, REPO), "issue_count": len(issues),
            "base_count": sum(1 for i in issues.values() if not i["conditional"]),
-           "conditional": sorted(k for k, i in issues.items() if i["conditional"]),
-           "cycles": cycles, "critical_path": path, "critical_path_p50": round(lp[path[0]], 1),
+           "conditional": sorted(k for k, i in issues.items() if i["conditional"]), "cycles": cycles,
+           "critical_path": path, "critical_path_p50": round(lp[path[0]], 1),
+           "counting_note": "downstream and longest-path figures exclude conditional issues",
            "issues": {k: {**v, "longest_path_p50": round(lp.get(k, 0), 1), "downstream": down.get(k, 0)}
                       for k, v in issues.items()}}
-    dest = a.out or os.path.join(HOME, "dag.json")
-    os.makedirs(os.path.dirname(dest), exist_ok=True)
-    json.dump(out, open(dest, "w"), indent=1, ensure_ascii=False)
+    dest = a.out or hpath("dag.json")
+    os.makedirs(os.path.dirname(os.path.abspath(dest)), exist_ok=True)
+    with open(dest, "w") as f:
+        json.dump(out, f, indent=1, ensure_ascii=False)
+        f.write("\n")
     print(f"issues={out['issue_count']} base={out['base_count']} conditional={len(out['conditional'])} "
           f"cycles={len(cycles)} critical_path_p50={out['critical_path_p50']}d -> {dest}")
     return 1 if cycles else 0
 
 
-# ---------------------------------------------------------------- ledger
-def now():
-    return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
-
-
+# ---------------------------------------------------------------- ledger primitives
 def canon(rec):
     return json.dumps({k: v for k, v in rec.items() if k != "hash"}, sort_keys=True, separators=(",", ":"),
                       ensure_ascii=False)
 
 
-def ledger_path(task_id):
-    return os.path.join(HOME, "ledger", task_id + ".jsonl")
+def contract_core_sha(c):
+    core = {k: v for k, v in c.items() if k not in ("status", "attempt")}
+    return hashlib.sha256(json.dumps(core, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
 
 
-def read_ledger(task_id):
-    p = ledger_path(task_id)
+def ledger_files():
+    d = hpath("ledger")
+    return sorted(f for f in os.listdir(d) if f.endswith(".jsonl")) if os.path.isdir(d) else []
+
+
+def read_ledger(task_id, repair=False):
+    p = hpath("ledger", task_id + ".jsonl")
     if not os.path.exists(p):
         return []
-    return [json.loads(l) for l in open(p) if l.strip()]
-
-
-def state_of(records):
-    return records[-1]["to_state"] if records else "NEW"
-
-
-def gates_of(records):
-    # gates recorded since the last return to RUNNING (a correction invalidates later gates)
-    gates = []
-    for r in records:
-        if r["to_state"] == "RUNNING" and r["from_state"] != "RUNNING":
-            gates = []
-        if r.get("gate"):
-            gates.append(r["gate"])
-    return gates
-
-
-def review_gates_needed(contract):
-    need = ["G3"]
-    if contract and (contract.get("security_sensitive") or "G4" in contract.get("required_gates", [])):
-        need.append("G4")
-    return need
-
-
-def resolve_to(to, have, contract):
-    if "|" not in to:
-        return to
-    return "AWAITING_INTEGRATION" if all(g in have for g in review_gates_needed(contract)) else "AWAITING_REVIEW"
+    raw = open(p, encoding="utf-8").read()
+    if raw and not raw.endswith("\n"):
+        if not repair:
+            raise Refused(f"{task_id}: incomplete final ledger line (crash during append?). "
+                          f"Run verify-ledger --repair-tail after checking git history.")
+        raw = raw[: raw.rfind("\n") + 1] if "\n" in raw else ""
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(raw)
+    return [json.loads(l) for l in raw.split("\n") if l.strip()]
 
 
 def load_contract(task_id):
-    p = os.path.join(HOME, "tasks", task_id + ".json")
+    p = hpath("tasks", task_id + ".json")
     return load(p) if os.path.exists(p) else None
 
 
-def cmd_record(a):
-    recs = read_ledger(a.task)
-    frm = state_of(recs)
-    key = (frm, a.event)
-    if key not in TRANSITIONS:
-        die(f"illegal transition: {frm} --{a.event}-->")
-    to, gate = TRANSITIONS[key]
-    contract = load_contract(a.task)
-    if a.event in ("assigned", "contract_revised", "created") or frm != "NEW":
-        if contract is None and a.event != "created":
-            die(f"no contract at {HOME}/tasks/{a.task}.json")
-    if contract is not None:
-        errs, _ = validate(contract, "task-contract")
-        if errs:
-            die("contract invalid, refusing to record: " + "; ".join(errs))
-    have = gates_of(recs) + ([gate] if gate else [])
-    to = resolve_to(to, have, contract)
+def lifecycle(contract):
+    return T_SHORT if contract and contract["kind"] in SHORT_KINDS else T_FULL
+
+
+def dag_issue(merc):
+    p = hpath("dag.json")
+    if merc and os.path.exists(p):
+        return load(p)["issues"].get(merc)
+    return None
+
+
+def needs_g4(contract):
+    if contract["kind"] not in FULL_KINDS:
+        return False
+    return True  # TDD DoD D6: security review for every issue (light for non-sensitive changes)
+
+
+def resolve_ref(ref):
+    for base in (HOME, REPO, ""):
+        p = os.path.join(base, ref) if base else ref
+        if os.path.isfile(p):
+            return p
+    return None
+
+
+# ---------------------------------------------------------------- the transition validator (shared)
+class Ctx:
+    """Replayable state of one task ledger."""
+
+    def __init__(self, task_id):
+        self.task_id = task_id
+        self.state = "NEW"
+        self.gates = []          # gates since the last return to RUNNING (G1 survives)
+        self.head = None
+        self.attempt = None
+        self.core_sha = None
+        self.counts = {"attempt": 0, "review": 0, "security": 0, "integration": 0, "env": 0}
+        self.prev = "GENESIS"
+        self.seq = 0
+        self.frozen = {}
+        self.pr_head = None
+
+
+def check_transition(ctx, rec, contract, live):
+    """Raise Refused if `rec` is not a legal next record for ctx. `live` = also verify external facts
+    (subtask ledgers, git, files) — done at record time; replay re-checks what is stable."""
+    ev, actor = rec["event"], rec["actor"]
+    if actor not in ACTORS:
+        raise Refused(f"actor must be one of {sorted(ACTORS)} (agents never write the ledger)")
+    if contract is None:
+        raise Refused("no contract for task")
+    T = lifecycle(contract)
+    key = (ctx.state, ev)
+    if key not in T:
+        raise Refused(f"illegal transition for kind {contract['kind']}: {ctx.state} --{ev}-->")
+    to = T[key]
+    gate = GATE_OF.get(ev) if T is T_FULL or ev == "unblocked" else None
+    # contract integrity: core may change only via contract_revised (which needs a higher version)
+    core = rec.get("contract_core_sha256")
+    if not core:
+        raise Refused("record lacks contract_core_sha256")
+    if ctx.core_sha and core != ctx.core_sha and ev != "contract_revised":
+        raise Refused("contract changed without a contract_revised record")
+    if ev == "contract_revised" and ctx.core_sha and core == ctx.core_sha:
+        raise Refused("contract_revised but the contract core did not change")
+    # attempt discipline
+    att = rec.get("attempt")
+    if ctx.state in ("AWAITING_REVIEW", "AWAITING_INTEGRATION", "AWAITING_HUMAN") and to == "RUNNING":
+        pass  # the correction's attempt bump is checked at the next 'dispatched'
+    if ev == "dispatched" and ctx.attempt is not None and att is not None and att < ctx.attempt:
+        raise Refused("attempt number went backwards")
+    # budgets
+    if ev in ("attempt_failed", "tests_failed"):
+        if ctx.counts["attempt"] + 1 >= contract["budget"]["max_attempts"]:
+            raise Refused(f"attempt budget {contract['budget']['max_attempts']} exhausted: record 'failed' or 'escalated'")
+    lim = {"code_review_changes_required": "review", "security_review_blocked": "security",
+           "integration_failed": "integration", "env_retry": "env"}.get(ev)
+    if lim and ctx.counts[lim] + 1 > LIMITS[lim]:
+        raise Refused(f"{lim} loop budget {LIMITS[lim]} exhausted: record 'failed' or 'escalated'")
+    # duplicate gates
+    if gate and gate in ctx.gates:
+        raise Refused(f"gate {gate} already recorded since the last correction")
+    have = ctx.gates + ([gate] if gate else [])
+    # gate-specific evidence
+    kinds = {e["kind"] for e in rec["evidence"]}
+    if ev == "unblocked" and "design_ref" not in kinds:
+        raise Refused("G1 needs design_ref evidence (operator-approved design commit)")
+    if ev == "tests_passed":
+        if not rec.get("head_commit"):
+            raise Refused("tests_passed must record head_commit (the tested tip)")
+        if "test_run" not in kinds:
+            raise Refused("tests_passed needs test_run evidence from the orchestrator's own re-run")
+    if ev in ("code_review_passed", "security_review_passed", "integration_verified"):
+        subs = [e["ref"] for e in rec["evidence"] if e["kind"] == "subtask"]
+        if not subs:
+            raise Refused(f"{ev} needs subtask evidence (a COMPLETED review/integration task)")
+        if live:
+            for s in subs:
+                verify_subtask(s, ev, ctx, contract)
+    if ev == "code_review_passed" and live:
+        for r in contract.get("required_reviewers", []):
+            k = REVIEWER_KIND.get(r)
+            if k and k != "security_review" and not any(subtask_kind(s) == k for s in
+                                                         [e["ref"] for e in rec["evidence"] if e["kind"] == "subtask"]):
+                raise Refused(f"G3 requires a passed {k} by {r} (required_reviewers)")
+    if ev == "pr_prepared":
+        if "pr" not in kinds or not rec.get("head_commit"):
+            raise Refused("pr_prepared needs pr evidence and head_commit")
+        if rec["head_commit"] != ctx.head:
+            raise Refused("pushed head differs from the tested and reviewed head")
+    if ev == "human_merged":
+        if "github_merge" not in kinds or rec.get("head_commit") != ctx.pr_head:
+            raise Refused("human_merged needs github_merge evidence and head_commit equal to the G6 head")
+    if ev == "result_accepted":
+        if contract["kind"] in ("mac_validation", "operator_action"):
+            if not ({"operator_statement", "result_file", "log"} & kinds):
+                raise Refused("operator/Mac task completion needs operator-provided evidence")
+        elif "result_file" not in kinds:
+            raise Refused("result_accepted needs a validated result_file")
+    if ev == "interface_frozen":
+        if not rec.get("frozen_files"):
+            raise Refused("interface_frozen needs frozen_files {path: sha256}")
+    # resolve review-gate target state
+    if ev in ("code_review_passed", "security_review_passed"):
+        to = "AWAITING_INTEGRATION" if all(g in have for g in ["G3"] + (["G4"] if needs_g4(contract) else [])) else "AWAITING_REVIEW"
     need = [g for g in REQUIRED_BEFORE.get(to, []) if g not in have]
-    if to in ("AWAITING_INTEGRATION", "AWAITING_HUMAN", "COMPLETED"):
-        need += [g for g in review_gates_needed(contract) if g not in have and g not in need]
-    if need:
-        die(f"cannot enter {to}: missing gate evidence {need}")
+    if T is T_FULL and to != ctx.state and need:
+        if not (to == "AWAITING_INTEGRATION" and need == ["G4"] and not needs_g4(contract)):
+            raise Refused(f"cannot enter {to}: missing gates {need}")
+    if T is T_SHORT and to == "RUNNING" and "G1" not in have:
+        raise Refused("cannot enter RUNNING without G1")
+    return to, gate
+
+
+def apply(ctx, rec, to, gate):
+    ev = rec["event"]
+    if to == "RUNNING" and ctx.state != "RUNNING":
+        ctx.gates = [g for g in ctx.gates if g == "G1"]
+    if gate:
+        ctx.gates.append(gate)
+    if ev == "tests_passed":
+        ctx.head = rec["head_commit"]
+    if ev == "pr_prepared":
+        ctx.pr_head = rec["head_commit"]
+    if ev == "interface_frozen":
+        ctx.frozen.update(rec["frozen_files"])
+    for e, k in (("attempt_failed", "attempt"), ("tests_failed", "attempt"), ("code_review_changes_required", "review"),
+                 ("security_review_blocked", "security"), ("integration_failed", "integration"), ("env_retry", "env")):
+        if ev == e:
+            ctx.counts[k] += 1
+    if ev == "contract_revised":
+        ctx.counts = {k: 0 for k in ctx.counts}
+        ctx.gates = [g for g in ctx.gates if g == "G1"]
+    ctx.core_sha = rec["contract_core_sha256"]
+    if rec.get("attempt") is not None:
+        ctx.attempt = rec["attempt"]
+    ctx.state, ctx.prev, ctx.seq = to, rec["hash"], rec["seq"]
+
+
+def replay(task_id, live=False):
+    ctx = Ctx(task_id)
+    contract = load_contract(task_id)
+    for i, r in enumerate(read_ledger(task_id), 1):
+        if r["seq"] != i or r["prev_hash"] != ctx.prev:
+            raise Refused(f"{task_id} seq {i}: chain broken")
+        if hashlib.sha256(canon(r).encode()).hexdigest() != r["hash"]:
+            raise Refused(f"{task_id} seq {i}: hash mismatch")
+        try:
+            to, gate = check_transition(ctx, r, contract, live)
+        except Refused as e:
+            raise Refused(f"{task_id} seq {i} ({r['event']}): {e}")
+        if to != r["to_state"] or r["from_state"] != ctx.state:
+            raise Refused(f"{task_id} seq {i}: recorded {r['from_state']}->{r['to_state']}, rules give {ctx.state}->{to}")
+        apply(ctx, r, to, gate)
+    return ctx
+
+
+def subtask_kind(task_id):
+    c = load_contract(task_id)
+    return c["kind"] if c else None
+
+
+def verify_subtask(sub_id, ev, parent_ctx, parent_contract):
+    c = load_contract(sub_id)
+    if not c:
+        raise Refused(f"subtask {sub_id} has no contract")
+    if c["kind"] != "integration" and c.get("parent_task_id") != parent_ctx.task_id:
+        raise Refused(f"subtask {sub_id} does not belong to {parent_ctx.task_id}")
+    sctx = replay(sub_id)
+    if sctx.state != "COMPLETED":
+        raise Refused(f"subtask {sub_id} is {sctx.state}, not COMPLETED")
+    want = {"code_review_passed": {"code_review", "design_review", "reliability_review"},
+            "security_review_passed": {"security_review"}, "integration_verified": {"integration"}}[ev]
+    if c["kind"] not in want:
+        raise Refused(f"subtask {sub_id} kind {c['kind']} cannot provide {ev}")
+    res = accepted_result(sub_id)
+    if c["kind"] in REVIEW_GATE:
+        if res.get("recommendation") not in ("accept", "accept_with_conditions"):
+            raise Refused(f"review {sub_id} did not accept")
+        if any(f.get("blocking") for f in res.get("findings", [])):
+            raise Refused(f"review {sub_id} has blocking findings")
+        if res.get("reviewed_head_commit") != parent_ctx.head or c["review_target"]["head_commit"] != parent_ctx.head:
+            raise Refused(f"review {sub_id} is not bound to the current tested head {parent_ctx.head}")
+    if c["kind"] == "integration":
+        if parent_ctx.task_id not in c.get("covers_tasks", []):
+            raise Refused(f"integration {sub_id} does not cover {parent_ctx.task_id}")
+        if res.get("status") != "completed" or res.get("recommendation") not in ("accept", "accept_with_conditions"):
+            raise Refused(f"integration {sub_id} did not pass")
+        heads = {x.split("@")[0]: x.split("@")[1] for x in res.get("integrated_heads", [])}
+        if heads.get(parent_ctx.task_id) != parent_ctx.head:
+            raise Refused(f"integration {sub_id} integrated a different head of {parent_ctx.task_id}")
+
+
+def accepted_result(sub_id):
+    recs = read_ledger(sub_id)
+    acc = [r for r in recs if r["event"] == "result_accepted"]
+    if not acc:
+        raise Refused(f"{sub_id} has no accepted result")
+    ref = [e["ref"] for e in acc[-1]["evidence"] if e["kind"] == "result_file"]
+    p = resolve_ref(ref[0]) if ref else None
+    if not p:
+        raise Refused(f"{sub_id} accepted result file not found")
+    return load(p)
+
+
+# ---------------------------------------------------------------- commands: record / verify / status
+def cmd_record(a):
+    require_home()
+    contract = load_contract(a.task)
+    if contract is None:
+        die(f"no contract at {hpath('tasks', a.task + '.json')}")
+    errs, _ = validate(contract, "task-contract")
+    if errs:
+        die("contract invalid, refusing to record: " + "; ".join(errs))
+    try:
+        ctx = replay(a.task)
+    except Refused as e:
+        die(f"ledger does not verify, refusing to append: {e}")
     if not a.evidence:
         die("at least one --evidence kind:ref is required")
     ev = []
     for e in a.evidence:
         kind, _, ref = e.partition(":")
+        if not ref:
+            die(f"evidence '{e}' has an empty ref")
         item = {"kind": kind, "ref": ref}
-        if os.path.isfile(ref):
-            item["sha256"] = hashlib.sha256(open(ref, "rb").read()).hexdigest()
+        if kind in FILE_EVIDENCE:
+            p = resolve_ref(ref)
+            if not p:
+                die(f"evidence file not found (relative to DEVORCH_HOME or repo): {ref}")
+            item["sha256"] = hashlib.sha256(open(p, "rb").read()).hexdigest()
         ev.append(item)
-    rec = {"schema": "devorch.handoff.v1", "seq": len(recs) + 1, "task_id": a.task, "at": now(),
-           "event": a.event, "from_state": frm, "to_state": to, "actor": a.actor, "evidence": ev,
-           "prev_hash": recs[-1]["hash"] if recs else "GENESIS"}
-    if gate:
-        rec["gate"] = gate
-    if contract:
-        rec["contract_version"], rec["attempt"] = contract["contract_version"], contract["attempt"]
+    rec = {"schema": "devorch.handoff.v1", "seq": ctx.seq + 1, "task_id": a.task, "at": now(), "event": a.event,
+           "from_state": ctx.state, "actor": a.actor, "evidence": ev, "prev_hash": ctx.prev,
+           "contract_version": contract["contract_version"], "attempt": contract["attempt"],
+           "contract_core_sha256": contract_core_sha(contract)}
+    if a.head:
+        rec["head_commit"] = a.head
+    if a.session:
+        rec["session"] = a.session
+    if a.frozen:
+        rec["frozen_files"] = dict(x.split("=", 1) for x in a.frozen)
     if a.note:
         rec["note"] = a.note
+    try:
+        to, gate = check_transition(ctx, {**rec, "to_state": "?", "hash": "?"}, contract, live=True)
+    except Refused as e:
+        die(str(e))
+    rec["to_state"] = to
+    if gate:
+        rec["gate"] = gate
     rec["hash"] = hashlib.sha256(canon(rec).encode()).hexdigest()
-    errs, mode = validate(rec, "handoff-record")
+    errs, _ = validate(rec, "handoff-record")
     if errs:
         die("record invalid: " + "; ".join(errs))
-    os.makedirs(os.path.dirname(ledger_path(a.task)), exist_ok=True)
-    with open(ledger_path(a.task), "a") as f:
+    os.makedirs(hpath("ledger"), exist_ok=True)
+    with open(hpath("ledger", a.task + ".jsonl"), "a", encoding="utf-8") as f:
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-    print(f"{a.task}: {frm} -> {to} ({a.event}{', ' + gate if gate else ''}) seq={rec['seq']}")
+        f.flush()
+        os.fsync(f.fileno())
+    print(f"{a.task}: {ctx.state} -> {to} ({a.event}{', ' + gate if gate else ''}) seq={rec['seq']}")
 
 
 def cmd_verify_ledger(a):
+    require_home()
     bad = 0
-    d = os.path.join(HOME, "ledger")
-    for fn in sorted(os.listdir(d)) if os.path.isdir(d) else []:
-        recs = [json.loads(l) for l in open(os.path.join(d, fn)) if l.strip()]
-        prev, state = "GENESIS", "NEW"
-        for i, r in enumerate(recs, 1):
-            problems = []
-            if r["seq"] != i: problems.append("seq")
-            if r["prev_hash"] != prev: problems.append("prev_hash")
-            if hashlib.sha256(canon(r).encode()).hexdigest() != r["hash"]: problems.append("hash")
-            exp = TRANSITIONS.get((state, r["event"]), ("<illegal>",))[0]
-            if r["from_state"] != state or r["to_state"] not in exp.split("|"):
-                problems.append("transition")
-            if problems:
+    for fn in ledger_files():
+        tid = fn[:-6]
+        try:
+            if a.repair_tail:
+                read_ledger(tid, repair=True)
+            replay(tid)
+        except Refused as e:
+            bad += 1
+            print(str(e))
+    if a.remote:
+        for fn in ledger_files():
+            r = git(["show", f"{a.remote}:ledger/{fn}"], HOME)
+            if r.returncode != 0:
+                continue  # new local ledger, not yet pushed
+            local = open(hpath("ledger", fn), encoding="utf-8").read()
+            if not local.startswith(r.stdout):
                 bad += 1
-                print(f"{fn} seq {i}: {', '.join(problems)}")
-            prev, state = r["hash"], r["to_state"]
-    print("ledger OK" if not bad else f"{bad} bad records")
+                print(f"{fn}: local ledger is not an extension of {a.remote} (truncated or rewritten)")
+    print("ledger OK" if not bad else f"{bad} problem(s)")
     return 1 if bad else 0
 
 
 def cmd_status(a):
-    d = os.path.join(HOME, "ledger")
-    rows = []
-    for fn in sorted(os.listdir(d)) if os.path.isdir(d) else []:
-        recs = read_ledger(fn[:-6])
-        rows.append((fn[:-6], state_of(recs), ",".join(gates_of(recs)) or "-", recs[-1]["at"] if recs else ""))
-    for r in rows:
-        print("%-16s %-22s gates=%-20s last=%s" % r)
-    if not rows:
-        print("(no tasks in ledger at %s)" % HOME)
+    require_home()
+    for fn in ledger_files():
+        tid = fn[:-6]
+        try:
+            ctx = replay(tid)
+            c = load_contract(tid) or {}
+            print(f"{tid:16} {c.get('kind', '?'):16} {ctx.state:22} gates={','.join(ctx.gates) or '-':20} "
+                  f"attempt={ctx.attempt} head={(ctx.head or '-')[:10]}")
+        except Refused as e:
+            print(f"{tid:16} INVALID: {e}")
+    if not ledger_files():
+        print(f"(no tasks in ledger at {HOME})")
 
 
+# ---------------------------------------------------------------- facts (TDD gates, P0 checks, identity)
+def read_facts():
+    p = hpath("facts.jsonl")
+    return [json.loads(l) for l in open(p, encoding="utf-8") if l.strip()] if os.path.exists(p) else []
+
+
+def cmd_fact(a):
+    require_home()
+    if a.actor != "operator":
+        die("facts (TDD gates G-S*, P0 checks, identity) are recorded by the operator only")
+    if not a.evidence:
+        die("evidence required")
+    rec = {"at": now(), "kind": a.kind, "id": a.id, "status": a.status, "actor": a.actor, "evidence": a.evidence}
+    with open(hpath("facts.jsonl"), "a", encoding="utf-8") as f:
+        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        f.flush(); os.fsync(f.fileno())
+    print(f"fact {a.kind} {a.id} = {a.status}")
+
+
+def satisfied_facts():
+    s = set()
+    for f in read_facts():
+        if f["status"] in ("verified", "accepted", "recorded"):
+            s.add(f["id"])
+        elif f["status"] in ("revoked", "failed"):
+            s.discard(f["id"])
+    return s
+
+
+# ---------------------------------------------------------------- ready
 def cmd_ready(a):
-    dag = load(a.dag or os.path.join(HOME, "dag.json"))
-    tasks_dir = os.path.join(HOME, "tasks")
-    by_merc = {}
-    for fn in os.listdir(tasks_dir) if os.path.isdir(tasks_dir) else []:
-        c = load(os.path.join(tasks_dir, fn))
+    require_home()
+    dag = load(a.dag or hpath("dag.json"))
+    assign = load(ASSIGN)
+    gate_map = assign.get("_tdd_gates", {})
+    facts = satisfied_facts()
+    by_merc, problems = {}, []
+    for fn in sorted(os.listdir(hpath("tasks"))) if os.path.isdir(hpath("tasks")) else []:
+        c = load(hpath("tasks", fn))
+        if c.get("parent_task_id") or c["kind"] in SUB_KINDS:
+            continue
         if c.get("merc_issue"):
-            by_merc[c["merc_issue"]] = (c["task_id"], state_of(read_ledger(c["task_id"])))
-    satisfied_gates = set(a.gate or [])
+            st = replay(c["task_id"]).state
+            if c["merc_issue"] in by_merc and by_merc[c["merc_issue"]][1] not in ("CANCELLED", "FAILED"):
+                problems.append(f"duplicate primary tasks for {c['merc_issue']}: {by_merc[c['merc_issue']][0]}, {c['task_id']}")
+            by_merc[c["merc_issue"]] = (c["task_id"], st, c)
+    for p in problems:
+        print("ERROR: " + p)
     out = []
     for k, i in dag["issues"].items():
         if i["conditional"] and k not in (a.include_conditional or []):
@@ -376,68 +745,155 @@ def cmd_ready(a):
         if k in by_merc and by_merc[k][1] not in ("NEW", "BLOCKED", "READY"):
             continue
         deps_ok = all(d in by_merc and by_merc[d][1] == "COMPLETED" for d in i["deps"])
-        gate_refs = re.findall(r"G-S\d", i.get("gates", ""))
-        gates_ok = all(g in satisfied_gates for g in gate_refs)
-        if deps_ok and gates_ok:
-            out.append((k, i["longest_path_p50"], i["downstream"], i["needs_mac_or_operator"], i["title"], i.get("gates", "")))
+        if k in by_merc:  # contract-level dependencies (incl. INTERFACE_FROZEN)
+            for dep in by_merc[k][2].get("dependencies", []):
+                dctx = replay(dep["task_id"])
+                if dep["required_state"] == "INTERFACE_FROZEN":
+                    deps_ok &= bool(dctx.frozen)
+                elif dep["required_state"] == "AWAITING_HUMAN":
+                    deps_ok &= dctx.state in ("AWAITING_HUMAN", "COMPLETED")
+                else:
+                    deps_ok &= dctx.state == "COMPLETED"
+        tdd = re.findall(r"G-S\d", i.get("gates", "")) + gate_map.get(k, [])
+        missing = [g for g in tdd if g not in facts] + [p for p in i.get("p0_refs", []) if p not in facts]
+        if deps_ok and not missing:
+            out.append((k, i["longest_path_p50"], i["downstream"], i["needs_mac_or_operator"], i["title"]))
+        elif deps_ok and a.verbose:
+            print(f"{k:10} deps ok, waiting for facts: {', '.join(missing)}")
     out.sort(key=lambda r: (-r[1], -r[2]))
-    for k, lp, dn, mac, t, g in out:
-        pre = f"  [check prerequisites: {g}]" if g and g not in ("—", "-") else ""
-        print(f"{k:10} lp={lp:5} downstream={dn:3} {'MAC/OPERATOR' if mac else 'agent':12} {t}{pre}")
+    for k, lp, dn, mac, t in out:
+        print(f"{k:10} lp={lp:5} downstream={dn:3} {'OPERATOR/MAC' if mac else 'agent':12} {t}")
     if not out:
         print("(nothing READY)")
+    return 1 if problems else 0
 
 
-# ---------------------------------------------------------------- checks
+# ---------------------------------------------------------------- contract / result checks
+def active_primary_paths(exclude):
+    res = []
+    if not os.path.isdir(hpath("tasks")):
+        return res
+    for fn in os.listdir(hpath("tasks")):
+        c = load(hpath("tasks", fn))
+        if c["task_id"] == exclude or c["kind"] in READ_ONLY_KINDS or c.get("parent_task_id"):
+            continue
+        try:
+            st = replay(c["task_id"]).state
+        except Refused:
+            st = "?"
+        if st in ("RUNNING", "AWAITING_REVIEW", "AWAITING_INTEGRATION", "AWAITING_HUMAN"):
+            res.append((c["task_id"], c["allowed_paths"]))
+    return res
+
+
 def cmd_check_contract(a):
     c = load(a.contract)
     errs, mode = validate(c, "task-contract")
-    if c.get("worktree") and not os.path.isabs(c["worktree"]):
-        errs.append("worktree must be an absolute path")
-    if c.get("kind") == "code_review" and c.get("assigned_agent") != "mdev-code-reviewer":
-        errs.append("code_review tasks must be assigned to mdev-code-reviewer")
-    if c.get("kind") in ("code_review", "security_review") and "review_target" not in c:
-        errs.append("review tasks need review_target")
+    if not errs:
+        if not os.path.isabs(c["worktree"]) or not os.path.isabs(c["evidence_dir"]):
+            errs.append("worktree and evidence_dir must be absolute paths")
+        if HOME and os.path.abspath(c["evidence_dir"]).startswith(os.path.abspath(HOME) + os.sep):
+            errs.append("evidence_dir must be outside DEVORCH_HOME (agents never write the ledger worktree)")
+        allowed = KIND_AGENT.get(c["kind"])
+        if allowed and c["assigned_agent"] not in allowed:
+            errs.append(f"kind {c['kind']} must be assigned to {sorted(allowed)}")
+        if c["kind"] in SUB_KINDS:
+            if c.get("merc_issue"):
+                errs.append("review/integration subtasks must have merc_issue null")
+            if c["kind"] == "integration" and not c.get("covers_tasks"):
+                errs.append("integration tasks need covers_tasks")
+            if c["kind"] != "integration" and not c.get("parent_task_id"):
+                errs.append("review subtasks need parent_task_id")
+        if c["kind"] in REVIEW_GATE and "review_target" not in c:
+            errs.append("review tasks need review_target")
+        if c["kind"] in READ_ONLY_KINDS and c["allowed_paths"] != []:
+            errs.append("read-only kinds must have allowed_paths []")
+        for p in c["allowed_paths"]:
+            if matches(p.replace("**", "x").replace("*", "x"), c.get("restricted_paths", [])):
+                errs.append(f"allowed path {p} falls inside restricted_paths")
+        if HOME and c["allowed_paths"]:
+            for tid, paths in active_primary_paths(c["task_id"]):
+                if overlap(c["allowed_paths"], paths):
+                    errs.append(f"path ownership conflict with active task {tid}")
     report(errs, mode)
 
 
+def changed_files(wt, base, tip):
+    r = git(["diff", "--no-renames", "--name-only", "-z", base, tip], wt, check=True)
+    return sorted(f for f in r.stdout.split("\0") if f)
+
+
 def cmd_check_result(a):
-    r, c = load(a.result), load(a.contract)
+    c = load(a.contract)
+    errs, mode = validate(c, "task-contract")
+    if errs:
+        report(["contract: " + e for e in errs], mode)
+    r = load(a.result)
     errs, mode = validate(r, "task-result")
     for k in ("task_id", "contract_version", "attempt"):
         if r.get(k) != c.get(k):
             errs.append(f"{k} mismatch (result {r.get(k)} vs contract {c.get(k)})")
     if r.get("agent") != c.get("assigned_agent"):
         errs.append("result agent is not the assigned agent")
+    expected_path = os.path.join(c["evidence_dir"], "result.json")
+    if os.path.abspath(a.result) != os.path.abspath(expected_path) and not a.allow_copy:
+        errs.append(f"result must be read from {expected_path} (written by the agent before returning)")
     wt = a.repo or c["worktree"]
-    if c["kind"] in ("implementation", "test", "reliability", "design", "integration", "release") and r.get("commits"):
-        head = r.get("head_commit")
-        if not head:
-            errs.append("commits listed but head_commit missing")
+    try:
+        tip = git(["rev-parse", "--verify", f"refs/heads/{c['branch']}"], wt, check=True).stdout.strip()
+        if git(["merge-base", "--is-ancestor", c["base_commit"], tip], wt).returncode != 0:
+            errs.append("base_commit is not an ancestor of the branch tip")
+        changed = changed_files(wt, c["base_commit"], tip)
+        rev = [x for x in git(["rev-list", "--reverse", f"{c['base_commit']}..{tip}"], wt, check=True).stdout.split() if x]
+        dirty = git(["status", "--porcelain", "--untracked-files=all"], wt, check=True).stdout.strip()
+        wt_head = git(["rev-parse", "HEAD"], wt, check=True).stdout.strip()
+        if c["kind"] in READ_ONLY_KINDS:
+            target = c.get("review_target", {}).get("head_commit")
+            if r.get("commits") or (target and tip != target and c["kind"] in REVIEW_GATE):
+                errs.append("read-only task: branch moved or commits reported")
+            if dirty:
+                errs.append("read-only task left the worktree modified")
         else:
-            if git(["merge-base", "--is-ancestor", c["base_commit"], head], wt).returncode != 0:
-                errs.append("base_commit is not an ancestor of head_commit")
-            br = git(["rev-parse", c["branch"]], wt).stdout.strip()
-            if br != head:
-                errs.append(f"branch {c['branch']} does not point at head_commit")
-            for sha in r["commits"]:
-                if git(["cat-file", "-e", sha + "^{commit}"], wt).returncode != 0:
-                    errs.append(f"commit {sha} does not exist")
-            changed = [l for l in git(["diff", "--name-only", c["base_commit"], head], wt).stdout.split("\n") if l]
+            if dirty:
+                errs.append("worktree has uncommitted or untracked changes")
+            if wt_head != tip:
+                errs.append("worktree HEAD is not the branch tip")
+            if rev and r.get("head_commit") != tip:
+                errs.append("head_commit is not the branch tip")
+            if sorted(r.get("commits", [])) != sorted(rev):
+                errs.append("commits must equal git rev-list base..tip")
+            if sorted(set(r.get("modified_files", []))) != changed:
+                errs.append("modified_files does not equal git diff --no-renames base..tip")
             for f in changed:
-                if not any(fnmatch.fnmatch(f, p) for p in c["allowed_paths"]):
+                if not matches(f, c["allowed_paths"]):
                     errs.append(f"changed file outside allowed_paths: {f}")
-                if any(fnmatch.fnmatch(f, p) for p in c.get("restricted_paths", [])):
+                if matches(f, c.get("restricted_paths", [])):
                     errs.append(f"changed restricted path: {f}")
-            if sorted(set(changed)) != sorted(set(r.get("modified_files", []))):
-                errs.append("modified_files does not equal git diff --name-only base..head")
-    if r.get("status") == "completed":
-        required = {t["id"] for t in c.get("required_tests", [])}
-        passed = {t["id"] for t in r.get("tests", []) if t["outcome"] == "passed" and t["exit_code"] == 0}
-        if required - passed:
-            errs.append(f"required tests not passed: {sorted(required - passed)}")
-        if any(f.get("blocking") for f in r.get("findings", [])) and r.get("recommendation") == "accept":
+    except Refused as e:
+        errs.append(str(e))
+    if c["kind"] in REVIEW_GATE:
+        tgt = c["review_target"]["head_commit"]
+        if r.get("reviewed_head_commit") != tgt:
+            errs.append("reviewed_head_commit must equal review_target.head_commit")
+        rec = r.get("recommendation")
+        if rec is None:
+            errs.append("review result needs a recommendation")
+        if rec in ("accept", "accept_with_conditions") and any(f.get("blocking") for f in r.get("findings", [])):
             errs.append("recommendation accept with blocking findings")
+    required = {t["id"] for t in c.get("required_tests", [])}
+    reported = {t["id"]: t for t in r.get("tests", [])}
+    if r.get("status") == "completed":
+        if c["kind"] in REVIEW_GATE:
+            if required - set(reported):
+                errs.append(f"review must report an outcome for every required test: {sorted(required - set(reported))}")
+            if r.get("recommendation") in ("accept", "accept_with_conditions"):
+                bad = [t for t in required if t in reported and (reported[t]["outcome"] != "passed" or reported[t]["exit_code"] != 0)]
+                if bad:
+                    errs.append(f"accept with failing required tests: {bad}")
+        elif c["kind"] not in ("mac_validation", "operator_action", "planning"):
+            missing = [t for t in required if t not in reported or reported[t]["outcome"] != "passed" or reported[t]["exit_code"] != 0]
+            if missing:
+                errs.append(f"required tests not passed: {sorted(missing)}")
     if r.get("status") == "escalated" and "escalation" not in r:
         errs.append("escalated without escalation object")
     report(errs, mode)
@@ -453,23 +909,177 @@ def report(errs, mode):
     print("RESULT: VALID (claims still require gate re-verification by the orchestrator)")
 
 
+# ---------------------------------------------------------------- evidence import, git baseline, push, lock
+def cmd_import_evidence(a):
+    require_home()
+    c = load_contract(a.task)
+    if not c:
+        die("no contract")
+    src = c["evidence_dir"]
+    dst = hpath("evidence", a.task, f"attempt-{c['attempt']}")
+    if not os.path.isdir(src):
+        die(f"evidence_dir {src} missing")
+    os.makedirs(dst, exist_ok=True)
+    manifest = {}
+    for root, _, files in os.walk(src):
+        for fn in files:
+            sp = os.path.join(root, fn)
+            if os.path.islink(sp):
+                continue
+            rel = os.path.relpath(sp, src)
+            dp = os.path.join(dst, rel)
+            os.makedirs(os.path.dirname(dp), exist_ok=True)
+            shutil.copyfile(sp, dp)
+            manifest[rel] = hashlib.sha256(open(dp, "rb").read()).hexdigest()
+    with open(os.path.join(dst, "MANIFEST.json"), "w") as f:
+        json.dump(manifest, f, indent=1, sort_keys=True)
+    print(f"imported {len(manifest)} files -> {os.path.relpath(dst, HOME)}")
+
+
+BASELINE_PATHS = [".claude", "CLAUDE.md", "tools/devorch", ".gitignore"]
+
+
+def baseline_snapshot():
+    common = git(["rev-parse", "--git-common-dir"], REPO, check=True).stdout.strip()
+    common = common if os.path.isabs(common) else os.path.join(REPO, common)
+    snap = {"git_config": hashlib.sha256(open(os.path.join(common, "config"), "rb").read()).hexdigest()}
+    hooks = os.path.join(common, "hooks")
+    snap["git_hooks"] = sorted(f for f in os.listdir(hooks) if not f.endswith(".sample")) if os.path.isdir(hooks) else []
+    files = {}
+    for p in BASELINE_PATHS:
+        full = os.path.join(REPO, p)
+        targets = [full] if os.path.isfile(full) else [os.path.join(r, f) for r, _, fs in os.walk(full) for f in fs
+                                                       if "__pycache__" not in r]
+        for t in targets:
+            files[os.path.relpath(t, REPO)] = hashlib.sha256(open(t, "rb").read()).hexdigest()
+    snap["files"] = files
+    return snap
+
+
+def cmd_git_baseline(a):
+    require_home()
+    p = hpath("baseline.json")
+    snap = baseline_snapshot()
+    if a.action == "record":
+        with open(p, "w") as f:
+            json.dump(snap, f, indent=1, sort_keys=True)
+        print("baseline recorded")
+        return 0
+    if not os.path.exists(p):
+        die("no baseline recorded")
+    old = load(p)
+    diffs = []
+    if old["git_config"] != snap["git_config"]:
+        diffs.append(".git/config changed")
+    if old["git_hooks"] != snap["git_hooks"]:
+        diffs.append(f"git hooks changed: {snap['git_hooks']}")
+    for k in sorted(set(old["files"]) | set(snap["files"])):
+        if old["files"].get(k) != snap["files"].get(k):
+            diffs.append(f"changed: {k}")
+    for d in diffs:
+        print(" - " + d)
+    print("baseline OK" if not diffs else "BASELINE VIOLATION — stop and escalate (S-05)")
+    return 1 if diffs else 0
+
+
+def cmd_push(a):
+    require_home()
+    if cmd_git_baseline(argparse.Namespace(action="verify")) != 0:
+        die("refusing to push: baseline violation")
+    if a.ledger:
+        ref, cwd = "devorch/state", HOME
+    else:
+        c = load_contract(a.task)
+        ctx = replay(a.task)
+        ref, cwd = c["branch"], REPO
+        if not re.match(r"^dev/[a-z0-9-]+$", ref):
+            die("only dev/* branches may be pushed")
+        tip = git(["rev-parse", f"refs/heads/{ref}"], REPO, check=True).stdout.strip()
+        if ctx.head != tip:
+            die(f"branch tip {tip} is not the tested head {ctx.head}")
+        if not all(g in ctx.gates for g in ("G1", "G2", "G3", "G4", "G5")):
+            die(f"push needs G1-G5 (have {ctx.gates})")
+    url = git(["config", "--get", "remote.origin.url"], cwd, check=True).stdout.strip()
+    r = git(["push", url, f"refs/heads/{ref}:refs/heads/{ref}"], cwd)
+    print(r.stdout + r.stderr)
+    return r.returncode
+
+
+def cmd_lock(a):
+    require_home()
+    p = hpath("LOCK")
+    cur = load(p) if os.path.exists(p) else None
+    if a.action in ("acquire", "refresh"):
+        if cur and cur["session"] != a.session and not a.force:
+            die(f"LOCK held by session {cur['session']} since {cur['at']}: confirm with the operator, then --force")
+        with open(p, "w") as f:
+            json.dump({"session": a.session, "at": now()}, f)
+        print(f"lock {a.action}d by {a.session}")
+    elif a.action == "release":
+        if cur and cur["session"] == a.session:
+            os.remove(p)
+        print("lock released")
+    else:
+        print(json.dumps(cur) if cur else "(no lock)")
+
+
+def cmd_preflight(a):
+    """Run at the start of every tick: ledger verifies (also against the pushed branch), the ledger
+    worktree has no foreign changes, the git baseline holds, the lock is ours."""
+    require_home()
+    ok = True
+    dirty = git(["status", "--porcelain", "--untracked-files=all"], HOME).stdout.strip()
+    if dirty:
+        ok = False
+        print("DEVORCH_HOME has uncommitted changes (only the orchestrator writes, then commits each tick):\n" + dirty)
+    has_remote = git(["rev-parse", "--verify", "origin/devorch/state"], HOME).returncode == 0
+    if cmd_verify_ledger(argparse.Namespace(repair_tail=False, remote="origin/devorch/state" if has_remote else None)):
+        ok = False
+    if cmd_git_baseline(argparse.Namespace(action="verify")):
+        ok = False
+    lk = load(hpath("LOCK")) if os.path.exists(hpath("LOCK")) else None
+    if not lk or lk["session"] != a.session:
+        ok = False
+        print(f"LOCK not held by this session ({lk})")
+    print("PREFLIGHT OK" if ok else "PREFLIGHT FAILED — do not dispatch")
+    return 0 if ok else 1
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sp = p.add_subparsers(dest="cmd", required=True)
     s = sp.add_parser("dag"); s.add_argument("--breakdown", default=BREAKDOWN); s.add_argument("--out")
-    s = sp.add_parser("ready"); s.add_argument("--dag"); s.add_argument("--gate", action="append",
-        help="TDD security gate already satisfied, e.g. --gate G-S1"); s.add_argument("--include-conditional", action="append")
+    s = sp.add_parser("ready"); s.add_argument("--dag"); s.add_argument("--include-conditional", action="append")
+    s.add_argument("--verbose", action="store_true")
     sp.add_parser("status")
     s = sp.add_parser("check-contract"); s.add_argument("contract")
     s = sp.add_parser("check-result"); s.add_argument("result"); s.add_argument("contract"); s.add_argument("--repo")
+    s.add_argument("--allow-copy", action="store_true", help="tests/examples only: result not at evidence_dir/result.json")
     s = sp.add_parser("record"); s.add_argument("--task", required=True); s.add_argument("--event", required=True)
     s.add_argument("--actor", default="principal-orchestrator"); s.add_argument("--evidence", action="append")
-    s.add_argument("--note")
-    sp.add_parser("verify-ledger")
+    s.add_argument("--head"); s.add_argument("--session"); s.add_argument("--frozen", action="append",
+                   help="path=sha256 (interface_frozen)"); s.add_argument("--note")
+    s = sp.add_parser("verify-ledger"); s.add_argument("--repair-tail", action="store_true"); s.add_argument("--remote")
+    s = sp.add_parser("fact"); s.add_argument("--kind", required=True, choices=["tdd_gate", "p0_check", "identity", "decision"])
+    s.add_argument("--id", required=True); s.add_argument("--status", required=True,
+                   choices=["verified", "accepted", "recorded", "failed", "revoked"])
+    s.add_argument("--actor", default="principal-orchestrator"); s.add_argument("--evidence", action="append")
+    s = sp.add_parser("import-evidence"); s.add_argument("task")
+    s = sp.add_parser("git-baseline"); s.add_argument("action", choices=["record", "verify"])
+    s = sp.add_parser("push"); g = s.add_mutually_exclusive_group(required=True); g.add_argument("--task")
+    g.add_argument("--ledger", action="store_true")
+    s = sp.add_parser("lock"); s.add_argument("action", choices=["acquire", "refresh", "release", "show"])
+    s.add_argument("--session", default=""); s.add_argument("--force", action="store_true")
+    s = sp.add_parser("preflight"); s.add_argument("--session", required=True)
     a = p.parse_args()
     fn = {"dag": cmd_dag, "ready": cmd_ready, "status": cmd_status, "check-contract": cmd_check_contract,
-          "check-result": cmd_check_result, "record": cmd_record, "verify-ledger": cmd_verify_ledger}[a.cmd]
-    sys.exit(fn(a) or 0)
+          "check-result": cmd_check_result, "record": cmd_record, "verify-ledger": cmd_verify_ledger,
+          "fact": cmd_fact, "import-evidence": cmd_import_evidence, "git-baseline": cmd_git_baseline,
+          "push": cmd_push, "lock": cmd_lock, "preflight": cmd_preflight}[a.cmd]
+    try:
+        sys.exit(fn(a) or 0)
+    except Refused as e:
+        die(str(e))
 
 
 if __name__ == "__main__":

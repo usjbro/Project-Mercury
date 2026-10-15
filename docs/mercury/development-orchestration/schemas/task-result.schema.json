@@ -37,7 +37,8 @@
     },
     "attempt": {
       "type": "integer",
-      "minimum": 1
+      "minimum": 1,
+      "maximum": 50
     },
     "agent": {
       "enum": [
@@ -319,6 +320,26 @@
           "type": "number"
         }
       }
+    },
+    "reviewed_head_commit": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "review kinds: the exact head reviewed (must equal review_target.head_commit)"
+    },
+    "integrated_heads": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^DT-[0-9]{4}(-[a-z0-9]+)?@[0-9a-f]{40}$"
+      },
+      "description": "integration: task@reviewed_head for each covered task"
     }
   }
 }
