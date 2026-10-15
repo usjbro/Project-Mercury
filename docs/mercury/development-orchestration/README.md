@@ -31,10 +31,10 @@
 | Element | Status |
 |---|---|
 | MERCURY application (coordinator, adapters, DB) | **Not implemented** (blocked on DOD-01 / TDD approval) |
-| `.claude/agents/` (13 definitions), `.claude/settings.json` deny rules, `CLAUDE.md`, `.gitignore` | **Newly configured**. Frontmatter is YAML-valid with only documented fields. Agents not yet loaded by a restarted session; deny rules observed taking effect in this session |
+| `.claude/agents/` (13 definitions), `.claude/settings.json` deny rules, `CLAUDE.md`, `.gitignore` | **Newly configured and verified to load**: YAML-valid, documented fields only, and after a session restart all 13 `mdev-*` agents were listed as available agent types. The deny rules took effect in the live session (the denied GitHub MCP tools disappeared) |
 | `tools/devorch/devorch.py` (DAG, READY, contract/result checks, ledger, verification) | **Newly configured and tested** (scratch repo and ledger, positive and negative cases) |
 | Ledger branch `devorch/state` | **Documented, not created** (RB-D1, after DOD-01) |
 | GitHub ruleset on `main`; development identity | **Awaiting operator authorization** (DOD-02, DOD-03) |
 | Parallel cloud worker sessions | **Documented, not configured, unverified** (DOD-07) |
-| Background-agent survival across session restart | **Unverified**; the design assumes it does not survive |
+| Background-agent survival across session restart | **Verified: they do not survive.** A container restart stopped 4 running reviewers; they resumed from their saved transcripts via `SendMessage`. The resume procedure assumes exactly this |
 | Mac-lane tasks | **Blocked** on the operator (Phase 0) |

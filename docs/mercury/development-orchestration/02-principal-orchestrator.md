@@ -108,7 +108,7 @@ The conversation is **never** the source of truth. To resume:
    `git fetch origin devorch/state && git worktree add ../mercury-devorch devorch/state`. If it already exists: `git -C ../mercury-devorch pull --ff-only`.
 3. Run `python3 tools/devorch/devorch.py verify-ledger`. Any failure → stop and escalate (`ESCALATIONS.md`, kind `cannot_continue`).
 4. Run `python3 tools/devorch/devorch.py status`.
-5. **For every task in RUNNING:** the subagent from the lost session is gone (UNVERIFIED that it survives a restart, so assume it does not).
+5. **For every task in RUNNING:** the subagent from the lost session is gone (verified: a container restart stops background agents). If the platform offers to resume a stopped agent by id, prefer `SendMessage` to that id; it continues from its transcript under the same contract and attempt.
    - If the task branch has commits beyond `base_commit` and `evidence/<task>/attempt-N/result.json` exists, continue at loop step 3.
    - Otherwise record `stale_detected`, then either:
      - `reclaimed` (back to READY; the worktree is kept and its uncommitted changes are archived as a patch to `evidence/<task>/attempt-N/uncommitted.patch`); or

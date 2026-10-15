@@ -46,13 +46,13 @@ There is none for this repository. The legacy Claude↔Codex workflow (Slack, ga
 
 | Capability | Status | Evidence |
 |---|---|---|
-| Project subagents in `.claude/agents/*.md` (YAML frontmatter: name, description, tools, disallowedTools, model, permissionMode, maxTurns, skills, mcpServers, hooks, memory, background, isolation, color, effort, initialPrompt, …) | Documented. **Config files not yet exercised by a session** (a newly created `agents/` directory needs a session restart) | code.claude.com/docs/en/sub-agents.md (via claude-code-guide agent, 2026-10-15) |
+| Project subagents in `.claude/agents/*.md` (YAML frontmatter: name, description, tools, disallowedTools, model, permissionMode, maxTurns, skills, mcpServers, hooks, memory, background, isolation, color, effort, initialPrompt, …) | Documented. **Verified**: after a session restart all 13 `mdev-*` definitions were listed as available agent types | code.claude.com/docs/en/sub-agents.md (via claude-code-guide agent, 2026-10-15) |
 | Spawning subagents from the main session, parallel, in background, with completion notifications | **Verified in use** (the design phases ran 6 parallel agents) | This session's history |
 | Resuming a finished or interrupted subagent with context (`SendMessage`) | **Verified in use** (agents resumed after API rate-limit interruptions) | Same |
 | Subagent → subagent direct messaging | Documented for named agents with `SendMessage`. **Not used** by this design (all coordination goes through the orchestrator) | sub-agents.md |
 | Nesting (subagents spawning subagents) | Documented, up to 3 levels. **Disabled for specialists** (`Agent` in `disallowedTools`) | sub-agents.md |
 | `isolation: worktree` | Documented. It branches from the default branch (`main`), which lacks the design docs. **Not used**: the orchestrator creates explicit worktrees from a recorded base commit instead | worktrees.md |
-| Background agents surviving a session/process restart | **UNVERIFIED** (docs only say transcripts persist and can be resumed by resuming the session) | sub-agents.md |
+| Background agents surviving a session/process restart | **Verified: they do not survive.** A container restart stopped 4 running background agents; each resumed from its transcript via `SendMessage` | This session, 2026-10-15 |
 | Permission deny rules for subagents | Documented: deny rules apply to subagents. Bash rules match command text and are **not a security boundary** | permissions.md |
 | Remote parallel sessions (`create_session`) | A tool exists in this session. Use for development work is **unverified and not configured** | Tool list |
 | Linear and GitHub connectors | Available read/write in this session. **Write use is denied** for development agents by project settings | — |
