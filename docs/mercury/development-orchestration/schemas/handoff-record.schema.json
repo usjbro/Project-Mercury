@@ -1,0 +1,165 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/usjbro/Project-Mercury/docs/mercury/development-orchestration/schemas/handoff-record.schema.json",
+  "title": "MERCURY development ledger record (devorch.handoff.v1)",
+  "description": "One append-only line in DEVORCH_HOME/ledger/<task_id>.jsonl, hash-chained per task. Written only by tools/devorch/devorch.py record.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "seq",
+    "task_id",
+    "at",
+    "event",
+    "from_state",
+    "to_state",
+    "actor",
+    "evidence",
+    "prev_hash",
+    "hash"
+  ],
+  "properties": {
+    "schema": {
+      "const": "devorch.handoff.v1"
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "task_id": {
+      "type": "string",
+      "pattern": "^DT-[0-9]{4}(-[a-z0-9]+)?$"
+    },
+    "at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "event": {
+      "enum": [
+        "created",
+        "unblocked",
+        "assigned",
+        "started",
+        "implementation_completed",
+        "tests_passed",
+        "tests_failed",
+        "code_review_passed",
+        "code_review_changes_required",
+        "security_review_passed",
+        "security_review_blocked",
+        "integration_verified",
+        "integration_failed",
+        "pr_prepared",
+        "awaiting_human",
+        "human_changes_requested",
+        "human_merged",
+        "closed",
+        "attempt_failed",
+        "escalated",
+        "resumed",
+        "cancelled",
+        "failed",
+        "interface_frozen",
+        "contract_revised",
+        "stale_detected",
+        "reclaimed"
+      ]
+    },
+    "from_state": {
+      "enum": [
+        "NEW",
+        "READY",
+        "BLOCKED",
+        "RUNNING",
+        "AWAITING_REVIEW",
+        "AWAITING_INTEGRATION",
+        "AWAITING_HUMAN",
+        "COMPLETED",
+        "FAILED",
+        "CANCELLED"
+      ]
+    },
+    "to_state": {
+      "enum": [
+        "READY",
+        "BLOCKED",
+        "RUNNING",
+        "AWAITING_REVIEW",
+        "AWAITING_INTEGRATION",
+        "AWAITING_HUMAN",
+        "COMPLETED",
+        "FAILED",
+        "CANCELLED"
+      ]
+    },
+    "actor": {
+      "type": "string",
+      "description": "principal-orchestrator | operator | <agent name> (agents never write records; actor names whose result triggered it)"
+    },
+    "contract_version": {
+      "type": "integer"
+    },
+    "attempt": {
+      "type": "integer"
+    },
+    "gate": {
+      "enum": [
+        "G1",
+        "G2",
+        "G3",
+        "G4",
+        "G5",
+        "G6",
+        "G7"
+      ]
+    },
+    "evidence": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "ref"
+        ],
+        "properties": {
+          "kind": {
+            "enum": [
+              "commit",
+              "test_run",
+              "result_file",
+              "review_file",
+              "ci_run",
+              "pr",
+              "github_merge",
+              "ledger",
+              "operator_statement",
+              "design_ref",
+              "log"
+            ]
+          },
+          "ref": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      }
+    },
+    "note": {
+      "type": "string",
+      "maxLength": 2000
+    },
+    "prev_hash": {
+      "type": "string",
+      "pattern": "^([0-9a-f]{64}|GENESIS)$"
+    },
+    "hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}
