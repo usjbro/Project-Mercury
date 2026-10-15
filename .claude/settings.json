@@ -112,7 +112,15 @@
       "Edit(**/.git/hooks/**)",
       "Write(**/.git/hooks/**)",
       "Edit(**/.git/config)",
-      "Write(**/.git/config)"
+      "Write(**/.git/config)",
+      "Bash(curl *api.github.com*)",
+      "Bash(curl *github.com/*/pulls/*)",
+      "Bash(wget *api.github.com*)",
+      "Bash(git config --get*credential*)",
+      "Bash(git config *credential.helper*)",
+      "Read(~/.claude/launcher-settings.json)",
+      "Edit(~/.claude/**)",
+      "Write(~/.claude/**)"
     ]
   }
 }

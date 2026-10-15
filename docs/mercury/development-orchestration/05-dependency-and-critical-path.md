@@ -197,17 +197,17 @@ flowchart LR
 | MERC-604 | Pre-review re-check, ready, review request | backend-engineer | 602 | 40 | 12 | 15.5 | **yes** |  | yes | 44.6 → 46.2 | W3 M4/M5 |
 | MERC-701 | Merge verification | platform-integration-engineer | 604 | 41 | 11 | 14.5 | **yes** | yes | yes | 46.2 → 48.8 | W3 M4/M5 |
 | MERC-804 | Prompt-injection corpus at scale | security-engineer | 603 | 41 | 0 | 3.0 |  | yes | yes | 47.3 → 50.2 | W3 M4/M5 |
-| MERC-702 | Linear projection, both modes | platform-integration-engineer | 701, 306 | 42 | 10 | 12.0 | **yes** |  | yes | 48.8 → 50.6 | W4 M6/M7 |
-| MERC-705 | Anchoring and restore epoch | database-engineer | 704, 702, 506 | 44 | 5 | 10.5 | **yes** |  | yes | 50.6 → 53.0 | W4 M6/M7 |
-| MERC-708 | Live-agent sandbox smoke | mac | 701, 702, 703 | 44 | 3 | 7.5 |  | yes |  | 50.6 → 52.0 | W4 M6/M7 |
-| MERC-801 | Crash injection at scale | reliability-engineer | 113, 708 | 47 | 1 | 6.5 |  |  |  | 52.0 → 54.3 | W4 M6/M7 |
-| MERC-806 | Performance, budgets and measurement | reliability-engineer | 708 | 45 | 0 | 2.0 |  | yes |  | 52.0 → 53.9 | W4 M6/M7 |
-| MERC-805 | Security suite on the Mac and SAC evidence | mac | 406, 508, 705 | 49 | 4 | 8.0 | **yes** | yes | yes | 53.0 → 56.8 | W4 M6/M7 |
-| MERC-803 | Real-Mac recovery suite | mac | 706, 801 | 49 | 0 | 3.5 |  | yes |  | 54.3 → 59.4 | W4 M6/M7 |
-| MERC-901 | Shadow mode (MIG-1) | mac | 805, 903 | 54 | 3 | 6.0 | **yes** | yes |  | 56.8 → 69.3 | W4 M6/M7 |
-| MERC-904 | Supervised pilot (MIG-2) | mac | 901, 902 | 57 | 2 | 4.5 | **yes** | yes | yes | 69.3 → 87.4 | W6 M9 shadow, pilot, cutover |
-| MERC-905 | Unattended readiness (G-S5) | operator | 904, 805 | 58 | 1 | 2.0 | **yes** | yes | yes | 87.4 → 90.2 | W6 M9 shadow, pilot, cutover |
-| MERC-906 | Cutover and watch (MIG-3/4) | operator | 905 | 59 | 0 | 1.0 | **yes** | yes |  | 90.2 → 91.7 | W6 M9 shadow, pilot, cutover |
+| MERC-702 | Linear projection, both modes | platform-integration-engineer | 701, 306 | 42 | 10 | 12.0 | **yes** |  | yes | 48.8 → 50.6 | W4 M6–M8 + shadow |
+| MERC-705 | Anchoring and restore epoch | database-engineer | 704, 702, 506 | 44 | 5 | 10.5 | **yes** |  | yes | 50.6 → 53.0 | W4 M6–M8 + shadow |
+| MERC-708 | Live-agent sandbox smoke | mac | 701, 702, 703 | 44 | 3 | 7.5 |  | yes |  | 50.6 → 52.0 | W4 M6–M8 + shadow |
+| MERC-801 | Crash injection at scale | reliability-engineer | 113, 708 | 47 | 1 | 6.5 |  |  |  | 52.0 → 54.3 | W4 M6–M8 + shadow |
+| MERC-806 | Performance, budgets and measurement | reliability-engineer | 708 | 45 | 0 | 2.0 |  | yes |  | 52.0 → 53.9 | W4 M6–M8 + shadow |
+| MERC-805 | Security suite on the Mac and SAC evidence | mac | 406, 508, 705 | 49 | 4 | 8.0 | **yes** | yes | yes | 53.0 → 56.8 | W4 M6–M8 + shadow |
+| MERC-803 | Real-Mac recovery suite | mac | 706, 801 | 49 | 0 | 3.5 |  | yes |  | 54.3 → 59.4 | W4 M6–M8 + shadow |
+| MERC-901 | Shadow mode (MIG-1) | mac | 805, 903 | 54 | 3 | 6.0 | **yes** | yes |  | 56.8 → 69.3 | W4 M6–M8 + shadow |
+| MERC-904 | Supervised pilot (MIG-2) | mac | 901, 902 | 57 | 2 | 4.5 | **yes** | yes | yes | 69.3 → 87.4 | W5 M9 pilot, cutover |
+| MERC-905 | Unattended readiness (G-S5) | operator | 904, 805 | 58 | 1 | 2.0 | **yes** | yes | yes | 87.4 → 90.2 | W5 M9 pilot, cutover |
+| MERC-906 | Cutover and watch (MIG-3/4) | operator | 905 | 59 | 0 | 1.0 | **yes** | yes |  | 90.2 → 91.7 | W5 M9 pilot, cutover |
 | MERC-1K1 (cond.) | Signed Keychain helper (conditional) | security-engineer | 011 | 3 | 0 | 0 |  | yes | yes | contingency | — |
 | MERC-3A1 (cond.) | ALT-B-1 fallback (contingency) | ai-integration-engineer | 301 | 7 | 0 | 0 |  | yes | yes | contingency | — |
 | MERC-807b (cond.) | Coordinator account U2 (conditional) | devops-engineer | 807 | 18 | 0 | 0 |  | yes | yes | contingency | — |
@@ -216,10 +216,9 @@ flowchart LR
 
 | Wave | Model days | Goal | Exit evidence |
 |---|---|---|---|
-| W0 Phase 0 + bootstrap | 0–12 | Operator bootstrap (ruleset on `main`, development identity, ledger branch: RB-D1); decisions; GitHub Apps; Mac facts; agent uid (root, operator); sandbox governance; MERC-030 | MERC-005 closure report; P0 facts recorded; MERC-030 merged |
-| W1 M1 core | 12–24 | Store, DDL + triggers, transition engine; interface freeze after 101 (RA-D3); fakes; process broker; mirror and hardened git | INV trigger tests green; ports frozen (`interface_frozen`); MERC-107 G4 |
-| W2 M1/M2/M3 | 24–36 | Queue and outbox; holds; lifecycle; GitHub and Linear clients; schemas; snapshots; Claude adapter | **G-S1 fact recorded** (302) |
-| W3 M4/M5 | 36–48 | Codex adapter, plan review loop, G-S2 evidence (406), implementation run, verify, policy and presence | G-S2 evidence collected; G-S3 fact recorded by 508 before any sandbox push |
-| W4 M6/M7 | 48–58 | PR creation, review runs, check run, merge verification, Linear projection, anchoring | M6/M7 TCs green on the sandbox |
-| W5 M8 | 58–64 | Crash injection at scale, security suite on the Mac, performance | SAC evidence |
-| W6 M9 | 64–92 | Shadow (10 days), supervised pilot (G-S4), unattended readiness (G-S5), cutover start | Operator sign-off per gate; 30-day watch follows |
+| W0 Phase 0 + bootstrap | 0–14 | Operator bootstrap (ruleset on `main`, development identity, ledger branch: RB-D1); decisions; GitHub Apps; Mac facts; agent uid (root, operator); sandbox governance; MERC-030 | MERC-005 closure report; P0 facts recorded; MERC-030 merged |
+| W1 M1 core | 13–25 | Store, DDL + triggers, transition engine; interface freeze after 101 (RA-D3); fakes; process broker; mirror and hardened git | INV trigger tests green; ports frozen (`interface_frozen`); MERC-107 G4 |
+| W2 M1/M2/M3 | 25–38 | Queue and outbox; holds; lifecycle; GitHub and Linear clients; schemas; snapshots; Claude adapter | **G-S1 fact recorded** (302) |
+| W3 M4/M5 | 38–50 | Codex adapter, plan review loop, G-S2 evidence (406), implementation run, verify, policy and presence | G-S2 evidence collected; G-S3 fact recorded by 508 before any sandbox push |
+| W4 M6–M8 + shadow | 49–69 | PR creation, review runs, check run, merge verification, Linear projection, anchoring; crash injection at scale, security suite on the Mac, performance; shadow run (MERC-901, 10 days) | M6/M7 TCs green on the sandbox; SAC evidence; shadow report |
+| W5 M9 | 69–92 | Supervised pilot (G-S4), unattended readiness (G-S5), cutover start | Operator sign-off per gate; 30-day watch follows |

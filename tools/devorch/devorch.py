@@ -337,8 +337,11 @@ def canon(rec):
                       ensure_ascii=False)
 
 
+CONTRACT_MUTABLE = ("status", "attempt", "evidence_dir")  # per-attempt fields; everything else is scope
+
+
 def contract_core_sha(c):
-    core = {k: v for k, v in c.items() if k not in ("status", "attempt")}
+    core = {k: v for k, v in c.items() if k not in CONTRACT_MUTABLE}
     return hashlib.sha256(json.dumps(core, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
 
 
@@ -635,6 +638,17 @@ def cmd_record(a):
         to, gate = check_transition(ctx, {**rec, "to_state": "?", "hash": "?"}, contract, live=True)
     except Refused as e:
         die(str(e))
+    if a.event in ("implementation_completed", "result_accepted") and contract["kind"] not in ("mac_validation", "operator_action"):
+        refs = [e["ref"] for e in ev if e["kind"] == "result_file"]
+        if not refs:
+            die(f"{a.event} needs a result_file")
+        rp = resolve_ref(refs[0])
+        res = load(rp)
+        errs, _ = result_errors(contract, res, rp, allow_copy=TEST_MODE and a.allow_copy)
+        if res.get("status") != "completed":
+            errs.append(f"result status is {res.get('status')}, not completed")
+        if errs:
+            die(f"{a.event} refused, result does not check: " + "; ".join(errs))
     rec["to_state"] = to
     if gate:
         rec["gate"] = gate
@@ -804,6 +818,11 @@ def cmd_check_contract(a):
                 errs.append("integration tasks need covers_tasks")
             if c["kind"] != "integration" and not c.get("parent_task_id"):
                 errs.append("review subtasks need parent_task_id")
+            # id convention: reviews <parent>-rN/-sN, integration <first covered task>-iN
+            owner = c.get("parent_task_id") if c["kind"] != "integration" else (c.get("covers_tasks") or [None])[0]
+            suffix = "i" if c["kind"] == "integration" else ("s" if c["kind"] == "security_review" else "r")
+            if owner and not re.fullmatch(re.escape(owner) + f"-{suffix}[0-9]+", c["task_id"]):
+                errs.append(f"subtask id must be {owner}-{suffix}<n>")
         if c["kind"] in REVIEW_GATE and "review_target" not in c:
             errs.append("review tasks need review_target")
         if c["kind"] in READ_ONLY_KINDS and c["allowed_paths"] != []:
@@ -829,6 +848,14 @@ def cmd_check_result(a):
     if errs:
         report(["contract: " + e for e in errs], mode)
     r = load(a.result)
+    errs, mode = result_errors(c, r, a.result, a.allow_copy, a.repo)
+    report(errs, mode)
+
+
+def result_errors(c, r, result_path, allow_copy=False, repo=None):
+    """All mechanical checks of a result against its contract and git. Used by check-result and,
+    live, by `record` for implementation_completed / result_accepted (R0: a result is never accepted
+    without these checks)."""
     errs, mode = validate(r, "task-result")
     for k in ("task_id", "contract_version", "attempt"):
         if r.get(k) != c.get(k):
@@ -836,9 +863,9 @@ def cmd_check_result(a):
     if r.get("agent") != c.get("assigned_agent"):
         errs.append("result agent is not the assigned agent")
     expected_path = os.path.join(c["evidence_dir"], "result.json")
-    if os.path.abspath(a.result) != os.path.abspath(expected_path) and not a.allow_copy:
+    if os.path.abspath(result_path) != os.path.abspath(expected_path) and not allow_copy:
         errs.append(f"result must be read from {expected_path} (written by the agent before returning)")
-    wt = a.repo or c["worktree"]
+    wt = repo or c["worktree"]
     try:
         tip = git(["rev-parse", "--verify", f"refs/heads/{c['branch']}"], wt, check=True).stdout.strip()
         if git(["merge-base", "--is-ancestor", c["base_commit"], tip], wt).returncode != 0:
@@ -864,8 +891,26 @@ def cmd_check_result(a):
                 errs.append("commits must equal git rev-list base..tip")
             if sorted(set(r.get("modified_files", []))) != changed:
                 errs.append("modified_files does not equal git diff --no-renames base..tip")
+            allowed = list(c["allowed_paths"])
+            if c["kind"] == "integration":
+                # an integration branch carries the covered tasks' reviewed heads: its scope is the union of
+                # their scopes plus its own, and every integrated head must be the covered task's tested head
+                heads = dict(x.split("@", 1) for x in r.get("integrated_heads", []))
+                for t in c.get("covers_tasks", []):
+                    tc = load_contract(t)
+                    if not tc:
+                        errs.append(f"covered task {t} has no contract")
+                        continue
+                    allowed += tc["allowed_paths"]
+                    h = heads.get(t)
+                    if not h:
+                        errs.append(f"integrated_heads lacks covered task {t}")
+                    elif git(["merge-base", "--is-ancestor", h, tip], wt).returncode != 0:
+                        errs.append(f"integrated head of {t} is not contained in the integration tip")
+                    elif replay(t).head != h:
+                        errs.append(f"integrated head of {t} is not its tested head")
             for f in changed:
-                if not matches(f, c["allowed_paths"]):
+                if not matches(f, allowed):
                     errs.append(f"changed file outside allowed_paths: {f}")
                 if matches(f, c.get("restricted_paths", [])):
                     errs.append(f"changed restricted path: {f}")
@@ -896,7 +941,7 @@ def cmd_check_result(a):
                 errs.append(f"required tests not passed: {sorted(missing)}")
     if r.get("status") == "escalated" and "escalation" not in r:
         errs.append("escalated without escalation object")
-    report(errs, mode)
+    return errs, mode
 
 
 def report(errs, mode):
@@ -1028,7 +1073,10 @@ def cmd_preflight(a):
     worktree has no foreign changes, the git baseline holds, the lock is ours."""
     require_home()
     ok = True
-    dirty = git(["status", "--porcelain", "--untracked-files=all"], HOME).stdout.strip()
+    # LOCK is rewritten by `lock acquire|refresh` and committed with the ledger at the end of the tick
+    # (the pushed LOCK is what another machine sees), so it alone does not make HOME dirty
+    dirty = "\n".join(l for l in git(["status", "--porcelain", "--untracked-files=all"], HOME).stdout.splitlines()
+                      if l[3:].strip() != "LOCK").strip()
     if dirty:
         ok = False
         print("DEVORCH_HOME has uncommitted changes (only the orchestrator writes, then commits each tick):\n" + dirty)
@@ -1059,6 +1107,7 @@ def main():
     s.add_argument("--actor", default="principal-orchestrator"); s.add_argument("--evidence", action="append")
     s.add_argument("--head"); s.add_argument("--session"); s.add_argument("--frozen", action="append",
                    help="path=sha256 (interface_frozen)"); s.add_argument("--note")
+    s.add_argument("--allow-copy", action="store_true", help="DEVORCH_TEST_MODE only: result not at evidence_dir/result.json")
     s = sp.add_parser("verify-ledger"); s.add_argument("--repair-tail", action="store_true"); s.add_argument("--remote")
     s = sp.add_parser("fact"); s.add_argument("--kind", required=True, choices=["tdd_gate", "p0_check", "identity", "decision"])
     s.add_argument("--id", required=True); s.add_argument("--status", required=True,

@@ -21,7 +21,7 @@ hooks:
 **Required expertise.** git (merge/rebase strategies, range-diff), semantic versioning, release engineering, CI.
 
 ## Scope of responsibility
-- Local integration branches `devint/<wave>` created from the current `main` (or the approved stack base)
+- Local integration branches `dev/dt-<nnnn>-int-<wave>-<n>` (never pushed; `push --task` refuses them), in a worktree the orchestrator creates from the current `main` or the approved stack base
 - Integration test runs and conflict reports
 - PR description drafts in the contract's `evidence_dir` and release notes in `CHANGELOG.md` (when allowed)
 

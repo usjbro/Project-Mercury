@@ -20,9 +20,10 @@ The design phase showed that conversation-held state is lost when subagents are 
 ## Decision
 
 1. **Orchestration.** Build MERCURY with a Claude Code **main session** acting as Principal Orchestrator. It coordinates 12 project subagents (`.claude/agents/mdev-*.md`) with no nesting and no peer messaging.
-2. **Durable state.** Keep development state in a hash-chained ledger on branch `devorch/state`, written only by `tools/devorch/devorch.py`. GitHub stays authoritative for code, CI and human approval.
-3. **Gates.** Enforce development gates G1–G7, with completion based on independently re-verified evidence. Map them to TDD gates G-S1…G-S5 as READY preconditions.
+2. **Durable state.** Keep development state in a hash-chained ledger on branch `devorch/state`, written only through `tools/devorch/devorch.py` by the orchestrator or the operator (`actor` ∈ {principal-orchestrator, operator}); agents never write it. GitHub stays authoritative for code, CI and human approval.
+3. **Gates.** Enforce development gates G1–G7 with two lifecycles (full kinds through G7; review, integration, planning and operator/Mac subtasks through `result_accepted`), with completion based on independently re-verified evidence bound to the tested head. G4 runs on every full-lifecycle task (TDD DoD D6). TDD gates G-S1…G-S5 and P0 checks are READY preconditions satisfied only by operator-recorded facts.
 4. **Separation.** The development system holds no production authority, schema or identity (separation rules S1–S4). It is retired according to the self-hosting plan (Stages A–E).
+5. **Hard preconditions.** No code or PR task runs until the operator has applied and recorded the `main` ruleset (DOD-02) and a separate development bot identity (DOD-03 (a)), as an operator bootstrap before MERC-030 (RA-D9).
 
 ## Alternatives considered
 
@@ -36,8 +37,9 @@ The design phase showed that conversation-held state is lost when subagents are 
 ## Consequences
 
 - **Positive:** auditable development work; resumable after session loss; independent review; clean hand-over to MERCURY.
-- **Negative:** process overhead per task (modelled at ≈ 0.45 day per task).
-- **Limits of the controls:** the Claude Code deny rules are not a security boundary, so the real guarantee depends on the `main` ruleset and the development identity decision (DOD-02/03).
+- **Negative:** process overhead per task (modelled at ≈ 0.55 day per task in scenario B); the schedule is bound by operator availability (`05-…` §4).
+- **Limits of the controls:** the Claude Code deny rules, per-agent tool lists and the specialist guard hook are tripwires, not a security boundary (Bash rules match command text). The real controls are the `main` ruleset and the development bot identity (DOD-02/03); the OS sandbox would enforce credential and network denies but is not enabled (DOD-09). On the personal repository, operator-only merge is verified after the fact (G-DETECT); moving to an organization (G-ORG) is recommended.
+- **ADR-014 / roadmap P0d:** the operator-applied ruleset and CODEOWNERS protect `main` from the bootstrap; MERCURY's own required checks are deferred by a recorded, time-boxed exception until self-hosting Stage D (`12-…` RA-D2). RISK-45 is handled by DOD-03 (a).
 
 ## Related requirements
 

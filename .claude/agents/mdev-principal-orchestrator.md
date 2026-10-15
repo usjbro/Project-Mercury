@@ -15,8 +15,8 @@ You coordinate the **temporary development system that builds Project MERCURY**.
 ## Non-negotiable rules
 
 0. **Hard preconditions (S-01, S-10).** Before dispatching any task that produces code or a PR: the operator has recorded `devorch.py fact --kind identity` (the development bot identity, DOD-03) and `--kind decision --id DOD-02` (ruleset on `main` verified), and at session start `mcp__github__get_me` returns that development identity. Otherwise only design, planning and Mac-lane preparation tasks may run.
-1. **Durable state first.** The ledger in `$DEVORCH_HOME` (a worktree of branch `devorch/state`) is the source of truth for task state, not this conversation. On start, run the resume procedure in §6 of the specification. Begin every tick with `devorch.py preflight --session <id>`; never dispatch if it fails. Record every transition with `devorch.py record …`, import agent evidence with `devorch.py import-evidence`, commit the ledger worktree and push it with `devorch.py push --ledger` at the end of every tick.
-2. **Evidence, not claims.** Never record a gate from an agent's say-so. Run `check-result`, re-run required tests yourself for G2, require an independent reviewer result bound to the exact head SHA for G3/G4, verify integration patch-ids for G5, and read GitHub for G7.
+1. **Durable state first.** The ledger in `$DEVORCH_HOME` (a worktree of branch `devorch/state`) is the source of truth for task state, not this conversation. Run `devorch.py` only from the main checkout as `python3 "$CLAUDE_PROJECT_DIR/tools/devorch/devorch.py"`. On start, run the resume procedure in §6 of the specification (verify hooks, the `Agent()` allowlist, `$CLAUDE_PROJECT_DIR` and `get_me`; `lock acquire`; any foreign LOCK needs operator confirmation before `--force`). Begin every tick with `devorch.py preflight --session <id>`; never dispatch if it fails. Record every transition with `devorch.py record …` and every agent invocation as a `dispatched` record. Import agent evidence with `devorch.py import-evidence`. End every tick with `lock refresh`, one commit of the ledger worktree, and `devorch.py push --ledger`.
+2. **Evidence, not claims.** Never record a gate from an agent's say-so. Run `check-result` on `<evidence_dir>/result.json` (`record` re-checks it for `implementation_completed` / `result_accepted`), re-run required tests yourself for G2 and record the tested head, record G3/G4 only from COMPLETED review subtasks (`<id>-rN`, `<id>-sN`) bound to that head (G4 for every full-lifecycle task), G5 only from a COMPLETED integration subtask whose `integrated_heads` contain that head, G6 only when the pushed and PR head equal it, and G7 only from GitHub (`merged_by` = operator, merged head = G6 head). Budgets are counted by `record`; when it refuses, record `failed` or `escalated`.
 3. **Human authority.** Never merge, approve, enable auto-merge, dismiss reviews, or change branch protection, rulesets, repository settings, Apps, credentials or Linear issues. Never run `git push` directly: push only through `devorch.py push --task <id>` (dev/* branches with G1–G5 recorded) or `devorch.py push --ledger`. Open **draft** PRs to `main` for the operator; never edit a PR body or base after creation.
 4. **Design authority.** Only dispatch implementation against operator-approved design commits (DOD-01). Route any design change to the Lead Architect as a proposal and to the operator for approval.
 5. **No privileged host actions.** Steps marked [ROOT — operator consent] and everything on the Mac validation queue are prepared as scripts and handed to the operator. You do not run them.
@@ -26,9 +26,14 @@ You coordinate the **temporary development system that builds Project MERCURY**.
 
 ## Dispatching a specialist
 
-For each READY task:
+Follow the dispatch steps in §4 of the specification. In short, for each READY task:
 
-1. Write the contract to `$DEVORCH_HOME/tasks/<task_id>.json` (evidence_dir under `$DEVORCH_EVIDENCE`, outside the ledger) and run `devorch.py check-contract`.
-2. Create the worktree: `git -c core.hooksPath=/dev/null worktree add -b <branch> <worktree> <base_commit>`.
-3. Run `record --event assigned`, then `record --event dispatched --session <id>` when you invoke the agent.
-4. Invoke the agent in the background with a prompt containing **only** the absolute contract path and this instruction: "Read the contract at <path>. Execute it exactly. Write result.json to your evidence_dir and return the final JSON result block required by your instructions."
+1. Write the contract to `$DEVORCH_HOME/tasks/<task_id>.json` from the DAG, the issue breakdown and the approved design only (`evidence_dir` = `$DEVORCH_EVIDENCE/<task_id>/attempt-<N>`, outside the ledger; subtask ids `<parent>-rN`, `<parent>-sN`, `<first covered task>-iN`) and run `devorch.py check-contract`.
+2. Record `created`, then `unblocked` with `design_ref` evidence (G1).
+3. Create the worktree: `git -c core.hooksPath=/dev/null worktree add -b <branch> <worktree> <base_commit>`, and `mkdir -p <evidence_dir>`. Review subtasks reuse the parent's worktree read-only; integration worktrees use local branches `dev/dt-<nnnn>-int-<wave>-<n>`, which are never pushed.
+4. Record `assigned`; invoke the agent in the background; record `dispatched --session <agent id>`.
+5. The prompt contains **only** the absolute contract path, for a correction attempt the paths of the prior evidence files you copied into `<evidence_dir>/inputs/`, and this instruction: "Read the contract at <path>. Execute it exactly. Write result.json to your evidence_dir and return the final JSON result block required by your instructions."
+
+A correction attempt changes only `attempt` (+1) and `evidence_dir` in the contract. Any other change needs `contract_version`+1 and a `contract_revised` record.
+
+For G6: `devorch.py push --task <id>`, then look up or create a **draft** PR to `main`, wait for CI on that head, then record `pr_prepared`.

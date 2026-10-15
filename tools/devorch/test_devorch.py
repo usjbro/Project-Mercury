@@ -108,12 +108,15 @@ class Env:
         self.rec(tid, "tests_passed", "test_run:" + self.write("g2.log.json", {"ok": 1}), head=head)
         return c, head
 
-    def review(self, parent, head, kind="code_review", agent="mdev-code-reviewer", suffix="r1", accept=True):
+    def review(self, parent, head, kind="code_review", agent="mdev-code-reviewer", suffix="r1", accept=True,
+               branch="dev/merc-101-x", tests=()):
         sid = f"{parent}-{suffix}"
-        c = self.contract(sid, kind=kind, agent=agent, merc=None, parent_task_id=parent, reviewers=[],
+        c = self.contract(sid, kind=kind, agent=agent, merc=None, parent_task_id=parent, reviewers=[], branch=branch,
+                          tests=list(tests),
                           review_target={"implementation_task_id": parent, "base_commit": self.base, "head_commit": head})
         res = self.result(c, reviewed_head_commit=head, recommendation="accept" if accept else "changes_required",
-                          commits=[], modified_files=[], head_commit=None)
+                          commits=[], modified_files=[], head_commit=None,
+                          tests=[{"id": t["id"], "command": t["command"], "exit_code": 0, "outcome": "passed"} for t in tests])
         self.run("check-result", res, os.path.join(self.home, "tasks", sid + ".json"), ok=True)
         self.rec(sid, "created")
         self.rec(sid, "unblocked", f"design_ref:x@{self.base}")
@@ -178,7 +181,7 @@ class T(unittest.TestCase):
         self.e.rec("DT-0001", "security_review_passed", f"subtask:{s1}")
         ic = self.e.contract("DT-0001-i1", kind="integration", agent="mdev-integration-release-engineer", merc=None,
                              covers_tasks=["DT-0001"], reviewers=[], allowed=[])
-        ires = self.e.result(ic, commits=[], modified_files=[], head_commit=None, recommendation="accept",
+        ires = self.e.result(ic, recommendation="accept",
                              integrated_heads=[f"DT-0001@{head}"])
         for ev in ("created",):
             self.e.rec("DT-0001-i1", ev)
@@ -281,12 +284,49 @@ class T(unittest.TestCase):
         r = self.e.rec("DT-0001", "code_review_changes_required", ok=False)
         self.assertIn("review loop budget", r.stderr)
 
+    def test_result_accepted_requires_checking_result(self):
+        # R0: record re-runs check-result; an integration result that claims a head it does not contain is refused
+        c, head = self.e.to_awaiting_review()
+        ic = self.e.contract("DT-0001-i1", kind="integration", agent="mdev-integration-release-engineer", merc=None,
+                             covers_tasks=["DT-0001"], reviewers=[], allowed=[], branch="dev/dt-0001-int-w1-1")
+        sh(f"git branch -f dev/dt-0001-int-w1-1 {self.e.base}", self.e.repo)
+        ires = self.e.result(ic, recommendation="accept", integrated_heads=[f"DT-0001@{head}"])
+        self.e.rec("DT-0001-i1", "created")
+        self.e.rec("DT-0001-i1", "unblocked", f"design_ref:x@{self.e.base}")
+        self.e.rec("DT-0001-i1", "assigned")
+        r = self.e.rec("DT-0001-i1", "result_accepted", "result_file:" + ires, ok=False)
+        self.assertIn("not contained in the integration tip", r.stderr)
+
+    def test_correction_attempt_keeps_contract_core(self):
+        # attempt and evidence_dir are per-attempt fields; changing them needs no contract_revised
+        c, head = self.e.to_awaiting_review()
+        self.e.rec("DT-0001", "code_review_changes_required")
+        bump(self.e, "DT-0001")
+        self.e.rec("DT-0001", "dispatched", session="s2")
+        p = os.path.join(self.e.home, "tasks/DT-0001.json")
+        c = json.load(open(p)); c["allowed_paths"] = ["**"]; json.dump(c, open(p, "w"))
+        r = self.e.rec("DT-0001", "started", ok=False)
+        self.assertIn("contract changed without a contract_revised", r.stderr)
+
     # --- ledger robustness (R4 F04/F12/F13, R1 H-04) --------------------------------------
     def test_lock_and_escalations_do_not_break_verify(self):
         self.e.contract("DT-0001"); self.e.rec("DT-0001", "created")
         open(os.path.join(self.e.home, "ESCALATIONS.md"), "w").write("# x\n")
         self.e.run("lock", "acquire", "--session", "s1", ok=True)
         self.e.run("verify-ledger", ok=True)
+
+    def test_preflight_tolerates_own_lock_but_not_foreign_changes(self):
+        h = self.e.home
+        sh("git init -q -b devorch/state . && git config user.email t@t && git config user.name t", h)
+        self.e.contract("DT-0001"); self.e.rec("DT-0001", "created")
+        sh("git add -A && git commit -qm l", h)
+        self.e.run("git-baseline", "record", ok=True)
+        sh("git add -A && git commit -qm b", h)
+        self.e.run("lock", "acquire", "--session", "s1", ok=True)
+        self.e.run("preflight", "--session", "s1", ok=True)
+        open(os.path.join(h, "ledger/x.txt"), "w").write("foreign")
+        r = self.e.run("preflight", "--session", "s1", ok=False)
+        self.assertIn("uncommitted", r.stdout)
 
     def test_partial_tail_detected_and_repairable(self):
         self.e.contract("DT-0001"); self.e.rec("DT-0001", "created")
@@ -318,8 +358,12 @@ def load(e, tid):
 
 
 def bump(e, tid):
+    """Correction attempt: attempt and evidence_dir change, the contract core does not."""
     p = os.path.join(e.home, "tasks", tid + ".json")
-    c = json.load(open(p)); c["attempt"] += 1; json.dump(c, open(p, "w"))
+    c = json.load(open(p)); c["attempt"] += 1
+    c["evidence_dir"] = os.path.join(e.ev, tid, f"attempt-{c['attempt']}")
+    os.makedirs(c["evidence_dir"], exist_ok=True)
+    json.dump(c, open(p, "w"))
 
 
 if __name__ == "__main__":

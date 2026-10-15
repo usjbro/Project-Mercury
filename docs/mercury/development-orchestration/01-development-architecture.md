@@ -143,7 +143,7 @@ Operator and Mac tasks (MERC-001, 020, …) complete through `result_accepted` w
 | G6 | Pushed head = reviewed head |
 | G7 | `github_merge` evidence at the G6 head |
 | Reset | A return to RUNNING clears G2–G7 (G1 survives); duplicate gates are refused |
-| Contract integrity | The contract core (everything except `status`/`attempt`) is hashed into every record. Changing it without `contract_revised` is refused |
+| Contract integrity | The contract core (everything except the per-attempt fields `status`, `attempt` and `evidence_dir`) is hashed into every record. Changing it without `contract_revised` is refused |
 | Budgets | `budget.max_attempts`, 3 review cycles, 2 security cycles, 2 integration cycles and 5 environmental retries are counted from the ledger, and refused beyond the limit |
 | Writers | `actor` ∈ {principal-orchestrator, operator}. Agents never write the ledger; the specialist guard hook blocks the tool for them |
 
