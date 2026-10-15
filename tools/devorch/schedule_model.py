@@ -13,7 +13,7 @@ Assumption values are documented in 05-dependency-and-critical-path.md §4.
 import heapq, json, os, sys
 DAG = os.path.join(os.path.dirname(__file__), "..", "..", "docs", "mercury", "development-orchestration", "data", "dag.json")
 
-def sim(d, workers, k_agent, ovh, sec_ovh, integ, mac_cap=1, mac_frac=0.35, unc=0.0, gate_days=None):
+def sim(d, workers, k_agent, ovh, sec_ovh, integ, mac_cap=1, mac_frac=0.35, unc=0.0, gate_days=None, trace=None):
     base = {k: v for k, v in d["issues"].items() if not v["conditional"]}
     gate_days = gate_days or {"MERC-005": 1, "MERC-406": 1, "MERC-508": 1, "MERC-805": 1, "MERC-905": 1, "MERC-904": 5, "MERC-901": 10}
     tasks = {}
@@ -32,7 +32,11 @@ def sim(d, workers, k_agent, ovh, sec_ovh, integ, mac_cap=1, mac_frac=0.35, unc=
             a, m = tasks[k]
             if a and free_a: free_a -= 1; started.add(k); busy += a; heapq.heappush(ev, (t + a, k, "a"))
             elif not a and free_m: free_m -= 1; started.add(k); heapq.heappush(ev, (t + m, k, "m"))
+            else: continue
+            if trace is not None: trace[k] = {"start": round(t, 1)}
         t, k, ph = heapq.heappop(ev)
+        if ph == "z":          # wake-up marker for a gate delay; nothing to release
+            continue
         if ph == "a":
             free_a += 1
             if tasks[k][1]: heapq.heappush(ev, (t, k, "q")); continue
@@ -43,8 +47,8 @@ def sim(d, workers, k_agent, ovh, sec_ovh, integ, mac_cap=1, mac_frac=0.35, unc=
         else:
             free_m += 1
         done[k] = t + gate_days.get(k, 0)
-        heapq.heappush(ev, (done[k], "~", "z"))
-        while ev and ev[0][2] == "z" and ev[0][0] <= t: heapq.heappop(ev)
+        if trace is not None: trace[k]["done"] = round(done[k], 1)
+        if done[k] > t: heapq.heappush(ev, (done[k], "~", "z"))
     end = max(done.values())
     return round(end), round(busy / (workers * end), 2)
 
@@ -57,7 +61,13 @@ SCENARIOS = [  # name, workers, review+test overhead/task (days), security overh
 CASES = [("optimistic", 0.40, 0.00), ("expected", 0.55, 0.00), ("pessimistic", 0.80, 0.25)]  # agent speed factor vs engineer-days, estimate inflation
 
 if __name__ == "__main__":
-    d = json.load(open(sys.argv[1] if len(sys.argv) > 1 else DAG))
+    d = json.load(open(DAG))
+    if len(sys.argv) > 1 and sys.argv[1] == "--plan":   # scenario B, expected case: per-issue start/finish (working days)
+        tr = {}
+        sim(d, 3, 0.55, 0.45, 0.30, 0.10, trace=tr)
+        for k, v in sorted(tr.items(), key=lambda kv: kv[1]["start"]):
+            print(f"{k}\t{v['start']}\t{v['done']}")
+        sys.exit(0)
     print("scenario | case | elapsed working days | agent-lane utilisation")
     for name, w, o, s, i, mc, mf in SCENARIOS:
         for case, k, u in CASES:
