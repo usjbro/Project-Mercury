@@ -27,6 +27,9 @@ TESTS = [{"id": "TC-UNIT-061", "command": "npm test -- test/unit/core/config", "
          {"id": "typecheck", "command": "npm run typecheck", "env": "T0"}]
 
 
+TASKS = ("DT-0001", "DT-0001-r1", "DT-0001-r2", "DT-0001-s1", "DT-0001-i1")
+
+
 def passed(tests):
     return [{"id": t["id"], "command": t["command"], "exit_code": 0, "outcome": "passed", "runs": 1} for t in tests]
 
@@ -52,7 +55,7 @@ def scenario(e):
     h1 = e.commit("src/core/log/redact.ts", "export const redact = (s: string) => s;\n", "log", c["branch"])
     r = e.result(c, tests=passed(TESTS), summary="Config loader, paths module and redacting logger added; required tests pass.")
     e.run("check-result", r, cp, ok=True)
-    e.rec(T, "implementation_completed", "result_file:" + r)
+    e.rec(T, "implementation_completed", "result_file:" + r, head=h1)
     e.rec(T, "tests_passed", "test_run:" + e.write("g2-attempt1.json", {"rerun_by": "principal-orchestrator", "head": h1}), head=h1)
     res = {"impl1": r}
 
@@ -83,7 +86,7 @@ def scenario(e):
     h2 = e.commit("test/unit/core/config/clamp.test.ts", "// negative clamp test\n", "clamp", c["branch"])
     r2 = e.result(c, tests=passed(TESTS), summary="Clamping and negative test added (CR-DT0001-01).")
     e.run("check-result", r2, cp, ok=True)
-    e.rec(T, "implementation_completed", "result_file:" + r2)
+    e.rec(T, "implementation_completed", "result_file:" + r2, head=h2)
     e.rec(T, "tests_passed", "test_run:" + e.write("g2-attempt2.json", {"rerun_by": "principal-orchestrator", "head": h2}), head=h2)
 
     r2id = e.review(T, h2, suffix="r2", branch=c["branch"], tests=TESTS)
@@ -101,7 +104,8 @@ def scenario(e):
         e.rec(iid, ev, *([f"design_ref:{DESIGN[0]}@{e.base}"] if ev == "unblocked" else []))
     e.rec(iid, "result_accepted", "result_file:" + ir)
     e.rec(T, "integration_verified", f"subtask:{iid}")
-    e.rec(T, "pr_prepared", "pr:https://github.com/OWNER/REPO/pull/1", head=h2)
+    e.rec(T, "pr_prepared", "pr:https://github.com/OWNER/REPO/pull/1",
+          "ci_run:" + e.write("ci-run.json", {"workflow": "ci", "head": h2, "conclusion": "success"}), head=h2)
     e.rec(T, "human_merged", "github_merge:merged_by=<repository owner>", head=h2)
     e.rec(T, "closed")
     e.run("verify-ledger", ok=True)
@@ -116,8 +120,18 @@ def main():
         res = scenario(e)
         st = e.run("status", ok=True).stdout
         if check:
+            # SHAs and times differ per run; the event/state/gate sequence must equal the committed examples
+            drift = []
+            for tid in TASKS:
+                new = [(r["event"], r["to_state"], r.get("gate")) for r in map(json.loads, open(os.path.join(e.home, "ledger", tid + ".jsonl")))]
+                old = [(r["event"], r["to_state"], r.get("gate")) for r in map(json.loads, open(os.path.join(OUT, "home", "ledger", tid + ".jsonl")))]
+                if new != old:
+                    drift.append(tid)
             print(st)
-            print("scenario OK (nothing written)")
+            if drift:
+                print("examples DRIFTED from the tool for:", drift, "(run without --check to regenerate)")
+                sys.exit(1)
+            print("scenario OK; committed examples match the tool")
             return
         for f in os.listdir(OUT):
             if f.endswith((".json", ".jsonl")) and f != "result-escalation.json":
@@ -128,8 +142,12 @@ def main():
         for k, name in (("impl2", "result-implementation.json"), ("review1", "result-review-changes-required.json"),
                         ("integration", "result-integration.json")):
             shutil.copy(res[k], os.path.join(OUT, name))
-        for tid in ("DT-0001", "DT-0001-r1", "DT-0001-r2", "DT-0001-s1", "DT-0001-i1"):
+        for tid in TASKS:
             shutil.copy(os.path.join(e.home, "ledger", tid + ".jsonl"), os.path.join(OUT, f"ledger-{tid}.jsonl"))
+        # the whole ledger home (contracts, ledgers, hashed evidence copies) so the examples can be re-verified:
+        #   DEVORCH_TEST_MODE=1 DEVORCH_HOME=docs/mercury/development-orchestration/examples/home devorch.py verify-ledger
+        shutil.rmtree(os.path.join(OUT, "home"), ignore_errors=True)
+        shutil.copytree(e.home, os.path.join(OUT, "home"), ignore=shutil.ignore_patterns(".git"))
         open(os.path.join(OUT, "status.txt"), "w").write(st)
         print(st)
         print("examples written to", os.path.normpath(OUT))

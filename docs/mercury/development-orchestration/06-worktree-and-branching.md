@@ -9,7 +9,8 @@
                               imported evidence, facts, baseline, LOCK, ESCALATIONS.md); orchestrator only
   mercury-evidence/           $DEVORCH_EVIDENCE: agent-writable evidence root, OUTSIDE $DEVORCH_HOME
     DT-0042/attempt-1/        a contract's evidence_dir (result.json, logs)
-  mercury-wt/DT-0042/         one worktree per full-lifecycle task (review subtasks use the parent's)
+  mercury-wt/DT-0042/         one worktree per full-lifecycle task
+  mercury-wt/DT-0042-r1/      fresh detached checkouts at the reviewed head for review subtasks and for the G2 re-run
   mercury-wt/DT-0042-i1/      integration worktrees, created by the orchestrator
 ```
 

@@ -3,9 +3,9 @@
 Every file here except `result-escalation.json` is **generated** by `tools/devorch/gen_examples.py`. The generator runs a real devorch v2 scenario in a scratch repository, using `check-contract`, `check-result` and `record`, then copies the outputs here. Paths (`/tmp/devorch-test-…`), commit SHAs and timestamps come from that run. The structure and the rules applied are those of the tool at the commit that generated them.
 
 ```bash
-python3 tools/devorch/gen_examples.py --check   # replay the scenario, write nothing
+python3 tools/devorch/gen_examples.py --check   # replay the scenario; fail if the committed examples drifted
 python3 tools/devorch/gen_examples.py           # regenerate this directory
-python3 tools/devorch/test_devorch.py -v        # 23 regression tests (rejection behaviour)
+python3 tools/devorch/test_devorch.py -v        # 30 regression tests (rejection behaviour)
 ```
 
 `DEVORCH_TEST_MODE=1` (set by the generator and the tests) skips **only** the check that `DEVORCH_HOME` is a worktree of `devorch/state`. All other rules apply unchanged.
@@ -17,7 +17,7 @@ python3 tools/devorch/test_devorch.py -v        # 23 regression tests (rejection
 | 1 | `created` | → BLOCKED | | 1 |
 | 2 | `unblocked` (three `design_ref` evidence items) | → READY | G1 | 1 |
 | 3–4 | `assigned`, `dispatched` (session) | → RUNNING | | 1 |
-| 5 | `implementation_completed` (record re-ran check-result: VALID) | RUNNING | | 1 |
+| 5 | `implementation_completed --head` (record re-ran check-result on the bytes it then copied into HOME) | RUNNING | | 1 |
 | 6 | `tests_passed` (orchestrator re-run, `head_commit` recorded) | → AWAITING_REVIEW | G2 | 1 |
 | 7 | `code_review_changes_required`: review `DT-0001-r1` found blocking finding CR-DT0001-01 | → RUNNING (G2 cleared) | | 1 |
 | 8–9 | `dispatched`, `implementation_completed`: correction attempt; only `attempt` and `evidence_dir` changed, so the contract core hash is unchanged | RUNNING | | 2 |
@@ -25,7 +25,7 @@ python3 tools/devorch/test_devorch.py -v        # 23 regression tests (rejection
 | 11 | `code_review_passed`, evidence `subtask:DT-0001-r2` (bound to the new head) | AWAITING_REVIEW | G3 | 2 |
 | 12 | `security_review_passed`, evidence `subtask:DT-0001-s1` | → AWAITING_INTEGRATION | G4 | 2 |
 | 13 | `integration_verified`, evidence `subtask:DT-0001-i1` (`integrated_heads` = tested head) | AWAITING_INTEGRATION | G5 | 2 |
-| 14 | `pr_prepared` (PR URL placeholder, head = tested head) | → AWAITING_HUMAN | G6 | 2 |
+| 14 | `pr_prepared` (PR URL placeholder + `ci_run` evidence, head = tested head) | → AWAITING_HUMAN | G6 | 2 |
 | 15 | `human_merged` (`github_merge` evidence placeholder, head = G6 head) | → COMPLETED | G7 | 2 |
 | 16 | `closed` | COMPLETED | | 2 |
 
@@ -44,6 +44,7 @@ Each subtask ledger (`ledger-DT-0001-{r1,r2,s1,i1}.jsonl`) is the short lifecycl
 | `result-escalation.json` | Hand-written escalation for a design change; schema-valid (Draft 2020-12), not part of the scenario |
 | `ledger-*.jsonl` | Hash-chained `devorch.handoff.v1` records; each carries `contract_core_sha256` |
 | `status.txt` | `devorch.py status` at the end of the scenario |
+| `home/` | The scenario's complete `DEVORCH_HOME`: `tasks/`, `ledger/`, `dag.json`, `facts.jsonl` (the DOD-02/DOD-03 operator facts G1 needs) and `evidence/<task>/records/`, the hashed copies the ledger trusts. Re-verify with `DEVORCH_TEST_MODE=1 DEVORCH_HOME=$PWD/docs/mercury/development-orchestration/examples/home python3 tools/devorch/devorch.py verify-ledger` → `ledger OK` |
 
 All `.json` files validate against `../schemas/` (jsonschema 4.26.0, Draft 2020-12), and every ledger record validates against `handoff-record.schema.json`. The generator ends with `verify-ledger`, which replays every record through the same transition and gate rules as `record`.
 

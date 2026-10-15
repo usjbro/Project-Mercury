@@ -15,7 +15,7 @@ git -c core.hooksPath=/dev/null -C ../mercury-devorch add -A
 git -c core.hooksPath=/dev/null -C ../mercury-devorch commit -m "devorch: init"   # the branch must exist before devorch runs
 export DEVORCH_HOME=$(cd ../mercury-devorch && pwd) DEVORCH_EVIDENCE=$(cd ../mercury-evidence && pwd)
 python3 $T dag                      # writes $DEVORCH_HOME/dag.json; must print cycles=0
-python3 $T git-baseline record      # hashes .git/config, git hooks, .claude, CLAUDE.md, tools/devorch, .gitignore
+python3 $T git-baseline record      # hashes .git/config, git hook contents, .claude, CLAUDE.md, tools/devorch, .gitignore, ~/.gitconfig, ~/.config/git/config, ~/.claude/settings*.json
 git -c core.hooksPath=/dev/null -C "$DEVORCH_HOME" add -A
 git -c core.hooksPath=/dev/null -C "$DEVORCH_HOME" commit -m "devorch: dag and git baseline"
 python3 $T push --ledger            # verifies the baseline, then pushes devorch/state
@@ -51,7 +51,7 @@ claude --agent mdev-principal-orchestrator     # required; never run the orchest
 |---|---|---|
 | Agents loaded | `/agents` lists the 13 `mdev-*` agents | Fix the definitions; restart |
 | `Agent()` allowlist | The orchestrator's `Agent` tool offers exactly the 12 specialist names, and no general-purpose agent | The session was not started with `--agent`; restart as above |
-| Hooks | Each specialist's frontmatter has the `PreToolUse` guard (`Bash\|Edit\|Write\|NotebookEdit\|MultiEdit`); the RB-D1 step 3 self-test exits 2. Firing inside a live dispatch is **not yet verified**: until a dispatched specialist has reported a guard block, reports state the guard as unverified | Stop dispatch; escalate |
+| Hooks (live canary, mandatory) | Each specialist's frontmatter has the `PreToolUse` guard, and the RB-D1 step 3 self-test exits 2. The self-test only checks the regexes, not that the hook runs. **After every session start and every change to `.claude/agents/`**, dispatch `mdev-code-reviewer` with the single instruction to run `python3 tools/devorch/devorch.py --help` and report the output. Pass = the tool call is refused with "Blocked by MERCURY development guard". **R5 (2026-10-15): FAILED in the session that wrote this package.** Two dispatched specialists ran guard-matching commands unblocked: one ran on agent definitions loaded before the hook existed; in the other, `$CLAUDE_PROJECT_DIR` was unset and no hook ran | Stop dispatch; restart `claude --agent mdev-principal-orchestrator` from the main checkout and re-run the canary. If it still fails, DOD-10 decides (project-level hook in `settings.json` gated on agent type, or no specialist Bash) |
 | `$CLAUDE_PROJECT_DIR` | `echo "$CLAUDE_PROJECT_DIR"` in the orchestrator's Bash prints the main checkout (the hook command is resolved through it) | Restart from the main checkout |
 | Identity | `mcp__github__get_me` returns the DOD-03 identity | Code/PR tasks stay paused (`02-…` §3) |
 

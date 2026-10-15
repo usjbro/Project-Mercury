@@ -137,15 +137,16 @@ Operator and Mac tasks (MERC-001, 020, …) complete through `result_accepted` w
 | Gate | Rule |
 |---|---|
 | G1 | Recorded at `unblocked`, needs `design_ref` evidence; required before RUNNING |
-| G2 | Needs `test_run` evidence from the orchestrator's own re-run and records `head_commit` |
+| G2 | Needs `test_run` evidence from the orchestrator's own re-run (in a fresh detached checkout) and records `head_commit`, which must equal the head of a checked `implementation_completed` in the same attempt and the branch tip |
 | G3 / G4 | Need a COMPLETED review subtask whose accepted result has `reviewed_head_commit` = the recorded head, `recommendation` accept, and no blocking finding. G3 also needs every reviewer listed in `required_reviewers`. **G4 is required for every full-lifecycle task**: TDD DoD D6 asks for a security review on every issue, kept light for non-sensitive changes |
 | G5 | Needs a COMPLETED integration subtask that covers the task at the same head |
-| G6 | Pushed head = reviewed head |
+| G6 | Needs `pr` and `ci_run` evidence; pushed head = reviewed head. `devorch.py push` pushes only full-lifecycle tasks in AWAITING_INTEGRATION and only once the DOD-02 and DOD-03 operator facts exist |
 | G7 | `github_merge` evidence at the G6 head |
 | Reset | A return to RUNNING clears G2–G7 (G1 survives); duplicate gates are refused |
 | Contract integrity | The contract core (everything except the per-attempt fields `status`, `attempt` and `evidence_dir`) is hashed into every record. Changing it without `contract_revised` is refused |
 | Budgets | `budget.max_attempts`, 3 review cycles, 2 security cycles, 2 integration cycles and 5 environmental retries are counted from the ledger, and refused beyond the limit |
-| Writers | `actor` ∈ {principal-orchestrator, operator}. Agents never write the ledger; the specialist guard hook blocks the tool for them |
+| Writers | `actor` ∈ {principal-orchestrator, operator}; operator/Mac completions require `actor operator`. Agents never write the ledger; the specialist guard hook blocks the tool for them (tripwire: `--actor` is self-asserted) |
+| Evidence | `record` reads each evidence file once, copies it to `$DEVORCH_HOME/evidence/<task>/records/` and stores its sha256; the ledger trusts only that copy. Replay re-checks every hash, the subtask bindings, the required reviewers and the contract file against the last record, so `verify-ledger` and `record` apply the same rules |
 
 **Evidence stages required by the brief → ledger events:**
 

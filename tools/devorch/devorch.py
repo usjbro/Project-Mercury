@@ -44,6 +44,7 @@ REVIEW_GATE = {"code_review": "G3", "design_review": "G3", "reliability_review":
 REVIEWER_KIND = {"mdev-code-reviewer": "code_review", "mdev-lead-architect": "design_review",
                  "mdev-reliability-engineer": "reliability_review", "mdev-security-engineer": "security_review"}
 ACTORS = {"principal-orchestrator", "operator"}
+HARD_PRECONDITIONS = ["DOD-02", "DOD-03"]   # operator facts: ruleset on main verified; development bot identity
 LIMITS = {"attempt": None, "review": 3, "security": 2, "integration": 2, "env": 5}  # attempt: contract budget
 NON_TERMINAL = {"BLOCKED", "READY", "RUNNING", "AWAITING_REVIEW", "AWAITING_INTEGRATION", "AWAITING_HUMAN"}
 
@@ -104,7 +105,7 @@ GATE_OF = {"unblocked": "G1", "tests_passed": "G2", "code_review_passed": "G3", 
 REQUIRED_BEFORE = {"RUNNING": ["G1"], "AWAITING_INTEGRATION": ["G1", "G2", "G3", "G4"],
                    "AWAITING_HUMAN": ["G1", "G2", "G3", "G4", "G5", "G6"], "COMPLETED": ["G1", "G2", "G3", "G4", "G5", "G6", "G7"]}
 RETURN_EVENTS = {"code_review_changes_required", "security_review_blocked", "integration_failed", "human_changes_requested"}
-FILE_EVIDENCE = {"result_file", "review_file", "test_run", "log"}
+FILE_EVIDENCE = {"result_file", "review_file", "test_run", "log", "operator_statement", "ci_run"}
 
 
 class Refused(Exception):
@@ -125,12 +126,57 @@ def now():
     return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def git(args, cwd, check=False):
-    r = subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "-c", "core.quotePath=false", *args], cwd=cwd,
-                       capture_output=True, text=True)
+GIT_SAFE = ["-c", "core.hooksPath=/dev/null", "-c", "core.quotePath=false", "-c", "core.fsmonitor=false",
+            "-c", "core.untrackedCache=false", "-c", "protocol.ext.allow=never"]
+
+
+def git(args, cwd, check=False, user_config=False):
+    """Run git with hooks and fsmonitor disabled. System and global config are ignored (R5 N-02) unless
+    user_config=True (only `push` and `fetch`, which need the operator's credential setup; that config is
+    covered by the git baseline)."""
+    env = dict(os.environ)
+    if not user_config:
+        env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
+    r = subprocess.run(["git", *GIT_SAFE, *args], cwd=cwd, capture_output=True, text=True, env=env)
     if check and r.returncode != 0:
         raise Refused(f"git {' '.join(args)} failed: {r.stderr.strip()}")
     return r
+
+
+def common_dir(repo):
+    c = git(["rev-parse", "--git-common-dir"], repo, check=True).stdout.strip()
+    return os.path.realpath(c if os.path.isabs(c) else os.path.join(repo, c))
+
+
+def worktree_git(wt, common=None):
+    """Return explicit --git-dir/--work-tree args for a task worktree after checking that its `.git`
+    pointer is the one git created (R5 N-02: a specialist could point `.git` at a forged git dir whose
+    config runs commands or whose refs lie). The main checkout itself is accepted only in test mode."""
+    wt = os.path.realpath(wt)
+    dotgit = os.path.join(wt, ".git")
+    if os.path.isdir(dotgit) and not os.path.islink(dotgit):
+        if TEST_MODE or wt == os.path.realpath(REPO):
+            return [f"--git-dir={dotgit}", f"--work-tree={wt}"]
+        raise Refused(f"{wt} is not a linked worktree of the main checkout")
+    if os.path.islink(dotgit) or not os.path.isfile(dotgit):
+        raise Refused(f"{dotgit} is not a worktree pointer file")
+    txt = open(dotgit, encoding="utf-8").read().strip()
+    if not txt.startswith("gitdir: "):
+        raise Refused(f"{dotgit} is not a worktree pointer file")
+    gd = os.path.realpath(txt[len("gitdir: "):])
+    common = os.path.realpath(common or common_dir(REPO))
+    if os.path.dirname(gd) != os.path.join(common, "worktrees"):
+        raise Refused(f"{dotgit} points outside {common}/worktrees")
+    back = os.path.join(gd, "gitdir")
+    if not os.path.isfile(back) or os.path.realpath(open(back).read().strip()) != dotgit:
+        raise Refused(f"{gd} does not point back to {dotgit}")
+    return [f"--git-dir={gd}", f"--work-tree={wt}"]
+
+
+def hidden_index_entries(gargs, cwd):
+    """Files hidden from `git status` by skip-worktree or assume-unchanged (R5 N-03)."""
+    out = git([*gargs, "ls-files", "-v", "-z"], cwd, check=True).stdout
+    return [e[2:] for e in out.split("\0") if e and (e[0] == "S" or e[0].islower())]
 
 
 def require_home():
@@ -387,6 +433,12 @@ def needs_g4(contract):
     return True  # TDD DoD D6: security review for every issue (light for non-sensitive changes)
 
 
+def resolve_home_ref(ref):
+    """Evidence recorded in the ledger lives in DEVORCH_HOME (copied there by `record`)."""
+    p = os.path.realpath(os.path.join(HOME, ref))
+    return p if p.startswith(os.path.realpath(HOME) + os.sep) and os.path.isfile(p) else None
+
+
 def resolve_ref(ref):
     for base in (HOME, REPO, ""):
         p = os.path.join(base, ref) if base else ref
@@ -411,6 +463,9 @@ class Ctx:
         self.seq = 0
         self.frozen = {}
         self.pr_head = None
+        self.impl_head = None    # head_commit of the last checked implementation_completed (R5 N1)
+        self.need_bump = False   # a correction is pending: the next dispatch must carry attempt + 1
+        self.contract_version = None
 
 
 def check_transition(ctx, rec, contract, live):
@@ -439,8 +494,15 @@ def check_transition(ctx, rec, contract, live):
     att = rec.get("attempt")
     if ctx.state in ("AWAITING_REVIEW", "AWAITING_INTEGRATION", "AWAITING_HUMAN") and to == "RUNNING":
         pass  # the correction's attempt bump is checked at the next 'dispatched'
-    if ev == "dispatched" and ctx.attempt is not None and att is not None and att < ctx.attempt:
-        raise Refused("attempt number went backwards")
+    if ev == "dispatched" and ctx.attempt is not None and att is not None:
+        if att < ctx.attempt:
+            raise Refused("attempt number went backwards")
+        if ctx.need_bump and att != ctx.attempt + 1:
+            raise Refused(f"a correction must be dispatched as attempt {ctx.attempt + 1}")
+    if ev == "contract_revised" and ctx.contract_version is not None and rec["contract_version"] <= ctx.contract_version:
+        raise Refused("contract_revised needs a higher contract_version")
+    if ev == "implementation_completed" and not rec.get("head_commit") and contract["kind"] in FULL_KINDS:
+        raise Refused("implementation_completed must record head_commit (the result's head)")
     # budgets
     if ev in ("attempt_failed", "tests_failed"):
         if ctx.counts["attempt"] + 1 >= contract["budget"]["max_attempts"]:
@@ -462,6 +524,8 @@ def check_transition(ctx, rec, contract, live):
             raise Refused("tests_passed must record head_commit (the tested tip)")
         if "test_run" not in kinds:
             raise Refused("tests_passed needs test_run evidence from the orchestrator's own re-run")
+        if ctx.impl_head != rec["head_commit"]:
+            raise Refused("tests_passed head is not the head of a checked implementation_completed in this attempt")
     if ev in ("code_review_passed", "security_review_passed", "integration_verified"):
         subs = [e["ref"] for e in rec["evidence"] if e["kind"] == "subtask"]
         if not subs:
@@ -476,8 +540,8 @@ def check_transition(ctx, rec, contract, live):
                                                          [e["ref"] for e in rec["evidence"] if e["kind"] == "subtask"]):
                 raise Refused(f"G3 requires a passed {k} by {r} (required_reviewers)")
     if ev == "pr_prepared":
-        if "pr" not in kinds or not rec.get("head_commit"):
-            raise Refused("pr_prepared needs pr evidence and head_commit")
+        if "pr" not in kinds or "ci_run" not in kinds or not rec.get("head_commit"):
+            raise Refused("pr_prepared needs pr and ci_run evidence and head_commit")
         if rec["head_commit"] != ctx.head:
             raise Refused("pushed head differs from the tested and reviewed head")
     if ev == "human_merged":
@@ -485,8 +549,8 @@ def check_transition(ctx, rec, contract, live):
             raise Refused("human_merged needs github_merge evidence and head_commit equal to the G6 head")
     if ev == "result_accepted":
         if contract["kind"] in ("mac_validation", "operator_action"):
-            if not ({"operator_statement", "result_file", "log"} & kinds):
-                raise Refused("operator/Mac task completion needs operator-provided evidence")
+            if actor != "operator" or not ({"operator_statement", "result_file", "log"} & kinds):
+                raise Refused("operator/Mac task completion is recorded by the operator with a hashed evidence file")
         elif "result_file" not in kinds:
             raise Refused("result_accepted needs a validated result_file")
     if ev == "interface_frozen":
@@ -510,6 +574,16 @@ def apply(ctx, rec, to, gate):
         ctx.gates = [g for g in ctx.gates if g == "G1"]
     if gate:
         ctx.gates.append(gate)
+    if to == "RUNNING" and ctx.state != "RUNNING":
+        ctx.impl_head = None
+        if ctx.state in ("AWAITING_REVIEW", "AWAITING_INTEGRATION", "AWAITING_HUMAN"):
+            ctx.need_bump = True
+    if ev in ("attempt_failed", "tests_failed"):
+        ctx.impl_head, ctx.need_bump = None, True
+    if ev == "dispatched":
+        ctx.need_bump = False
+    if ev == "implementation_completed":
+        ctx.impl_head = rec.get("head_commit")
     if ev == "tests_passed":
         ctx.head = rec["head_commit"]
     if ev == "pr_prepared":
@@ -523,13 +597,27 @@ def apply(ctx, rec, to, gate):
     if ev == "contract_revised":
         ctx.counts = {k: 0 for k in ctx.counts}
         ctx.gates = [g for g in ctx.gates if g == "G1"]
+        ctx.frozen, ctx.impl_head, ctx.need_bump = {}, None, False
+    ctx.contract_version = rec.get("contract_version", ctx.contract_version)
     ctx.core_sha = rec["contract_core_sha256"]
     if rec.get("attempt") is not None:
         ctx.attempt = rec["attempt"]
     ctx.state, ctx.prev, ctx.seq = to, rec["hash"], rec["seq"]
 
 
-def replay(task_id, live=False):
+def verify_file_evidence(rec):
+    for e in rec["evidence"]:
+        if e["kind"] in FILE_EVIDENCE:
+            p = resolve_home_ref(e["ref"])
+            if not p:
+                raise Refused(f"evidence {e['ref']} missing from DEVORCH_HOME")
+            if hashlib.sha256(open(p, "rb").read()).hexdigest() != e.get("sha256"):
+                raise Refused(f"evidence {e['ref']} changed after it was recorded")
+
+
+def replay(task_id, live=True, contract_file_check=True):
+    """Re-apply every rule `record` applies (R5 N2/N-05): transitions, gates, subtask bindings,
+    required reviewers, evidence file hashes, and the contract file against the last record."""
     ctx = Ctx(task_id)
     contract = load_contract(task_id)
     for i, r in enumerate(read_ledger(task_id), 1):
@@ -539,11 +627,14 @@ def replay(task_id, live=False):
             raise Refused(f"{task_id} seq {i}: hash mismatch")
         try:
             to, gate = check_transition(ctx, r, contract, live)
+            verify_file_evidence(r)
         except Refused as e:
             raise Refused(f"{task_id} seq {i} ({r['event']}): {e}")
         if to != r["to_state"] or r["from_state"] != ctx.state:
             raise Refused(f"{task_id} seq {i}: recorded {r['from_state']}->{r['to_state']}, rules give {ctx.state}->{to}")
         apply(ctx, r, to, gate)
+    if live and contract_file_check and ctx.core_sha and contract and contract_core_sha(contract) != ctx.core_sha:
+        raise Refused(f"{task_id}: contract file edited after the last record (record contract_revised)")
     return ctx
 
 
@@ -588,11 +679,14 @@ def accepted_result(sub_id):
     acc = [r for r in recs if r["event"] == "result_accepted"]
     if not acc:
         raise Refused(f"{sub_id} has no accepted result")
-    ref = [e["ref"] for e in acc[-1]["evidence"] if e["kind"] == "result_file"]
-    p = resolve_ref(ref[0]) if ref else None
+    item = [e for e in acc[-1]["evidence"] if e["kind"] == "result_file"]
+    p = resolve_home_ref(item[0]["ref"]) if item else None
     if not p:
-        raise Refused(f"{sub_id} accepted result file not found")
-    return load(p)
+        raise Refused(f"{sub_id} accepted result file not found in DEVORCH_HOME")
+    data = open(p, "rb").read()
+    if hashlib.sha256(data).hexdigest() != item[0].get("sha256"):
+        raise Refused(f"{sub_id} accepted result changed after acceptance")
+    return json.loads(data)
 
 
 # ---------------------------------------------------------------- commands: record / verify / status
@@ -602,10 +696,12 @@ def cmd_record(a):
     if contract is None:
         die(f"no contract at {hpath('tasks', a.task + '.json')}")
     errs, _ = validate(contract, "task-contract")
+    if not errs:
+        errs = contract_errors(contract, ownership=a.event in ("created", "contract_revised"))
     if errs:
         die("contract invalid, refusing to record: " + "; ".join(errs))
     try:
-        ctx = replay(a.task)
+        ctx = replay(a.task, contract_file_check=False)   # the new record itself is checked against the file
     except Refused as e:
         die(f"ledger does not verify, refusing to append: {e}")
     if not a.evidence:
@@ -620,7 +716,12 @@ def cmd_record(a):
             p = resolve_ref(ref)
             if not p:
                 die(f"evidence file not found (relative to DEVORCH_HOME or repo): {ref}")
-            item["sha256"] = hashlib.sha256(open(p, "rb").read()).hexdigest()
+            data = open(p, "rb").read()   # read once; the copy in HOME is what the ledger trusts (R5 N-04)
+            item["sha256"] = hashlib.sha256(data).hexdigest()
+            item["source"] = os.path.abspath(p)
+            item["ref"] = os.path.join("evidence", a.task, "records",
+                                       f"{ctx.seq + 1:04d}-{kind}-{item['sha256'][:12]}-{os.path.basename(p)}")
+            item["_data"] = data
         ev.append(item)
     rec = {"schema": "devorch.handoff.v1", "seq": ctx.seq + 1, "task_id": a.task, "at": now(), "event": a.event,
            "from_state": ctx.state, "actor": a.actor, "evidence": ev, "prev_hash": ctx.prev,
@@ -639,16 +740,47 @@ def cmd_record(a):
     except Refused as e:
         die(str(e))
     if a.event in ("implementation_completed", "result_accepted") and contract["kind"] not in ("mac_validation", "operator_action"):
-        refs = [e["ref"] for e in ev if e["kind"] == "result_file"]
-        if not refs:
+        items = [e for e in ev if e["kind"] == "result_file"]
+        if not items:
             die(f"{a.event} needs a result_file")
-        rp = resolve_ref(refs[0])
-        res = load(rp)
-        errs, _ = result_errors(contract, res, rp, allow_copy=TEST_MODE and a.allow_copy)
+        res = json.loads(items[0]["_data"])
+        errs, _ = result_errors(contract, res, items[0]["source"], allow_copy=TEST_MODE and a.allow_copy)
         if res.get("status") != "completed":
             errs.append(f"result status is {res.get('status')}, not completed")
+        if a.event == "implementation_completed" and res.get("head_commit") != a.head:
+            errs.append("--head must equal the result's head_commit")
         if errs:
             die(f"{a.event} refused, result does not check: " + "; ".join(errs))
+    if a.event == "unblocked":   # G1 means READY by the same rules as `ready` (R5 M2)
+        if contract.get("merc_issue") and contract["kind"] not in SUB_KINDS:
+            dagp = hpath("dag.json")
+            if not os.path.exists(dagp):
+                die("G1 needs $DEVORCH_HOME/dag.json (devorch.py dag --out) to check dependencies")
+            issue = load(dagp)["issues"].get(contract["merc_issue"])
+            if not issue:
+                die(f"{contract['merc_issue']} is not in dag.json")
+            by_merc, _ = primary_contracts()
+            bl = issue_blockers(contract["merc_issue"], issue, by_merc, satisfied_facts(), load(ASSIGN).get("_tdd_gates", {}))
+        else:
+            bl = contract_dep_blockers(contract)
+        if bl:
+            die("not READY, refusing G1: " + "; ".join(bl))
+    if a.event == "tests_passed":
+        try:
+            g = worktree_git(contract["worktree"])
+            tip = git([*g, "rev-parse", f"refs/heads/{contract['branch']}"], contract["worktree"], check=True).stdout.strip()
+        except Refused as e:
+            die(str(e))
+        if tip != a.head:
+            die(f"tests_passed head {a.head} is not the branch tip {tip}")
+    for e in ev:
+        if "_data" in e:
+            dst = hpath(e["ref"])
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            with open(dst, "wb") as f:
+                f.write(e.pop("_data"))
+                f.flush(); os.fsync(f.fileno())
+    rec["evidence"] = ev
     rec["to_state"] = to
     if gate:
         rec["gate"] = gate
@@ -677,6 +809,10 @@ def cmd_verify_ledger(a):
             bad += 1
             print(str(e))
     if a.remote:
+        remote_files = git(["ls-tree", "--name-only", f"{a.remote}:ledger"], HOME).stdout.split()
+        for fn in sorted(set(f for f in remote_files if f.endswith(".jsonl")) - set(ledger_files())):
+            bad += 1
+            print(f"{fn}: present on {a.remote} but deleted locally")
         for fn in ledger_files():
             r = git(["show", f"{a.remote}:ledger/{fn}"], HOME)
             if r.returncode != 0:
@@ -734,22 +870,63 @@ def satisfied_facts():
 
 
 # ---------------------------------------------------------------- ready
+def primary_contracts():
+    by_merc, problems = {}, []
+    for fn in sorted(f for f in os.listdir(hpath("tasks")) if f.endswith(".json")) if os.path.isdir(hpath("tasks")) else []:
+        c = load(hpath("tasks", fn))
+        if c.get("parent_task_id") or c["kind"] in SUB_KINDS or not c.get("merc_issue"):
+            continue
+        st = replay(c["task_id"]).state
+        if c["merc_issue"] in by_merc and by_merc[c["merc_issue"]][1] not in ("CANCELLED", "FAILED"):
+            problems.append(f"duplicate primary tasks for {c['merc_issue']}: {by_merc[c['merc_issue']][0]}, {c['task_id']}")
+        by_merc[c["merc_issue"]] = (c["task_id"], st, c)
+    return by_merc, problems
+
+
+def contract_dep_blockers(c):
+    out = []
+    for ic in c.get("interface_contracts", []):
+        fctx = replay(ic["frozen_by"]) if load_contract(ic["frozen_by"]) else None
+        if not fctx or fctx.frozen.get(ic["path"]) != ic["sha256"]:
+            out.append(f"interface {ic['path']} not frozen at the contracted sha256 by {ic['frozen_by']}")
+    for dep in c.get("dependencies", []):
+        if not load_contract(dep["task_id"]):
+            out.append(f"dependency {dep['task_id']} has no contract")
+            continue
+        dctx = replay(dep["task_id"])
+        ok = {"INTERFACE_FROZEN": bool(dctx.frozen), "AWAITING_HUMAN": dctx.state in ("AWAITING_HUMAN", "COMPLETED")}.get(
+            dep["required_state"], dctx.state == "COMPLETED")
+        if not ok:
+            out.append(f"dependency {dep['task_id']} not {dep['required_state']}")
+    return out
+
+
+def issue_blockers(k, i, by_merc, facts, gate_map):
+    """Everything that keeps MERC issue k from READY (used by `ready` and by `record unblocked`)."""
+    out = []
+    c = by_merc[k][2] if k in by_merc else None
+    relaxed = set()   # DAG deps whose required state a contract dependency relaxes (RA-D3 interface freeze)
+    for dep in (c or {}).get("dependencies", []):
+        dc = load_contract(dep["task_id"]) or {}
+        if dep["required_state"] != "COMPLETED" and dc.get("merc_issue"):
+            relaxed.add(dc["merc_issue"])
+    out += [f"{d} not COMPLETED" for d in i["deps"] if d not in relaxed and not (d in by_merc and by_merc[d][1] == "COMPLETED")]
+    if c:
+        out += contract_dep_blockers(c)
+    tdd = re.findall(r"G-S\d", i.get("gates", "")) + gate_map.get(k, [])
+    out += [f"fact {g}" for g in tdd + i.get("p0_refs", []) if g not in facts]
+    if c and c["kind"] in FULL_KINDS:
+        out += [f"fact {f}" for f in HARD_PRECONDITIONS if f not in facts]
+    return out
+
+
 def cmd_ready(a):
     require_home()
     dag = load(a.dag or hpath("dag.json"))
     assign = load(ASSIGN)
     gate_map = assign.get("_tdd_gates", {})
     facts = satisfied_facts()
-    by_merc, problems = {}, []
-    for fn in sorted(os.listdir(hpath("tasks"))) if os.path.isdir(hpath("tasks")) else []:
-        c = load(hpath("tasks", fn))
-        if c.get("parent_task_id") or c["kind"] in SUB_KINDS:
-            continue
-        if c.get("merc_issue"):
-            st = replay(c["task_id"]).state
-            if c["merc_issue"] in by_merc and by_merc[c["merc_issue"]][1] not in ("CANCELLED", "FAILED"):
-                problems.append(f"duplicate primary tasks for {c['merc_issue']}: {by_merc[c['merc_issue']][0]}, {c['task_id']}")
-            by_merc[c["merc_issue"]] = (c["task_id"], st, c)
+    by_merc, problems = primary_contracts()
     for p in problems:
         print("ERROR: " + p)
     out = []
@@ -758,22 +935,11 @@ def cmd_ready(a):
             continue
         if k in by_merc and by_merc[k][1] not in ("NEW", "BLOCKED", "READY"):
             continue
-        deps_ok = all(d in by_merc and by_merc[d][1] == "COMPLETED" for d in i["deps"])
-        if k in by_merc:  # contract-level dependencies (incl. INTERFACE_FROZEN)
-            for dep in by_merc[k][2].get("dependencies", []):
-                dctx = replay(dep["task_id"])
-                if dep["required_state"] == "INTERFACE_FROZEN":
-                    deps_ok &= bool(dctx.frozen)
-                elif dep["required_state"] == "AWAITING_HUMAN":
-                    deps_ok &= dctx.state in ("AWAITING_HUMAN", "COMPLETED")
-                else:
-                    deps_ok &= dctx.state == "COMPLETED"
-        tdd = re.findall(r"G-S\d", i.get("gates", "")) + gate_map.get(k, [])
-        missing = [g for g in tdd if g not in facts] + [p for p in i.get("p0_refs", []) if p not in facts]
-        if deps_ok and not missing:
+        blockers = issue_blockers(k, i, by_merc, facts, gate_map)
+        if not blockers:
             out.append((k, i["longest_path_p50"], i["downstream"], i["needs_mac_or_operator"], i["title"]))
-        elif deps_ok and a.verbose:
-            print(f"{k:10} deps ok, waiting for facts: {', '.join(missing)}")
+        elif a.verbose:
+            print(f"{k:10} waiting for: {'; '.join(blockers)}")
     out.sort(key=lambda r: (-r[1], -r[2]))
     for k, lp, dn, mac, t in out:
         print(f"{k:10} lp={lp:5} downstream={dn:3} {'OPERATOR/MAC' if mac else 'agent':12} {t}")
@@ -804,6 +970,14 @@ def cmd_check_contract(a):
     c = load(a.contract)
     errs, mode = validate(c, "task-contract")
     if not errs:
+        errs = contract_errors(c)
+    report(errs, mode)
+
+
+def contract_errors(c, ownership=True):
+    """Semantic contract rules. Run by check-contract and, on every record, by `record` (R5 M6)."""
+    errs = []
+    if True:
         if not os.path.isabs(c["worktree"]) or not os.path.isabs(c["evidence_dir"]):
             errs.append("worktree and evidence_dir must be absolute paths")
         if HOME and os.path.abspath(c["evidence_dir"]).startswith(os.path.abspath(HOME) + os.sep):
@@ -830,15 +1004,15 @@ def cmd_check_contract(a):
         for p in c["allowed_paths"]:
             if matches(p.replace("**", "x").replace("*", "x"), c.get("restricted_paths", [])):
                 errs.append(f"allowed path {p} falls inside restricted_paths")
-        if HOME and c["allowed_paths"]:
+        if ownership and HOME and c["allowed_paths"]:
             for tid, paths in active_primary_paths(c["task_id"]):
                 if overlap(c["allowed_paths"], paths):
                     errs.append(f"path ownership conflict with active task {tid}")
-    report(errs, mode)
+    return errs
 
 
-def changed_files(wt, base, tip):
-    r = git(["diff", "--no-renames", "--name-only", "-z", base, tip], wt, check=True)
+def changed_files(wt, base, tip, gargs=()):
+    r = git([*gargs, "diff", "--no-renames", "--name-only", "-z", base, tip], wt, check=True)
     return sorted(f for f in r.stdout.split("\0") if f)
 
 
@@ -867,13 +1041,17 @@ def result_errors(c, r, result_path, allow_copy=False, repo=None):
         errs.append(f"result must be read from {expected_path} (written by the agent before returning)")
     wt = repo or c["worktree"]
     try:
-        tip = git(["rev-parse", "--verify", f"refs/heads/{c['branch']}"], wt, check=True).stdout.strip()
-        if git(["merge-base", "--is-ancestor", c["base_commit"], tip], wt).returncode != 0:
+        g = worktree_git(wt)
+        tip = git([*g, "rev-parse", "--verify", f"refs/heads/{c['branch']}"], wt, check=True).stdout.strip()
+        if git([*g, "merge-base", "--is-ancestor", c["base_commit"], tip], wt).returncode != 0:
             errs.append("base_commit is not an ancestor of the branch tip")
-        changed = changed_files(wt, c["base_commit"], tip)
-        rev = [x for x in git(["rev-list", "--reverse", f"{c['base_commit']}..{tip}"], wt, check=True).stdout.split() if x]
-        dirty = git(["status", "--porcelain", "--untracked-files=all"], wt, check=True).stdout.strip()
-        wt_head = git(["rev-parse", "HEAD"], wt, check=True).stdout.strip()
+        changed = changed_files(wt, c["base_commit"], tip, g)
+        rev = [x for x in git([*g, "rev-list", "--reverse", f"{c['base_commit']}..{tip}"], wt, check=True).stdout.split() if x]
+        dirty = git([*g, "status", "--porcelain", "--untracked-files=all"], wt, check=True).stdout.strip()
+        wt_head = git([*g, "rev-parse", "HEAD"], wt, check=True).stdout.strip()
+        hidden = hidden_index_entries(g, wt)
+        if hidden:
+            errs.append(f"index entries hidden from status (skip-worktree/assume-unchanged): {hidden[:5]}")
         if c["kind"] in READ_ONLY_KINDS:
             target = c.get("review_target", {}).get("head_commit")
             if r.get("commits") or (target and tip != target and c["kind"] in REVIEW_GATE):
@@ -892,6 +1070,7 @@ def result_errors(c, r, result_path, allow_copy=False, repo=None):
             if sorted(set(r.get("modified_files", []))) != changed:
                 errs.append("modified_files does not equal git diff --no-renames base..tip")
             allowed = list(c["allowed_paths"])
+            restricted = list(c.get("restricted_paths", []))
             if c["kind"] == "integration":
                 # an integration branch carries the covered tasks' reviewed heads: its scope is the union of
                 # their scopes plus its own, and every integrated head must be the covered task's tested head
@@ -902,17 +1081,18 @@ def result_errors(c, r, result_path, allow_copy=False, repo=None):
                         errs.append(f"covered task {t} has no contract")
                         continue
                     allowed += tc["allowed_paths"]
+                    restricted += tc.get("restricted_paths", [])
                     h = heads.get(t)
                     if not h:
                         errs.append(f"integrated_heads lacks covered task {t}")
-                    elif git(["merge-base", "--is-ancestor", h, tip], wt).returncode != 0:
+                    elif git([*g, "merge-base", "--is-ancestor", h, tip], wt).returncode != 0:
                         errs.append(f"integrated head of {t} is not contained in the integration tip")
                     elif replay(t).head != h:
                         errs.append(f"integrated head of {t} is not its tested head")
             for f in changed:
                 if not matches(f, allowed):
                     errs.append(f"changed file outside allowed_paths: {f}")
-                if matches(f, c.get("restricted_paths", [])):
+                if matches(f, restricted):
                     errs.append(f"changed restricted path: {f}")
     except Refused as e:
         errs.append(str(e))
@@ -982,6 +1162,7 @@ def cmd_import_evidence(a):
 
 
 BASELINE_PATHS = [".claude", "CLAUDE.md", "tools/devorch", ".gitignore"]
+USER_BASELINE = ["~/.gitconfig", "~/.config/git/config", "~/.claude/settings.json", "~/.claude/settings.local.json"]
 
 
 def baseline_snapshot():
@@ -989,7 +1170,15 @@ def baseline_snapshot():
     common = common if os.path.isabs(common) else os.path.join(REPO, common)
     snap = {"git_config": hashlib.sha256(open(os.path.join(common, "config"), "rb").read()).hexdigest()}
     hooks = os.path.join(common, "hooks")
-    snap["git_hooks"] = sorted(f for f in os.listdir(hooks) if not f.endswith(".sample")) if os.path.isdir(hooks) else []
+    snap["git_hooks"] = {f: hashlib.sha256(open(os.path.join(hooks, f), "rb").read()).hexdigest()
+                         for f in sorted(os.listdir(hooks)) if not f.endswith(".sample")
+                         and os.path.isfile(os.path.join(hooks, f))} if os.path.isdir(hooks) else {}
+    # user-level configuration that changes what git push/fetch or Claude Code do (R5 N-02)
+    user = {}
+    for p in USER_BASELINE:
+        full = os.path.expanduser(p)
+        user[p] = hashlib.sha256(open(full, "rb").read()).hexdigest() if os.path.isfile(full) else None
+    snap["user_config"] = user
     files = {}
     for p in BASELINE_PATHS:
         full = os.path.join(REPO, p)
@@ -1035,17 +1224,25 @@ def cmd_push(a):
         ref, cwd = "devorch/state", HOME
     else:
         c = load_contract(a.task)
-        ctx = replay(a.task)
+        try:
+            ctx = replay(a.task)
+        except Refused as e:
+            die(f"refusing to push: ledger does not verify: {e}")
         ref, cwd = c["branch"], REPO
-        if not re.match(r"^dev/[a-z0-9-]+$", ref):
-            die("only dev/* branches may be pushed")
+        if not re.match(r"^dev/[a-z0-9-]+$", ref) or c["kind"] not in FULL_KINDS or "-int-" in ref:
+            die("only dev/* branches of full-lifecycle tasks may be pushed (integration branches stay local)")
+        if ctx.state != "AWAITING_INTEGRATION":
+            die(f"push only from AWAITING_INTEGRATION (task is {ctx.state})")
+        missing = [f for f in HARD_PRECONDITIONS if f not in satisfied_facts()]
+        if missing:
+            die(f"refusing to push: operator facts missing {missing} (DOD-02 ruleset, DOD-03 development identity)")
         tip = git(["rev-parse", f"refs/heads/{ref}"], REPO, check=True).stdout.strip()
         if ctx.head != tip:
             die(f"branch tip {tip} is not the tested head {ctx.head}")
         if not all(g in ctx.gates for g in ("G1", "G2", "G3", "G4", "G5")):
             die(f"push needs G1-G5 (have {ctx.gates})")
     url = git(["config", "--get", "remote.origin.url"], cwd, check=True).stdout.strip()
-    r = git(["push", url, f"refs/heads/{ref}:refs/heads/{ref}"], cwd)
+    r = git(["push", url, f"refs/heads/{ref}:refs/heads/{ref}"], cwd, user_config=True)
     print(r.stdout + r.stderr)
     return r.returncode
 
@@ -1080,6 +1277,11 @@ def cmd_preflight(a):
     if dirty:
         ok = False
         print("DEVORCH_HOME has uncommitted changes (only the orchestrator writes, then commits each tick):\n" + dirty)
+    if git(["remote"], HOME).stdout.strip():
+        f = git(["fetch", "origin", "devorch/state"], HOME, user_config=True)
+        if f.returncode != 0 and git(["ls-remote", "--exit-code", "origin", "devorch/state"], HOME, user_config=True).returncode != 2:
+            ok = False
+            print("cannot fetch origin/devorch/state: the remote comparison would be stale")
     has_remote = git(["rev-parse", "--verify", "origin/devorch/state"], HOME).returncode == 0
     if cmd_verify_ledger(argparse.Namespace(repair_tail=False, remote="origin/devorch/state" if has_remote else None)):
         ok = False

@@ -27,7 +27,7 @@
 | 16–17 | Roadmap amendments RA-D1…D9; ADR amendment; operator decisions DOD-01…09 | `12-amendments.md`, `../architecture/decisions/proposed/ADR-021-development-orchestration.md` |
 | 18 | Operational runbook | `13-runbook.md` |
 | — | Independent reviews R1 (architecture), R2 (security), R3 (TPM), R4 (code/reliability) | `reviews/R1-…` … `reviews/R4-…` |
-| — | Dispositions of every review finding | `reviews/R0-dispositions.md` (every Critical/High finding of R1–R4 → fix, location, test; residual risks) |
+| — | Dispositions of every review finding | `reviews/R0-dispositions.md` (every Critical/High finding of R1–R4 → fix, location, test; residual risks); `reviews/R5-recheck.md` (independent re-check of R0: new findings, fixes, what is still open) |
 
 ## Status of each element
 
@@ -37,8 +37,8 @@
 | Code and PR tasks | **Blocked by the hard preconditions** (`08-…` §0): operator facts for DOD-02 (ruleset) and DOD-03 (development bot identity), and `get_me` returning that identity. Until then only design, planning and Mac-lane preparation |
 | `.claude/agents/` (13 definitions) | **Configured and verified to load**: after a session restart all 13 `mdev-*` agents were listed as available agent types |
 | `.claude/settings.json` (119 deny rules) | **Configured; tripwire, not a security boundary.** Verified that project deny rules take effect live (denied GitHub MCP tools disappeared). The server-level deny name format for plugin MCP servers is **not verified** |
-| Specialist guard hook (`PreToolUse`, all 12 specialists) | **Configured; tripwire.** Hooks firing inside subagents in a live dispatch are **not yet verified** (RA-D1) |
-| `tools/devorch/devorch.py` v2 (lifecycles, gates, budgets, bound reviews, ledger, baseline, lock, preflight, push) | **Implemented and tested in scratch repositories**: `test_devorch.py` 23/23 passing (positive and negative cases). Not yet run against a real ledger |
+| Specialist guard hook (`PreToolUse`, all 12 specialists) | **Configured; tripwire; did NOT fire in two live dispatches in the authoring session (R5).** Regexes self-tested. Dispatch waits for the RB-D2 live canary after a restart (DOD-10) |
+| `tools/devorch/devorch.py` v2 (lifecycles, gates, budgets, bound reviews, ledger, baseline, lock, preflight, push) | **Implemented and tested in scratch repositories**: `test_devorch.py` 30/30 passing (positive and negative cases). Not yet run against a real ledger |
 | Ledger branch `devorch/state` | **Documented, not created** (operator bootstrap RA-D9 / RB-D1, after DOD-01) |
 | GitHub ruleset on `main`; development bot identity | **Awaiting operator action** (DOD-02, DOD-03). These are the real controls |
 | Claude Code OS sandbox (enforces credential-path and network denies for Bash subprocesses) | **Not enabled**; recommended for the Mac (DOD-09) |

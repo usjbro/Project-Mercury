@@ -148,11 +148,16 @@
             ]
           },
           "ref": {
-            "type": "string"
+            "type": "string",
+            "description": " For file evidence: the copy under DEVORCH_HOME (evidence/<task>/records/...), verified by sha256 on replay."
           },
           "sha256": {
             "type": "string",
             "pattern": "^[0-9a-f]{64}$"
+          },
+          "source": {
+            "type": "string",
+            "description": "absolute path the evidence was copied from at record time (provenance only; the ledger trusts the copy at ref)"
           }
         }
       }

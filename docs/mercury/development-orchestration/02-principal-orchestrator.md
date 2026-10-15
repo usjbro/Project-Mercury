@@ -42,7 +42,7 @@ An agent's `status: completed` only permits the orchestrator to *start* these ch
 
 ## 3. READY rule
 
-**Hard preconditions (S-01, S-10).** No task that produces code or a PR (any full-lifecycle kind, and integration) is dispatched until the operator has recorded `T fact --kind identity --id DOD-03` (the development bot identity) and `T fact --kind decision --id DOD-02` (ruleset on `main` verified), and `mcp__github__get_me` at session start returns that identity. Until then only design, planning and Mac-lane preparation tasks run. Cloud sessions hold the operator's GitHub authorization, so code work in the cloud also waits for DOD-02/03.
+**Hard preconditions (S-01, S-10).** No task that produces code or a PR (any full-lifecycle kind, and integration) is dispatched until the operator has recorded `T fact --kind identity --id DOD-03` (the development bot identity) and `T fact --kind decision --id DOD-02` (ruleset on `main` verified), and `mcp__github__get_me` at session start returns that identity. Until then only design, planning and Mac-lane preparation tasks run; a design task may reach G5, but `devorch.py push` refuses every push until both facts exist (and `ready` lists full-lifecycle tasks as waiting for them). Cloud sessions hold the operator's GitHub authorization, so code work in the cloud also waits for DOD-02/03.
 
 A task is READY only when **all** of these hold. Items 1–4 are checked by `T ready`; the rest by the orchestrator and `check-contract`.
 
@@ -94,7 +94,7 @@ The mapping from MERC issues to agents is in `05-dependency-and-critical-path.md
 2. `T check-contract $DEVORCH_HOME/tasks/<task_id>.json` must print VALID.
 3. `T record --task <id> --event created --evidence ledger:tasks/<id>.json`.
 4. `T record --task <id> --event unblocked --evidence design_ref:<path>@<approved sha>` (G1).
-5. Create the worktree and evidence directory: `git -c core.hooksPath=/dev/null worktree add -b <branch> <worktree> <base_commit>` and `mkdir -p <evidence_dir>`. Review subtasks use the parent's branch and worktree read-only, after the implementer has returned. Integration worktrees and their local-only branches `dev/dt-<nnnn>-int-<wave>-<n>` are created by the orchestrator (`06-…` §1); `push --task` refuses them.
+5. Create the worktree and evidence directory: `git -c core.hooksPath=/dev/null worktree add -b <branch> <worktree> <base_commit>` and `mkdir -p <evidence_dir>`. Review subtasks name the parent's branch but get their own **fresh detached checkout** at the reviewed head (`git -c core.hooksPath=/dev/null worktree add --detach <wt>-rN <head>`), never the implementer's worktree, so nothing the implementer left behind (hidden index flags, background processes, a forged `.git` pointer) reaches the reviewer or the G2 re-run (R5 N-02/N-03). Integration worktrees and their local-only branches `dev/dt-<nnnn>-int-<wave>-<n>` are created by the orchestrator (`06-…` §1); `push --task` refuses them.
 6. `T record --task <id> --event assigned`.
 7. Invoke the agent in the background with a prompt containing **only** the absolute contract path, for a correction attempt the paths of the prior evidence files (§5 rule U), and this instruction: "Read the contract at <path>. Execute it exactly. Write result.json to your evidence_dir and return the final JSON result block required by your instructions."
 8. Immediately `T record --task <id> --event dispatched --session <agent id>`.
@@ -114,8 +114,10 @@ The mapping from MERC issues to agents is in `05-dependency-and-critical-path.md
      status escalated    -> escalated + ESCALATIONS.md entry; partial -> attempt_failed or env_retry
      VALID, completed:   result_file:<evidence_dir>/result.json  (record re-runs check-result live and
                          hashes the file; it refuses any other location and any status but completed)
-       full kind         -> implementation_completed; re-run required_tests ->
-                            tests_passed --head <tip> (test_run:…) | tests_failed
+       full kind         -> implementation_completed --head <result head_commit>; re-run required_tests
+                            in a FRESH detached checkout at that head (git worktree add --detach, never the
+                            agent's worktree: R5 N-03) -> tests_passed --head <tip> (test_run:…) | tests_failed
+                            (record refuses G2 unless the head equals the checked result head and the branch tip)
        short kind        -> result_accepted (mac_validation / operator_action: operator evidence)
    RUNNING without a result and stale (07 §4) -> stale_detected, then resume, env_retry or reclaimed
 3. AWAITING_REVIEW: dispatch review subtasks bound to the tested head (code_review <id>-rN,

@@ -9,7 +9,7 @@ Scope: every Critical and High finding of the four independent reviews. Medium a
 - **Operator** — the finding cannot be closed without an operator decision or action (named in `12-amendments.md`).
 
 Verification at this commit:
-- `python3 tools/devorch/test_devorch.py` reports 23 tests, OK.
+- `python3 tools/devorch/test_devorch.py` reports 30 tests, OK (after the R5 round).
 - `python3 tools/devorch/gen_examples.py --check` reports the scenario OK.
 - All schemas and examples validate under jsonschema 4.26.0 (Draft 2020-12).
 - The generated agent files are byte-identical to the output of `gen_agents.py`.
@@ -33,7 +33,7 @@ Verification at this commit:
 | ID | Sev | Finding (short) | Disposition | Where |
 |---|---|---|---|---|
 | S-01 | Critical | No ruleset on `main`; operator's GitHub authorization is shared by every agent process | **Operator + enforced precondition.** No code or PR task is dispatched until the operator has recorded `fact --kind decision --id DOD-02` (ruleset verified) and `--kind identity` (dev bot, DOD-03), and `get_me` returns that identity. Until then only design, planning and Mac-prep tasks run. **Residual:** on a personal repository an exclusively human merge is only detectable after the fact (G7 `merged_by`); an organization (G-ORG) is recommended | Orchestrator rule 0; `08`; `11` Stage A; `12` DOD-02/03 |
-| S-02 | Critical | Credential reads were claimed to be "prevented" | **Mitigated; matrix corrected.** Read/Edit denies and Bash denies (`git credential*`, credential config reads, curl/wget to `api.github.com`) are documented as **tripwires**. Specialists also hit the guard hook. **Residual:** subprocesses that open files themselves bypass deny rules, and so does the main session's Bash. The only enforcing control is Claude Code's OS sandbox, which is **not enabled**; recommended as operator decision DOD-09 for the Mac. The real protection is S-01's identity without merge/approve rights | `.claude/settings.json` (119 denies); `hooks/specialist_guard.py`; `08` matrix; `12` |
+| S-02 | Critical | Credential reads were claimed to be "prevented" | **Mitigated; matrix corrected.** Read/Edit denies and Bash denies (`git credential*`, credential config reads, curl/wget to `api.github.com`) are documented as **tripwires**. Specialists also hit the guard hook *if it runs* (R5: it did not, DOD-10). **Residual:** subprocesses that open files themselves bypass deny rules, and so does the main session's Bash. The only enforcing control is Claude Code's OS sandbox, which is **not enabled**; recommended as operator decision DOD-09 for the Mac. The real protection is S-01's identity without merge/approve rights | `.claude/settings.json` (119 denies); `hooks/specialist_guard.py`; `08` matrix; `12` |
 | S-03 | Critical | GitHub/Linear write tools not denied; normal sessions not covered | **Fixed.** All GitHub write tools, Linear and Slack writes, and the plugin server prefixes are denied project-wide. The "paste §6 into a normal session" option was removed: `claude --agent mdev-principal-orchestrator` is required. Verified live: the denied MCP tools disappeared from the session. **Residual:** the plugin server-level deny name format is unverified (those servers currently fail to connect); claude.ai connector prefixes are covered only by the tool names enumerated | `.claude/settings.json`; `13` RB-D2; `02` |
 | S-04 | High | Push denies matched one spelling | **Mitigated.** Settings deny `main` refspecs, force, `--mirror`, `--all` and `--delete` in several spellings. Specialists are blocked from any `git push` by the guard hook. The orchestrator pushes only via `devorch.py push`, which checks `dev/*`, tip == tested head, G1–G5 and the git baseline. **Residual:** text matching is not a boundary; DOD-02's ruleset is | settings; hook; `devorch.py push` |
 | S-05 | High | Shared git dir lets a specialist plant hooks or config | **Mitigated.** Edit/Write denies cover `**/.git/hooks/**` and `**/.git/config`. The hook blocks `.git/` writes and git internals. Worktrees are created and pushes made with `core.hooksPath=/dev/null`. `git-baseline verify` (config hash, hooks list, `.claude`, `CLAUDE.md`, `tools/devorch`) runs in `preflight` and before every push | settings; hook; `devorch.py git-baseline`, `push`, `preflight`; `06` |
@@ -83,4 +83,9 @@ Verification at this commit:
 4. **TDD approval and DoD D7–D8 interpretation:** DOD-01.
 5. **Schedule:** operator availability dominates (`05` §4). The plan holds only if the operator is ≥ 50 % available in W0–W1 and gate weeks.
 
-A fresh independent re-review of this fix round is recorded in `R5-recheck.md` when it has run; until then the closures above are the author's claims, backed by the tests named.
+**R5 re-check (`R5-recheck.md`):**
+- **Rejected four closures:** S-01, S-05, S-06 and F05/F09 were only partial.
+- **New findings:** N-01…N-06 and N1…N4. All except N-01 are now fixed in code, each with a regression test, apart from the operator-only residuals listed there.
+- **Guard hook:** shown not to fire in live dispatch in the authoring session (DOD-10).
+
+Where this table and R5 differ, R5 is current.

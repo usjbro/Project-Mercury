@@ -10,7 +10,9 @@ The real boundaries are the `main` ruleset and the development identity (08-…-
 import json, os, re, sys
 
 BASH_DENY = [
-    (r"(^|[\s;&|(`'\"])git\b[^;&|]*\bpush\b", "git push (only the orchestrator pushes, via devorch.py push)"),
+    (r"(^|[\s;&|(`'\"/\\=])git\b[^;&|]*\bpush\b", "git push (only the orchestrator pushes, via devorch.py push)"),
+    (r"\$\{?\w+\}?[^;&|]*\bpush\b|\bsend-pack\b|\bpush\s+(origin|https?:|git@|ssh:)", "git push via indirection"),
+    (r"\bgit\b[^;&|]*\bupdate-index\b[^;&|]*--(skip-worktree|assume-unchanged)|core\.fsmonitor|GIT_DIR=|GIT_CONFIG", "git index/config tampering"),
     (r"(^|[\s;&|(`'\"/])gh(\s|$)", "GitHub CLI"),
     (r"(curl|wget|http|httpie|python3?\s+-c|node\s+-e)[^;&|]*(api\.github\.com|github\.com/repos|api\.linear\.app)", "direct GitHub/Linear API call"),
     (r"devorch\.py|tools/devorch/", "the devorch ledger tool"),
@@ -22,7 +24,7 @@ BASH_DENY = [
     (r"\b(sudo|launchctl|crontab|dscl|sysadminctl|osascript)\b|Library/LaunchAgents", "privileged or persistent host change"),
     (r"mercury-devorch", "the ledger worktree"),
 ]
-PATH_DENY = [r"/\.git/", r"/\.claude/", r"/CLAUDE\.md$", r"/tools/devorch/", r"/\.mcp\.json$", r"mercury-devorch",
+PATH_DENY = [r"/\.git(/|$)", r"/\.claude/", r"/CLAUDE\.md$", r"/tools/devorch/", r"/\.mcp\.json$", r"mercury-devorch",
              r"/\.ssh/", r"/Library/LaunchAgents/", r"/\.config/gh/", r"\.git-credentials$", r"\.netrc$"]
 
 

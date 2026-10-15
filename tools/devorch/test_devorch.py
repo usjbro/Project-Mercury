@@ -21,7 +21,7 @@ def sh(cmd, cwd, env=None, ok=True):
 
 
 class Env:
-    def __init__(self):
+    def __init__(self, facts=True):
         self.root = tempfile.mkdtemp(prefix="devorch-test-")
         self.home = os.path.join(self.root, "home")
         self.ev = os.path.join(self.root, "evidence")
@@ -36,6 +36,14 @@ class Env:
         sh("git add -A && git commit -qm base", self.repo)
         self.base = sh("git rev-parse HEAD", self.repo).stdout.strip()
         self.env = dict(os.environ, DEVORCH_HOME=self.home, DEVORCH_TEST_MODE="1", DEVORCH_EVIDENCE=self.ev)
+        issue = {"deps": [], "conditional": False, "gates": "", "p0_refs": [], "longest_path_p50": 1, "downstream": 0,
+                 "needs_mac_or_operator": False, "title": "t"}
+        json.dump({"issues": {k: dict(issue) for k in ("MERC-101", "MERC-102", "MERC-020")}},
+                  open(os.path.join(self.home, "dag.json"), "w"))
+        if facts:   # the hard preconditions for code tasks (DOD-02 ruleset, DOD-03 identity), recorded by the operator
+            for kind, fid in (("decision", "DOD-02"), ("identity", "DOD-03")):
+                self.run("fact", "--kind", kind, "--id", fid, "--status", "verified", "--actor", "operator",
+                         "--evidence", "test", ok=True)
 
     def run(self, *args, ok=None):
         r = subprocess.run([sys.executable, TOOL, *args], env=self.env, capture_output=True, text=True)
@@ -99,14 +107,29 @@ class Env:
         json.dump(r, open(p, "w"))
         return p
 
+    def implement(self, tid, path, branch="dev/merc-101-x"):
+        """Agent commits and writes result.json; orchestrator records the checked result."""
+        head = self.commit(path, branch=branch)
+        res = self.result(load(self, tid))
+        self.rec(tid, "implementation_completed", "result_file:" + res, head=head)
+        return head
+
     def to_awaiting_review(self, tid="DT-0001", sec=False):
         c = self.contract(tid, sec=sec)
-        head = self.commit("src/core/a.ts")
         self.rec(tid, "created")
         self.rec(tid, "unblocked", f"design_ref:docs/x.md@{self.base}")
         self.rec(tid, "assigned")
+        self.rec(tid, "dispatched", session="s1")
+        head = self.implement(tid, "src/core/a.ts")
         self.rec(tid, "tests_passed", "test_run:" + self.write("g2.log.json", {"ok": 1}), head=head)
         return c, head
+
+    def correction(self, tid, path):
+        bump(self, tid)
+        self.rec(tid, "dispatched", session="s2")
+        head = self.implement(tid, path)
+        self.rec(tid, "tests_passed", "test_run:" + self.write(f"g2-{os.path.basename(path)}.json", {}), head=head)
+        return head
 
     def review(self, parent, head, kind="code_review", agent="mdev-code-reviewer", suffix="r1", accept=True,
                branch="dev/merc-101-x", tests=()):
@@ -189,7 +212,7 @@ class T(unittest.TestCase):
         self.e.rec("DT-0001-i1", "assigned")
         self.e.rec("DT-0001-i1", "result_accepted", "result_file:" + ires)
         self.e.rec("DT-0001", "integration_verified", "subtask:DT-0001-i1")
-        self.e.rec("DT-0001", "pr_prepared", "pr:https://example/pr/1", head=head)
+        self.e.rec("DT-0001", "pr_prepared", "pr:https://example/pr/1", "ci_run:" + self.e.write("ci.json", {"ok": 1}), head=head)
         self.e.rec("DT-0001", "human_merged", "github_merge:merged_by=operator", head=head)
         self.e.run("verify-ledger", ok=True)
 
@@ -214,9 +237,7 @@ class T(unittest.TestCase):
         self.e.rec(sid, "result_accepted", "result_file:" + res)
         # implementation moves on after the review: correction loop and new head
         self.e.rec("DT-0001", "code_review_changes_required", "log:" + res)
-        bump(self.e, "DT-0001")
-        newhead = self.e.commit("src/core/b.ts")
-        self.e.rec("DT-0001", "tests_passed", "test_run:" + self.e.write("g2b.json", {}), head=newhead)
+        self.e.correction("DT-0001", "src/core/b.ts")
         r = self.e.rec("DT-0001", "code_review_passed", f"subtask:{sid}", ok=False)
         self.assertIn("not bound to the current tested head", r.stderr)
 
@@ -245,13 +266,17 @@ class T(unittest.TestCase):
         c = json.load(open(p)); c["allowed_paths"] = ["**"]; json.dump(c, open(p, "w"))
         r = self.e.rec("DT-0001", "unblocked", f"design_ref:x@{self.e.base}", ok=False)
         self.assertIn("contract changed without a contract_revised", r.stderr)
+        r = self.e.run("verify-ledger", ok=False)   # replay compares the contract file with the last record
+        self.assertIn("contract file edited after the last record", r.stdout)
 
     def test_short_lifecycle_operator_task_completes(self):
         self.e.contract("DT-0002", kind="operator_action", agent="operator", merc="MERC-020", reviewers=[], allowed=[])
         self.e.rec("DT-0002", "created")
         self.e.rec("DT-0002", "unblocked", f"design_ref:x@{self.e.base}")
         self.e.rec("DT-0002", "assigned")
-        self.e.rec("DT-0002", "result_accepted", "operator_statement:decisions recorded in ESCALATIONS.md", actor="operator")
+        r = self.e.rec("DT-0002", "result_accepted", "log:" + self.e.write("x.json", {}), ok=False)
+        self.assertIn("recorded by the operator", r.stderr)  # R5 N4: the orchestrator cannot complete it
+        self.e.rec("DT-0002", "result_accepted", "operator_statement:" + self.e.write("op.md", {"done": 1}), actor="operator")
         st = self.e.run("status", ok=True).stdout
         self.assertIn("COMPLETED", st)
 
@@ -278,9 +303,7 @@ class T(unittest.TestCase):
         c, head = self.e.to_awaiting_review()
         for i in range(3):
             self.e.rec("DT-0001", "code_review_changes_required")
-            bump(self.e, "DT-0001")
-            h = self.e.commit(f"src/core/f{i}.ts")
-            self.e.rec("DT-0001", "tests_passed", "test_run:" + self.e.write(f"t{i}.json", {}), head=h)
+            self.e.correction("DT-0001", f"src/core/f{i}.ts")
         r = self.e.rec("DT-0001", "code_review_changes_required", ok=False)
         self.assertIn("review loop budget", r.stderr)
 
@@ -307,6 +330,95 @@ class T(unittest.TestCase):
         c = json.load(open(p)); c["allowed_paths"] = ["**"]; json.dump(c, open(p, "w"))
         r = self.e.rec("DT-0001", "started", ok=False)
         self.assertIn("contract changed without a contract_revised", r.stderr)
+
+    # --- R5 re-review findings ------------------------------------------------------------
+    def test_g2_requires_checked_implementation_at_that_head(self):
+        # R5 N1: G2 without implementation_completed, or at a head committed after it, is refused
+        self.e.contract("DT-0001")
+        for ev in ("created", "assigned"):
+            if ev == "assigned":
+                self.e.rec("DT-0001", "unblocked", f"design_ref:x@{self.e.base}")
+            self.e.rec("DT-0001", ev)
+        h = self.e.commit(".github/x.yml")
+        r = self.e.rec("DT-0001", "tests_passed", "test_run:" + self.e.write("t.json", {}), head=h, ok=False)
+        self.assertIn("checked implementation_completed", r.stderr)
+
+    def test_forged_legal_chain_with_fake_subtasks_fails_verify(self):
+        # R5 N2/N-05: well-chained, legal-looking records citing nonexistent subtasks fail replay
+        c, head = self.e.to_awaiting_review()
+        lp = os.path.join(self.e.home, "ledger/DT-0001.jsonl")
+        last = json.loads(open(lp).read().strip().split("\n")[-1])
+        forged = dict(last, seq=last["seq"] + 1, event="code_review_passed", from_state="AWAITING_REVIEW",
+                      to_state="AWAITING_REVIEW", gate="G3", prev_hash=last["hash"],
+                      evidence=[{"kind": "subtask", "ref": "DT-0001-r9"}])
+        forged.pop("head_commit", None)
+        forged["hash"] = hashlib.sha256(D.canon(forged).encode()).hexdigest()
+        open(lp, "a").write(json.dumps(forged) + "\n")
+        r = self.e.run("verify-ledger", ok=False)
+        self.assertIn("DT-0001-r9 has no contract", r.stdout)
+
+    def test_swapped_review_result_after_acceptance_refused(self):
+        # R5 N3/N-04: the ledger trusts the hashed copy in HOME, and the copy is hash-checked
+        c, head = self.e.to_awaiting_review()
+        sid = self.e.review("DT-0001", head, accept=False)
+        self.e.rec("DT-0001", "code_review_changes_required")
+        # attacker rewrites the agent-writable original: no effect, the HOME copy is used
+        orig = os.path.join(load(self.e, sid)["evidence_dir"], "result.json")
+        r = json.load(open(orig)); r["recommendation"] = "accept"; json.dump(r, open(orig, "w"))
+        h2 = self.e.correction("DT-0001", "src/core/b.ts")
+        r = self.e.rec("DT-0001", "code_review_passed", f"subtask:{sid}", ok=False)
+        self.assertIn("did not accept", r.stderr)
+        # tampering with the HOME copy is detected by replay
+        rec = [json.loads(l) for l in open(os.path.join(self.e.home, f"ledger/{sid}.jsonl"))][-1]
+        copy = os.path.join(self.e.home, rec["evidence"][0]["ref"])
+        x = json.load(open(copy)); x["recommendation"] = "accept"; json.dump(x, open(copy, "w"))
+        r = self.e.run("verify-ledger", ok=False)
+        self.assertIn("changed after it was recorded", r.stdout)
+
+    def test_forged_worktree_pointer_refused(self):
+        # R5 N-02: a .git pointer to a foreign git dir (fsmonitor/ref spoofing) is refused
+        sh("git worktree add -q ../wt1 -b dev/merc-101-wt", self.e.repo)
+        wt = os.path.join(self.e.root, "wt1")
+        common = os.path.join(self.e.repo, ".git")
+        self.assertTrue(D.worktree_git(wt, common))
+        evil = os.path.join(self.e.root, "evil"); os.makedirs(evil)
+        open(os.path.join(wt, ".git"), "w").write(f"gitdir: {evil}\n")
+        with self.assertRaises(D.Refused):
+            D.worktree_git(wt, common)
+
+    def test_skip_worktree_hidden_change_refused(self):
+        # R5 N-03: a committed change hidden from status by skip-worktree fails check-result
+        c = self.e.contract("DT-0001")
+        self.e.commit("src/core/a.ts", "backdoor")
+        sh("git update-index --skip-worktree src/core/a.ts && printf clean > src/core/a.ts", self.e.repo)
+        p = self.e.result(c)
+        r = self.e.run("check-result", p, os.path.join(self.e.home, "tasks/DT-0001.json"), ok=False)
+        self.assertIn("hidden from status", r.stdout)
+
+    def test_g1_requires_ready_including_hard_preconditions(self):
+        # R5 M2/N-06: G1 is refused while the task is not READY by the `ready` rules
+        e = Env(facts=False)
+        try:
+            e.contract("DT-0001"); e.rec("DT-0001", "created")
+            r = e.rec("DT-0001", "unblocked", f"design_ref:x@{e.base}", ok=False)
+            self.assertIn("fact DOD-02", r.stderr)
+        finally:
+            e.cleanup()
+
+    def test_push_requires_state_and_operator_facts(self):
+        # R5 N-06 / M5: no push before AWAITING_INTEGRATION, nor without the DOD-02 and identity facts
+        c, head = self.e.to_awaiting_review()
+        self.e.run("git-baseline", "record", ok=True)
+        r = self.e.run("push", "--task", "DT-0001", ok=False)
+        self.assertIn("push only from AWAITING_INTEGRATION", r.stderr)
+        for k in ("security_review", "code_review"):
+            sid = self.e.review("DT-0001", head, k, "mdev-security-engineer" if k == "security_review" else "mdev-code-reviewer",
+                                "s1" if k == "security_review" else "r1")
+            self.e.rec("DT-0001", "security_review_passed" if k == "security_review" else "code_review_passed", f"subtask:{sid}")
+        self.e.run("fact", "--kind", "decision", "--id", "DOD-02", "--status", "revoked", "--actor", "operator",
+                   "--evidence", "ruleset removed", ok=True)
+        r = self.e.run("push", "--task", "DT-0001", ok=False)
+        self.assertIn("operator facts missing", r.stderr)
 
     # --- ledger robustness (R4 F04/F12/F13, R1 H-04) --------------------------------------
     def test_lock_and_escalations_do_not_break_verify(self):
