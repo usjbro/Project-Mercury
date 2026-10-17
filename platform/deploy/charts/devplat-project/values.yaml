@@ -1,0 +1,84 @@
+# devplat-project values. GENERATED from the project configuration (26-..., platform/projects/<id>.yaml) by the
+# platform's config renderer; hand edits are overwritten. Example below = Mercury on a standard-assurance cluster.
+# Jupiter: every Jupiter-specific value is UNRESOLVED (no repository or specification exists); its release is not
+# rendered until its project configuration is complete.
+
+project:
+  id: mercury
+  namespacePrefix: proj-mercury        # = execution_target.namespace_prefix
+  # Execution target cluster (Option C later = a different clusterRef; this chart is installed there instead).
+  clusterRef: local
+
+platformNamespace: devplat-system
+
+# Egress destinations outside the cluster that project pods may reach (by CIDR; NetworkPolicy cannot match hosts).
+artifacts:
+  egressCidrs: []          # CIDRs of the S3-compatible endpoint; empty = in-cluster store selected below
+  inClusterNamespace: devplat-artifacts
+  inClusterPort: 9000
+
+# Package-registry proxy for the `deps` network class (only build Jobs and exec Jobs with network_class=deps).
+registryProxy:
+  enabled: false
+  namespace: devplat-system
+  podLabels:
+    app.kubernetes.io/name: devplat-registry-proxy
+  port: 8080
+
+exec:
+  # gVisor required for agent pods on standard-assurance clusters; "" only in reduced-assurance profiles.
+  requiredRuntimeClassName: gvisor
+  quota:
+    pods: "6"
+    requestsCpu: "6"
+    requestsMemory: 12Gi
+    limitsCpu: "12"
+    limitsMemory: 24Gi
+    requestsEphemeralStorage: 30Gi
+    limitsEphemeralStorage: 60Gi
+  limits:
+    defaultCpu: "2"
+    defaultMemory: 4Gi
+    defaultRequestCpu: "1"
+    defaultRequestMemory: 2Gi
+    maxCpu: "4"
+    maxMemory: 8Gi
+
+build:
+  enabled: true
+  # baseline: rootless BuildKit with node-installed Localhost seccomp/AppArmor profiles (22-... section 9).
+  # privileged: only to run the upstream example with Unconfined profiles; requires acceptUnconfined=true and is
+  # labelled reduced assurance.
+  podSecurityLevel: baseline
+  acceptUnconfined: false
+  allowedBuilderImages: []   # e.g. ["docker.io/moby/buildkit@sha256:..."]; empty = no builder pod admitted
+  quota:
+    pods: "2"
+    requestsCpu: "4"
+    requestsMemory: 8Gi
+    limitsCpu: "8"
+    limitsMemory: 16Gi
+    requestsEphemeralStorage: 40Gi
+    limitsEphemeralStorage: 80Gi
+
+# Profile the controller applies to every ephemeral test namespace proj-<P>-t-<runid> it creates.
+test:
+  maxConcurrentNamespaces: 2
+  ttlSecondsAfterSuccess: 0
+  ttlSecondsAfterFailure: 3600
+  maxLifetimeSeconds: 14400
+  quota:
+    pods: "20"
+    requestsCpu: "4"
+    requestsMemory: 8Gi
+    limitsCpu: "8"
+    limitsMemory: 16Gi
+    requestsEphemeralStorage: 20Gi
+    limitsEphemeralStorage: 40Gi
+  # Test namespaces never reach the internet, LLMs or GitHub; only DNS, the artifact store and in-namespace pods.
+  allowArtifacts: true
+  # Mercury T3 (sandbox repo + sandbox Apps) needs HTTPS egress from a dedicated test class. Off by default; turning
+  # it on is an operator decision (22-... section 4.3). Sandbox credentials are never part of these values.
+  sandboxEgress:
+    enabled: false
+    egressCidrs: []

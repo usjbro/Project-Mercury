@@ -1,0 +1,130 @@
+# devplat base: namespaces and Pod Security Admission levels.
+# Status: Documented only / not deployed. Target: Kubernetes API v1.33.
+# Design: docs/mercury/development-orchestration/18-kubernetes-security-model.md §7 (PSA) and §5 (namespaces).
+#
+# Label contract (consumed by NetworkPolicies and ValidatingAdmissionPolicies; vocabulary shared with the charts):
+#   devplat.io/ns-role: system | artifacts | observability | exec | build | test   (every devplat namespace)
+#   devplat.io/project: <project id>  project namespaces only
+# Policies select namespaces by devplat.io/ns-role. Only the operator can change namespace labels.
+# Ephemeral test namespaces proj-<P>-t-<runid> are NOT declared here; the controller creates them (impersonating
+# devplat-namespacer) with ns-role=test, devplat.io/managed-by=devplat-controller and PSA enforce=restricted
+# (policy devplat-namespacer-scope).
+#
+# Jupiter namespaces are generic placeholders from the project onboarding contract: no Jupiter language, stack
+# or requirement is known (Jupiter is UNRESOLVED). They carry devplat.io/onboarding-status: unresolved.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: devplat-system
+  labels:
+    app.kubernetes.io/part-of: devplat
+    devplat.io/ns-role: system
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: v1.33
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: v1.33
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: v1.33
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: devplat-artifacts
+  labels:
+    app.kubernetes.io/part-of: devplat
+    devplat.io/ns-role: artifacts
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: v1.33
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: v1.33
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: v1.33
+---
+# Node-level collectors (DaemonSets needing hostPath/hostNetwork) are NOT allowed here; they belong to the
+# cluster add-on namespaces owned by the operator (doc 18 §7).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: devplat-observability
+  labels:
+    app.kubernetes.io/part-of: devplat
+    devplat.io/ns-role: observability
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: v1.33
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: v1.33
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: v1.33
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: proj-mercury-exec
+  labels:
+    app.kubernetes.io/part-of: devplat
+    devplat.io/ns-role: exec
+    devplat.io/project: mercury
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: v1.33
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: v1.33
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: v1.33
+---
+# Build namespaces: PSA enforce is "privileged" ONLY because rootless BuildKit needs seccomp/AppArmor profiles
+# that Baseline and Restricted forbid (Unconfined) or a setuid newuidmap (allowPrivilegeEscalation).
+# audit/warn stay "restricted" so every deviation is visible. The real controls in this namespace are the
+# ValidatingAdmissionPolicies devplat-pod-hardening, devplat-proj-pod-identity, devplat-build-exceptions,
+# devplat-proj-runtime-placement and devplat-image-pinning (admission-policies.yaml), which forbid every
+# privileged feature except the named BuildKit exceptions. Feasibility of BuildKit under gVisor: UNVERIFIED.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: proj-mercury-build
+  labels:
+    app.kubernetes.io/part-of: devplat
+    devplat.io/ns-role: build
+    devplat.io/project: mercury
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/enforce-version: v1.33
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: v1.33
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: v1.33
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: proj-jupiter-exec
+  labels:
+    app.kubernetes.io/part-of: devplat
+    devplat.io/ns-role: exec
+    devplat.io/project: jupiter
+    devplat.io/onboarding-status: unresolved
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: v1.33
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: v1.33
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: v1.33
+  annotations:
+    devplat.io/placeholder: "Generic placeholder from the onboarding contract; Jupiter repository and requirements are unresolved."
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: proj-jupiter-build
+  labels:
+    app.kubernetes.io/part-of: devplat
+    devplat.io/ns-role: build
+    devplat.io/project: jupiter
+    devplat.io/onboarding-status: unresolved
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/enforce-version: v1.33
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: v1.33
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: v1.33
+  annotations:
+    devplat.io/placeholder: "Generic placeholder from the onboarding contract; Jupiter repository and requirements are unresolved."

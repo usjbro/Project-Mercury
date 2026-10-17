@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/usjbro/Project-Mercury/platform/schemas/execution-profiles.schema.json",
+  "title": "devplat agent execution profiles (devplat.execution_profiles.v1)",
+  "description": "One execution profile per agent role: how the devplat controller turns a task attempt for that role into a Kubernetes Job. Development platform only; NOT a production MERCURY artefact. Spec: docs/mercury/development-orchestration/16-agent-execution-and-job-lifecycle.md, 17-multi-project-scheduling.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "status", "defaults", "profiles"],
+  "properties": {
+    "schema": {"const": "devplat.execution_profiles.v1"},
+    "status": {
+      "description": "Capability status of this file (status vocabulary of the amendment brief).",
+      "enum": ["Implemented+tested", "Implemented (untested)", "Configured", "Documented only", "Unverified assumption", "Blocked", "Awaiting operator approval"]
+    },
+    "description": {"type": "string"},
+    "defaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["setup_grace_seconds", "ttl_seconds_after_finished", "termination_grace_seconds", "priority_class"],
+      "properties": {
+        "setup_grace_seconds": {"type": "integer", "minimum": 60, "maximum": 1800, "description": "Added to the wall budget for activeDeadlineSeconds: workspace fetch plus result upload."},
+        "ttl_seconds_after_finished": {"type": "integer", "minimum": 600, "maximum": 604800, "description": "Backstop only; the controller deletes a Job after it has collected and persisted the results."},
+        "termination_grace_seconds": {"type": "integer", "minimum": 10, "maximum": 300},
+        "priority_class": {"type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"}
+      }
+    },
+    "profiles": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/profile"}
+    }
+  },
+  "$defs": {
+    "quantity_cpu": {"type": "string", "pattern": "^([0-9]+m|[0-9]+(\\.[0-9]+)?)$"},
+    "quantity_bytes": {"type": "string", "pattern": "^[0-9]+(Ki|Mi|Gi|Ti)$"},
+    "resource_set": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cpu", "memory", "ephemeral-storage"],
+      "properties": {
+        "cpu": {"$ref": "#/$defs/quantity_cpu"},
+        "memory": {"$ref": "#/$defs/quantity_bytes"},
+        "ephemeral-storage": {"$ref": "#/$defs/quantity_bytes"}
+      }
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role", "agent_definition", "kinds", "llm", "resources", "max_wall_minutes",
+        "network_class", "runtime_class", "workspace_size", "writes_allowed", "max_concurrent_per_project"
+      ],
+      "properties": {
+        "role": {
+          "description": "Role id. For the 12 specialists it equals the Claude Code agent name and the task contract's assigned_agent; 'planner' is the Job form of the Principal Orchestrator's reasoning.",
+          "type": "string",
+          "pattern": "^(mdev-[a-z0-9-]+|planner)$"
+        },
+        "agent_definition": {
+          "description": "Repository path of the Claude Code subagent definition the role ConfigMap is generated from.",
+          "type": "string",
+          "pattern": "^\\.claude/agents/mdev-[a-z0-9-]+\\.md$"
+        },
+        "kinds": {
+          "description": "Task contract kinds this role may execute (mirrors devorch KIND_AGENT and 03-agents.md).",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"enum": ["design", "planning", "implementation", "test", "security_review", "code_review", "design_review", "reliability_review", "reliability", "integration", "release", "plan_proposal"]}
+        },
+        "llm": {"type": "boolean", "description": "true: the main container runs Claude Code headless (claude -p) with this role definition."},
+        "extra_disallowed_tools": {
+          "description": "Tools removed on the claude command line in addition to the definition's own disallowedTools (never fewer).",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "resources": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["requests", "limits"],
+          "properties": {
+            "requests": {"$ref": "#/$defs/resource_set"},
+            "limits": {"$ref": "#/$defs/resource_set"}
+          }
+        },
+        "max_wall_minutes": {"type": "integer", "minimum": 5, "maximum": 240, "description": "Upper bound; the Job deadline uses min(contract budget.max_wall_minutes, this) plus setup_grace_seconds."},
+        "max_turns": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Upper bound for claude --max-turns; min(contract budget.max_turns, this)."},
+        "network_class": {
+          "description": "none: no egress at all. model-only: model-gateway and artifact store. deps: model-only plus the package-registry proxy.",
+          "enum": ["none", "model-only", "deps"]
+        },
+        "runtime_class": {"enum": ["gvisor", "default"], "description": "RuntimeClass of the pod. 'default' is accepted only in the reduced-assurance workstation mode (15-platform-architecture.md §7)."},
+        "workspace_size": {"$ref": "#/$defs/quantity_bytes"},
+        "writes_allowed": {"type": "boolean", "description": "false: gitbroker refuses any result bundle with commits beyond the reviewed head and the controller never pushes from this role."},
+        "max_concurrent_per_project": {"type": "integer", "minimum": 1, "maximum": 16},
+        "est_cost_usd_p80": {"type": "number", "minimum": 0, "description": "Planning estimate used for budget reservation at admission (17-multi-project-scheduling.md §6). Not a measurement."},
+        "notes": {"type": "string"}
+      }
+    }
+  }
+}

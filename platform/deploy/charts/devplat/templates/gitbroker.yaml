@@ -1,0 +1,30 @@
+{{- /*
+devplat-gitbroker: sole holder of the development GitHub App private key (DOD-03 (a)). Mints scoped installation
+tokens, serves one-time source bundles to fetch init containers, validates agent output bundles (port of devorch
+result_errors), pushes dev/* only and opens DRAFT pull requests. It has no code path for merge, approve, review,
+ruleset or settings calls; the App's permissions must not allow them either (the real control).
+No DB credentials: it acts only on signed instructions from the controller.
+*/}}
+{{- $env := printf `- name: DEVPLAT_GITHUB_APP_ID
+  value: %q
+- name: DEVPLAT_GITHUB_APP_KEY_FILE
+  value: "/var/run/devplat/github-app/%s"
+- name: DEVPLAT_PUSH_REF_PREFIX
+  value: %q
+- name: DEVPLAT_DRAFT_PR_ONLY
+  value: %q`
+  .Values.gitbroker.githubApp.appId
+  .Values.gitbroker.githubApp.privateKeySecretRef.key
+  .Values.gitbroker.pushRefPrefix
+  (toString .Values.gitbroker.draftPullRequestsOnly) -}}
+{{- $vols := printf `- name: github-app-key
+  secret:
+    secretName: %s
+    defaultMode: 0400
+    items:
+      - key: %s
+        path: %s` .Values.gitbroker.githubApp.privateKeySecretRef.name .Values.gitbroker.githubApp.privateKeySecretRef.key .Values.gitbroker.githubApp.privateKeySecretRef.key -}}
+{{- $mounts := `- name: github-app-key
+  mountPath: /var/run/devplat/github-app
+  readOnly: true` -}}
+{{ include "devplat.workload" (dict "root" . "name" "devplat-gitbroker" "key" "gitbroker" "comp" .Values.gitbroker "port" (int .Values.gitbroker.service.port) "env" $env "automount" false "volumes" $vols "volumeMounts" $mounts) }}

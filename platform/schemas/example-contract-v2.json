@@ -1,0 +1,86 @@
+{
+  "schema": "devplat.task_contract.v2",
+  "task_id": "DT-0001",
+  "contract_version": 1,
+  "kind": "implementation",
+  "linear_issue": null,
+  "assigned_agent": "mdev-backend-engineer",
+  "objective": "Project skeleton, config schema and validator with parameter clamps, single paths module, structured logger with redactor sinks (issue-breakdown MERC-101).",
+  "requirements": [
+    "NFR-072",
+    "NFR-062",
+    "SEC-501",
+    "CON-013"
+  ],
+  "dependencies": [],
+  "approved_design_refs": [
+    "docs/mercury/architecture/components.md\u00a72@a39b1550333e5e5b20003720a65afa27bad32f6c",
+    "docs/mercury/operations/macos-service.md\u00a72@a39b1550333e5e5b20003720a65afa27bad32f6c",
+    "docs/mercury/architecture/decisions/ADR-016-filesystem-layout.md@a39b1550333e5e5b20003720a65afa27bad32f6c"
+  ],
+  "allowed_paths": [
+    "src/core/config/**",
+    "src/core/paths.ts",
+    "src/core/log/**",
+    "test/unit/core/**"
+  ],
+  "restricted_paths": [
+    "docs/**",
+    ".github/**",
+    ".claude/**",
+    "migrations/**",
+    "src/ports/**"
+  ],
+  "interface_contracts": [],
+  "acceptance_criteria": [
+    "TC-UNIT-061 and TC-SEC-150 pass",
+    "No parameter hard-coded outside the config module",
+    "Redactor applied on every log sink"
+  ],
+  "required_tests": [
+    {
+      "id": "TC-UNIT-061",
+      "command": "npm test -- test/unit/core/config",
+      "env": "T1"
+    },
+    {
+      "id": "TC-SEC-150",
+      "command": "npm test -- test/unit/core/log/redactor",
+      "env": "T1"
+    },
+    {
+      "id": "typecheck",
+      "command": "npm run typecheck",
+      "env": "T0"
+    }
+  ],
+  "required_reviewers": [
+    "mdev-code-reviewer",
+    "mdev-security-engineer"
+  ],
+  "required_gates": [
+    "G1",
+    "G2",
+    "G3",
+    "G4",
+    "G5",
+    "G6",
+    "G7"
+  ],
+  "security_sensitive": true,
+  "branch": "dev/merc-101-skeleton",
+  "worktree": "/workspace/repo",
+  "base_commit": "a39b1550333e5e5b20003720a65afa27bad32f6c",
+  "evidence_dir": "/out",
+  "status": "READY",
+  "attempt": 2,
+  "budget": {
+    "max_attempts": 3,
+    "max_turns": 10,
+    "max_wall_minutes": 30
+  },
+  "created_at": "2026-10-15T00:00:00Z",
+  "created_by": "devplat-controller",
+  "project_id": "mercury",
+  "upstream_issue": "MERC-101"
+}

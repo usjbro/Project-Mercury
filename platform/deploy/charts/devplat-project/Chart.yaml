@@ -1,0 +1,14 @@
+apiVersion: v2
+name: devplat-project
+description: >-
+  Per-project bundle for devplat: project namespaces (exec, build), ResourceQuotas, LimitRanges, default-deny
+  NetworkPolicies, zero-RBAC ServiceAccounts, admission policies for project pods, and the test-namespace profile
+  that devplat-controller applies to ephemeral proj-<P>-t-<runid> namespaces. Values are generated from the
+  project configuration (26-..., platform/schemas/project-config.schema.json). Proposed; never installed.
+type: application
+version: 0.1.0-alpha.0
+appVersion: "0.1.0-alpha.0"
+kubeVersion: ">=1.30.0-0"
+annotations:
+  devplat.io/status: "Documented only - rendered and schema-validated offline, never installed"
+  devplat.io/requires: "devplat chart installed (platformNamespace) with a matching version"

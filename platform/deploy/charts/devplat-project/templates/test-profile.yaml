@@ -1,0 +1,39 @@
+{{- /*
+Test-namespace profile read by devplat-controller (platform namespace). For every integration/e2e run the
+controller creates proj-<P>-t-<runid> with these labels, quota, LimitRange and default-deny NetworkPolicy, runs the
+test Jobs, collects evidence and deletes the namespace after the TTL (22-build-test-architecture.md section 4).
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: devplat-test-profile-{{ .Values.project.id }}
+  namespace: {{ .Values.platformNamespace }}
+  labels:
+    {{- include "proj.labels" . | nindent 4 }}
+    devplat.io/config: test-profile
+data:
+  profile.yaml: |
+    project: {{ .Values.project.id }}
+    namespaceNamePattern: "{{ .Values.project.namespacePrefix }}-t-<runid8>"
+    namespaceLabels:
+      devplat.io/project: {{ .Values.project.id }}
+      devplat.io/ns-role: test
+      devplat.io/managed-by: devplat-controller
+      pod-security.kubernetes.io/enforce: restricted
+      pod-security.kubernetes.io/enforce-version: latest
+    maxConcurrentNamespaces: {{ .Values.test.maxConcurrentNamespaces }}
+    ttlSecondsAfterSuccess: {{ .Values.test.ttlSecondsAfterSuccess }}
+    ttlSecondsAfterFailure: {{ .Values.test.ttlSecondsAfterFailure }}
+    maxLifetimeSeconds: {{ .Values.test.maxLifetimeSeconds }}
+    resourceQuota:
+      {{- include "proj.quota" .Values.test.quota | nindent 6 }}
+    networkPolicy:
+      defaultDeny: true
+      allowIntraNamespace: true
+      allowDns: true
+      allowArtifacts: {{ .Values.test.allowArtifacts }}
+      allowModelGateway: false
+      allowGitbroker: true
+      sandboxEgress:
+        enabled: {{ .Values.test.sandboxEgress.enabled }}
+        egressCidrs: {{ toJson .Values.test.sandboxEgress.egressCidrs }}

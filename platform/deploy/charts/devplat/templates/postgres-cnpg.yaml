@@ -1,0 +1,57 @@
+{{- if eq .Values.postgres.mode "cnpg" }}
+{{- if .Values.postgres.cnpg.backup.enabled }}
+{{- fail "postgres.cnpg.backup.enabled: not templated in chart 0.1 (recent CloudNativePG versions move object-store backups to the Barman Cloud plugin; configure per 24-helm-and-gitops.md section 7)" }}
+{{- end }}
+{{- /*
+CloudNativePG Cluster (custom resource; requires the CloudNativePG operator, installed beforehand by the operator).
+No superuser access from applications. Component roles are managed roles whose passwords come from basic-auth
+Secrets the operator creates: devplat-pg-controller, devplat-pg-api. Table grants (controller = sole writer of
+task state) are applied by the platform's migrations (19-..., platform/db), not here.
+*/}}
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: devplat-pg
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "devplat.labels" (dict "root" . "name" "devplat-pg") | nindent 4 }}
+spec:
+  instances: {{ .Values.postgres.cnpg.instances }}
+  {{- with .Values.postgres.cnpg.imageName }}
+  imageName: {{ . }}
+  {{- end }}
+  enableSuperuserAccess: false
+  primaryUpdateStrategy: unsupervised
+  bootstrap:
+    initdb:
+      database: devplat
+      owner: devplat_owner
+  managed:
+    roles:
+      - name: devplat_controller
+        ensure: present
+        login: true
+        passwordSecret:
+          name: devplat-pg-controller
+      - name: devplat_api
+        ensure: present
+        login: true
+        passwordSecret:
+          name: devplat-pg-api
+  storage:
+    size: {{ .Values.postgres.cnpg.storage.size }}
+    {{- with .Values.postgres.cnpg.storage.storageClass }}
+    storageClass: {{ . }}
+    {{- end }}
+  affinity:
+    {{- with .Values.placement.control.nodeSelector }}
+    nodeSelector:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.placement.control.tolerations }}
+    tolerations:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    enablePodAntiAffinity: true
+    topologyKey: kubernetes.io/hostname
+{{- end }}

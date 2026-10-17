@@ -1,0 +1,51 @@
+# devplat base: RuntimeClasses (node.k8s.io/v1). Status: Documented only / not deployed / UNVERIFIED on any node.
+# Doc 18 §9. `gvisor` is the default sandbox for untrusted code (agent, planner, test Jobs; build Jobs if BuildKit
+# works under runsc - UNVERIFIED). `kata` is the alternative where nodes support nested virtualisation.
+# The node must have the handler configured in containerd (runsc / kata) and carry the labels below; otherwise pods
+# using the class stay Pending (fail closed).
+# scheduling.tolerations are merged into every pod that uses the class (RuntimeClass admission), and
+# scheduling.nodeSelector pins those pods to the exec pool. The exec pool taint devplat.io/exec=true:NoSchedule
+# keeps everything else (platform services) off it.
+# overhead values are planning estimates, NOT measurements; they count against ResourceQuota.
+---
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: gvisor
+  labels:
+    app.kubernetes.io/part-of: devplat
+handler: runsc
+overhead:
+  podFixed:
+    cpu: 250m
+    memory: 128Mi
+scheduling:
+  nodeSelector:
+    devplat.io/pool: exec
+    devplat.io/runtime-gvisor: "true"
+  tolerations:
+    - key: devplat.io/exec
+      operator: Equal
+      value: "true"
+      effect: NoSchedule
+---
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: kata
+  labels:
+    app.kubernetes.io/part-of: devplat
+handler: kata
+overhead:
+  podFixed:
+    cpu: 250m
+    memory: 192Mi
+scheduling:
+  nodeSelector:
+    devplat.io/pool: exec
+    devplat.io/runtime-kata: "true"
+  tolerations:
+    - key: devplat.io/exec
+      operator: Equal
+      value: "true"
+      effect: NoSchedule

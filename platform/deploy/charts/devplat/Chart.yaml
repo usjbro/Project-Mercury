@@ -1,0 +1,16 @@
+apiVersion: v2
+name: devplat
+description: >-
+  devplat control plane (controller, api, gitbroker, model-gateway) for the project-agnostic AI development
+  platform. Proposed design (Architecture Amendment 001); no images are published yet, so this chart cannot be
+  installed until real image digests are supplied. See docs/mercury/development-orchestration/24-helm-and-gitops.md.
+type: application
+version: 0.1.0-alpha.0
+appVersion: "0.1.0-alpha.0"
+kubeVersion: ">=1.30.0-0"
+keywords: [devplat, ai-development-platform]
+annotations:
+  devplat.io/status: "Documented only - not rendered with helm in the authoring environment, never installed"
+  devplat.io/prerequisites: "CloudNativePG operator (postgres.mode=cnpg) installed by the operator beforehand; S3-compatible store"
+# No chart dependencies on purpose: operators (CloudNativePG) and object stores are cluster-level prerequisites
+# installed and upgraded separately (24-helm-and-gitops.md section 3).

@@ -1,0 +1,194 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- /*
+devplat-system network policy: default deny, then explicit allows. NetworkPolicy is IP/port based; host-level
+egress restrictions (api.github.com for gitbroker, provider hosts for model-gateway) are enforced in the
+application allowlist and, where the CNI supports it, by FQDN policies (25-deployment-profiles.md section 3). Enforcement must be
+proven by the negative-path smoke tests (22-... section 7) on every profile; an unenforcing CNI accepts these
+objects silently.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "devplat.labels" (dict "root" . "name" "network") | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "devplat.labels" (dict "root" . "name" "network") | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+---
+# PostgreSQL: reachable only from controller and api (and the CloudNativePG operator / peer instances).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "devplat.labels" (dict "root" . "name" "network") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: devplat-pg
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - {key: app.kubernetes.io/name, operator: In, values: ["devplat-controller", "devplat-api"]}
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: devplat-pg
+      ports:
+        - {protocol: TCP, port: 5432}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cnpg-system
+      ports:
+        - {protocol: TCP, port: 8000}
+        - {protocol: TCP, port: 5432}
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: devplat-pg
+      ports:
+        - {protocol: TCP, port: 5432}
+    - ports:
+        - {protocol: TCP, port: 443}
+        - {protocol: TCP, port: 6443}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: devplat-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "devplat.labels" (dict "root" . "name" "network") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: devplat-controller
+  policyTypes: ["Ingress", "Egress"]
+  ingress: []
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: devplat-pg
+      ports:
+        - {protocol: TCP, port: 5432}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: devplat-gitbroker
+      ports:
+        - {protocol: TCP, port: {{ .Values.gitbroker.service.port }}}
+    # Kubernetes API server and the S3-compatible artifact endpoint (addresses differ per profile).
+    - ports:
+        - {protocol: TCP, port: 443}
+        - {protocol: TCP, port: 6443}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: devplat-api
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "devplat.labels" (dict "root" . "name" "network") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: devplat-api
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - ports:
+        - {protocol: TCP, port: {{ .Values.api.service.port }}}
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: devplat-pg
+      ports:
+        - {protocol: TCP, port: 5432}
+    # OIDC issuer discovery / JWKS
+    - ports:
+        - {protocol: TCP, port: 443}
+---
+# gitbroker: called by the controller and by fetch init containers in project namespaces; egress to GitHub only
+# (host allowlist in the application; port 443 here).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: devplat-gitbroker
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "devplat.labels" (dict "root" . "name" "network") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: devplat-gitbroker
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: devplat-controller
+        - namespaceSelector:
+            matchExpressions:
+              - {key: devplat.io/project, operator: Exists}
+              - {key: devplat.io/ns-role, operator: In, values: ["exec", "build", "test"]}
+      ports:
+        - {protocol: TCP, port: {{ .Values.gitbroker.service.port }}}
+  egress:
+    - ports:
+        - {protocol: TCP, port: 443}
+---
+# model-gateway: called from project namespaces; egress to provider hosts only (allowlist in the application).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: devplat-model-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "devplat.labels" (dict "root" . "name" "network") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: devplat-model-gateway
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        # Agent namespaces only: build and test namespaces never reach an LLM.
+        - namespaceSelector:
+            matchExpressions:
+              - {key: devplat.io/project, operator: Exists}
+              - {key: devplat.io/ns-role, operator: In, values: ["exec"]}
+      ports:
+        - {protocol: TCP, port: {{ .Values.modelGateway.service.port }}}
+  egress:
+    - ports:
+        - {protocol: TCP, port: 443}
+{{- end }}

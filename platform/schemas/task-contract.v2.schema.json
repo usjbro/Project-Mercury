@@ -1,0 +1,385 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "devplat.task_contract.v2",
+  "title": "devplat task contract v2 (multi-project; Kubernetes execution)",
+  "description": "Generalization of devorch.task_contract.v1 for devplat (Amendment 001). Changes: project_id; project-neutral ids and branches (branch prefix comes from the project config); kind plan_proposal for planner Jobs; created_by controller|operator; upstream_issue replaces merc_issue (merc_issue kept as a deprecated alias); worktree/evidence_dir are container paths fixed by the Job spec. Everything else is unchanged so devorch rules port 1:1. A v1 contract converts by: project_id=mercury, upstream_issue=merc_issue.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "task_id",
+    "contract_version",
+    "kind",
+    "linear_issue",
+    "assigned_agent",
+    "objective",
+    "requirements",
+    "dependencies",
+    "approved_design_refs",
+    "allowed_paths",
+    "restricted_paths",
+    "interface_contracts",
+    "acceptance_criteria",
+    "required_tests",
+    "required_reviewers",
+    "required_gates",
+    "security_sensitive",
+    "branch",
+    "worktree",
+    "base_commit",
+    "evidence_dir",
+    "status",
+    "attempt",
+    "budget",
+    "created_at",
+    "created_by",
+    "project_id",
+    "upstream_issue"
+  ],
+  "properties": {
+    "schema": {
+      "const": "devplat.task_contract.v2"
+    },
+    "task_id": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9]{1,7}-[0-9]{4,6}(-[a-z][0-9]{1,3})?$",
+      "description": "<PREFIX>-nnnn, subtasks -rN/-sN/-iN/-pN (planner proposal)"
+    },
+    "contract_version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Incremented when any field except status/attempt changes; earlier results are invalid for a new version."
+    },
+    "kind": {
+      "enum": [
+        "design",
+        "planning",
+        "implementation",
+        "test",
+        "security_review",
+        "code_review",
+        "design_review",
+        "reliability_review",
+        "reliability",
+        "integration",
+        "release",
+        "mac_validation",
+        "operator_action",
+        "plan_proposal"
+      ]
+    },
+    "linear_issue": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[A-Z]+-[0-9]+$"
+    },
+    "merc_issue": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^MERC-[0-9A-Za-z]+$",
+      "description": "DEPRECATED alias of upstream_issue (v1 compatibility)"
+    },
+    "assigned_agent": {
+      "type": "string",
+      "pattern": "^(mdev-[a-z-]+|planner|operator|mac-validation-queue)$",
+      "description": "role id from platform/agents/execution-profiles.yaml (or operator / mac-validation-queue); the project config must enable the role"
+    },
+    "objective": {
+      "type": "string",
+      "minLength": 10,
+      "maxLength": 2000
+    },
+    "requirements": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^(CON|FR|NFR|OPS|SEC)-[0-9]+"
+      }
+    },
+    "dependencies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "task_id",
+          "required_state"
+        ],
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "pattern": "^DT-[0-9]{4}(-[a-z0-9]+)?$"
+          },
+          "required_state": {
+            "enum": [
+              "COMPLETED",
+              "AWAITING_HUMAN",
+              "INTERFACE_FROZEN"
+            ]
+          }
+        }
+      }
+    },
+    "approved_design_refs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "description": "path\u00a7section@commit, e.g. docs/mercury/architecture/components.md\u00a76.3@<sha>"
+      }
+    },
+    "allowed_paths": {
+      "type": "array",
+      "minItems": 0,
+      "items": {
+        "type": "string",
+        "description": "glob relative to repo root"
+      },
+      "description": "globs relative to repo root ('**/' any dirs, '*' no slash); [] for read-only kinds"
+    },
+    "restricted_paths": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "interface_contracts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "sha256",
+          "frozen_by"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "frozen_by": {
+            "type": "string",
+            "pattern": "^DT-[0-9]{4}(-[a-z0-9]+)?$"
+          }
+        }
+      }
+    },
+    "acceptance_criteria": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string"
+      }
+    },
+    "required_tests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "command"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "TC-<LEVEL>-nnn or local name"
+          },
+          "command": {
+            "type": "string"
+          },
+          "env": {
+            "enum": [
+              "T0",
+              "T1",
+              "T2",
+              "T3",
+              "T4",
+              "T4v",
+              "T5",
+              "CI-linux",
+              "CI-macos"
+            ]
+          }
+        }
+      }
+    },
+    "required_reviewers": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "mdev-code-reviewer",
+          "mdev-security-engineer",
+          "mdev-lead-architect",
+          "mdev-reliability-engineer",
+          "operator"
+        ]
+      }
+    },
+    "required_gates": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "G1",
+          "G2",
+          "G3",
+          "G4",
+          "G5",
+          "G6",
+          "G7"
+        ]
+      }
+    },
+    "mercury_gates": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^(G-S[1-5]|P0-[0-9]+|SAC-[0-9]+)$"
+      },
+      "description": "TDD security gates / Phase 0 checks that must be satisfied before READY"
+    },
+    "security_sensitive": {
+      "type": "boolean"
+    },
+    "branch": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{0,15}/[a-z0-9][a-z0-9-]{1,60}$",
+      "description": "must start with the project's pr_policy branch prefix (checked by the controller)"
+    },
+    "worktree": {
+      "const": "/workspace/repo"
+    },
+    "base_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "evidence_dir": {
+      "const": "/out"
+    },
+    "status": {
+      "enum": [
+        "READY",
+        "BLOCKED",
+        "RUNNING",
+        "AWAITING_REVIEW",
+        "AWAITING_INTEGRATION",
+        "AWAITING_HUMAN",
+        "COMPLETED",
+        "FAILED",
+        "CANCELLED"
+      ]
+    },
+    "attempt": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 50
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_attempts",
+        "max_turns",
+        "max_wall_minutes"
+      ],
+      "properties": {
+        "max_attempts": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5
+        },
+        "max_turns": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500
+        },
+        "max_wall_minutes": {
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 480
+        },
+        "max_cost_usd": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "review_target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "implementation_task_id",
+        "base_commit",
+        "head_commit"
+      ],
+      "properties": {
+        "implementation_task_id": {
+          "type": "string",
+          "pattern": "^DT-[0-9]{4}(-[a-z0-9]+)?$"
+        },
+        "base_commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "head_commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        }
+      }
+    },
+    "notes": {
+      "type": "string",
+      "maxLength": 4000
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "created_by": {
+      "enum": [
+        "devplat-controller",
+        "operator"
+      ],
+      "description": "planner Jobs only PROPOSE contracts; the controller creates them"
+    },
+    "parent_task_id": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9]{1,7}-[0-9]{4,6}(-[a-z][0-9]{1,3})?$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "covers_tasks": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Z][A-Z0-9]{1,7}-[0-9]{4,6}(-[a-z][0-9]{1,3})?$"
+      }
+    },
+    "project_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{1,30}$",
+      "description": "devplat.project.v1 project id"
+    },
+    "upstream_issue": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 64,
+      "description": "the project's own issue id (e.g. MERC-101); null for subtasks"
+    }
+  }
+}

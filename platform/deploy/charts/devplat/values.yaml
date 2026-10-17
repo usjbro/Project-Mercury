@@ -1,0 +1,136 @@
+# devplat control-plane values (proposed; Architecture Amendment 001).
+# STATUS: no devplat images exist yet. Every image.digest is empty and the templates `fail` until a real
+# digest (sha256:<64 hex>) is supplied, e.g. ghcr.io/OWNER/devplat-controller@sha256:... . Images are always
+# referenced by digest, never by tag.
+# Secrets are never values: only references to Secrets that the operator creates out of band (24-... section 5).
+
+platform:
+  # Logical cluster name used in execution targets {cluster_ref, namespace_prefix} (15-...).
+  clusterRef: local
+  # Assurance mode of this install (25-deployment-profiles.md): standard | reduced
+  # reduced = workstation profile without gVisor or without enforced NetworkPolicy; recorded in every evidence item.
+  assuranceMode: standard
+
+# Node placement. Platform services run on the `control` pool; agent/build/test Jobs on the tainted `exec` pool.
+placement:
+  control:
+    nodeSelector:
+      devplat.io/pool: control
+    tolerations: []
+
+image:
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+
+controller:
+  replicas: 2
+  image:
+    repository: ghcr.io/OWNER/devplat-controller
+    digest: ""            # sha256:... - placeholder, no image exists yet
+  leaderElection:
+    leaseName: devplat-controller
+    leaseDurationSeconds: 15
+    renewDeadlineSeconds: 10
+    retryPeriodSeconds: 2
+  admission:
+    globalMaxConcurrentJobs: 6
+    defaultPerProjectMaxConcurrentJobs: 3
+    testNamespaceTtlSeconds: 3600        # keep failed test namespaces this long for inspection
+    maxTestNamespacesPerProject: 2
+  resources:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {cpu: "1", memory: 512Mi}
+
+api:
+  replicas: 1
+  image:
+    repository: ghcr.io/OWNER/devplat-api
+    digest: ""
+  service:
+    port: 8080
+  oidc:
+    # Operator authentication; operator facts and approvals are accepted only with an authenticated subject.
+    issuerUrl: ""
+    clientId: ""
+    allowedSubjects: []   # OIDC `sub` values allowed to record operator facts
+  resources:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {cpu: "1", memory: 512Mi}
+
+gitbroker:
+  replicas: 1
+  image:
+    repository: ghcr.io/OWNER/devplat-gitbroker
+    digest: ""
+  service:
+    port: 8080
+  githubApp:
+    # Development bot identity (DOD-03 (a)). No merge, no approve, no administration, no workflows.
+    appId: ""
+    privateKeySecretRef:
+      name: devplat-github-app
+      key: private-key.pem
+  # Fixed safety properties; the schema only accepts these values.
+  pushRefPrefix: "dev/"
+  draftPullRequestsOnly: true
+  resources:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {cpu: "1", memory: 512Mi}
+
+modelGateway:
+  replicas: 2
+  image:
+    repository: ghcr.io/OWNER/devplat-model-gateway
+    digest: ""
+  service:
+    port: 8080
+  providers:
+    - name: anthropic
+      host: api.anthropic.com
+      apiKeySecretRef:
+        name: devplat-model-anthropic
+        key: api-key
+  resources:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {cpu: "1", memory: 256Mi}
+
+postgres:
+  # cnpg: create a CloudNativePG Cluster CR (operator must be installed first)
+  # external: use a managed PostgreSQL; credentials via Secret reference
+  mode: cnpg
+  cnpg:
+    instances: 1          # 3 for multi-node profiles
+    imageName: ""         # e.g. ghcr.io/cloudnative-pg/postgresql:16.x@sha256:... ; empty = operator default
+    storage:
+      size: 10Gi
+      storageClass: ""
+    backup:
+      enabled: false
+      destinationPath: ""   # s3://bucket/path
+      credentialsSecretRef: ""
+  external:
+    host: ""
+    port: 5432
+    database: devplat
+    sslmode: verify-full
+    credentialsSecretRef: ""
+
+artifacts:
+  # external: any S3-compatible endpoint (cloud S3, an operator-run store). inCluster deployments of a store are
+  # installed separately (24-... section 3); MinIO community edition is archived (2026-04) - see 24-... section 3.
+  endpoint: ""
+  region: us-east-1
+  bucketPrefix: devplat-
+  credentialsSecretRef: devplat-artifacts
+
+ingress:
+  enabled: false
+  className: ""
+  host: ""
+  tlsSecretName: ""
+
+networkPolicy:
+  enabled: true
+
+serviceAccount:
+  annotations: {}         # e.g. cloud workload identity bindings per component (25-... section 6)

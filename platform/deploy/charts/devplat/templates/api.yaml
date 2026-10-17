@@ -1,0 +1,32 @@
+{{- /*
+devplat-api: REST API + dashboard backend. Operator facts and approvals are accepted only from an OIDC-authenticated
+subject in api.oidc.allowedSubjects (closes v1 R5 N-06). It never writes task state directly: it writes operator
+facts (DB role devplat_api) that the controller consumes.
+*/}}
+{{- $env := printf `- name: DEVPLAT_OIDC_ISSUER_URL
+  value: %q
+- name: DEVPLAT_OIDC_CLIENT_ID
+  value: %q
+- name: DEVPLAT_OIDC_ALLOWED_SUBJECTS
+  value: %q
+- name: DEVPLAT_DB_HOST
+  value: %q
+- name: DEVPLAT_DB_NAME
+  value: "devplat"
+- name: DEVPLAT_DB_USER
+  valueFrom:
+    secretKeyRef:
+      name: %s
+      key: username
+- name: DEVPLAT_DB_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: %s
+      key: password`
+  .Values.api.oidc.issuerUrl
+  .Values.api.oidc.clientId
+  (join "," .Values.api.oidc.allowedSubjects)
+  (include "devplat.pgHost" .)
+  (include "devplat.pgSecret" (dict "root" . "role" "api"))
+  (include "devplat.pgSecret" (dict "root" . "role" "api")) -}}
+{{ include "devplat.workload" (dict "root" . "name" "devplat-api" "key" "api" "comp" .Values.api "port" (int .Values.api.service.port) "env" $env "automount" false "volumes" "" "volumeMounts" "") }}

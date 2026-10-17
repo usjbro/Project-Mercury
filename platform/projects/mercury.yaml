@@ -1,0 +1,400 @@
+# devplat project configuration — Project MERCURY
+# Every value is taken from the repository (docs/mercury/** on branch claude/devplatform-k8s, 2026-10-17).
+# The source of each value is in the trailing comment or in docs/mercury/development-orchestration/26-project-configuration.md §2.
+# Nothing here is a secret value. Unknown values are {unresolved: <question>}; designed-but-absent commands are {planned, ref}.
+# Mercury PRODUCTION architecture is not described here: this file only tells devplat how to BUILD Mercury.
+schema: devplat.project.v1
+schema_minor: 0
+project_id: mercury
+display_name: Project MERCURY
+# onboarding, not active: the TDD is not approved (DOD-01), no package.json/source exists, the ruleset (DOD-02)
+# and dev bot (DOD-03/DOD-13) are not in place. Only planning/design/discovery tasks may run (26-… §1.4).
+status: onboarding
+config_version: 1
+verified:
+  date: "2026-10-17"
+  by: devplat drafting agent (Amendment 001), checked by platform/tools/validate_projects.py
+  sources:
+    - docs/mercury/TDD.md (v1.0-rc1)
+    - docs/mercury/architecture/components.md §1, §2
+    - docs/mercury/testing/verification-plan.md §2.1, §2.3, §2.5, §3
+    - docs/mercury/operations/macos-service.md §1, §15.1
+    - docs/mercury/integrations/github.md §9
+    - docs/mercury/architecture/decisions/ADR-001, ADR-005, ADR-008, ADR-014
+    - docs/mercury/development-orchestration/06-…, 08-…, 09-…, 12-…; tools/devorch/gen_agents.py
+    - git remote (origin = https://github.com/usjbro/Project-Mercury); repository tree (no package.json, no .github/)
+
+source_repository:
+  url: https://github.com/usjbro/Project-Mercury        # git remote; docs call it usjbro/project-mercury (case only)
+  default_branch: main                                  # 14-… §1 (main has 1 commit)
+  protected_branches: [main]                            # DOD-02 target; not yet applied
+  visibility: public                                    # TDD §4; macos-service §15.1 ("public repo")
+  owner_kind: user                                      # personal account -> G-DETECT only (08-… §5)
+
+issue_tracker:
+  unresolved: "No Linear project or issue for Mercury exists (discovery 2026-10-17). Backlog lives in planning/issue-breakdown.md (82 MERC issues). Which Linear team/project should hold it, and when (DOD-05)?"
+  owner: operator
+  blocks: Linear read reconciliation and any Linear write; the DAG comes from data/dag.json until then
+
+documentation:
+  requirements: [docs/mercury/planning/traceability.md, docs/mercury/security/threat-model.md]
+  design: [docs/mercury/TDD.md, docs/mercury/architecture/components.md, docs/mercury/architecture/state-machine.md, docs/mercury/protocols/messages.md]
+  adr: [docs/mercury/architecture/decisions/]
+  runbooks: [docs/mercury/operations/recovery.md, docs/mercury/operations/macos-service.md, docs/mercury/development-orchestration/13-runbook.md]
+  test_plan: [docs/mercury/testing/verification-plan.md]
+  design_approval:
+    state: awaiting_operator                            # TDD §32.3 "not approved for implementation"; DOD-01
+    ref: docs/mercury/TDD.md §32.3; development-orchestration/12-amendments.md DOD-01
+
+architecture_constraints:
+  - docs/mercury/architecture/components.md §2 (layering rules D1–D7)
+  - docs/mercury/TDD.md §6 (architecture principles 1–10)
+  - docs/mercury/architecture/decisions/ADR-001…ADR-020 (Accepted)
+  - docs/mercury/development-orchestration/01-development-architecture.md §1 (separation rules S1–S4)
+coding_standards:
+  - docs/mercury/architecture/components.md §1 (TypeScript strict, noUncheckedIndexedAccess, ES modules; runtime deps fixed)
+  - docs/mercury/architecture/decisions/ADR-001 item 3 (minimal runtime deps; npm ci --ignore-scripts)
+  - docs/mercury/development-orchestration/06-worktree-and-branching.md §3 (Conventional Commits + Devorch trailers)
+
+languages:
+  - {name: TypeScript, version: "5.x (strict)", ref: components.md §1}
+  - {name: Node.js, version: "24 LTS (exact patch pinned; not yet chosen)", ref: components.md §1; ADR-001}
+  - {name: SQL (SQLite dialect), version: "node:sqlite (RC in Node 24); fallback better-sqlite3", ref: components.md §1; ADR-002}
+
+toolchains:
+  - name: node
+    version: {unresolved: "Exact Node 24 LTS patch to pin (ADR-001 item 1 requires an exact pin; none chosen yet).", owner: devops}
+    role: runtime and test runner host
+    ref: ADR-001
+  - {name: typescript, version: "5.x", role: typecheck (tsc --noEmit), ref: components.md §1; macos-service §15.1}
+  - {name: ajv, version: "8", role: runtime dependency (schema validation), ref: components.md §1}
+  - {name: smol-toml, version: {unresolved: "Pinned version not chosen yet (components.md §1 'pinned')."}, role: runtime dependency (config), ref: components.md §1}
+  - {name: "@anthropic-ai/claude-agent-sdk", version: {unresolved: "Exact pin not chosen yet (components.md §1 'exact pin')."}, role: runtime dependency, ref: components.md §1; ADR-004}
+  - name: test stack
+    version: {unresolved: "components.md §1 lists 'node:test or Vitest' — which one?", owner: lead-architect}
+    role: unit/property tests (with fast-check, dependency-cruiser)
+    ref: components.md §1
+  - {name: codex-cli, version: "0.162.x (pinned at Phase 0)", role: production dependency; used only via FakeCodex in Kubernetes lanes, ref: TDD §4; ADR-005}
+
+container_images:
+  - name: mercury-toolchain
+    purpose: toolchain
+    image: {unresolved: "No image built yet. Needs the pinned Node 24 patch; built rootless in proj-mercury-build and pinned by digest (doc 22).", owner: devops, blocks: every Kubernetes test level}
+    platforms: {unresolved: "amd64/arm64 support recorded only after a verified build."}
+  - name: mercury-agent
+    purpose: agent
+    image: {unresolved: "Agent runner image (Claude Code headless + toolchain) not built; digest recorded after build and scan.", owner: devops}
+    platforms: {unresolved: "Recorded per verified build."}
+
+# Mercury test tiers T0–T5 (verification-plan §2.1). No package.json exists, so no command can run yet:
+# every command is `planned` with its design reference, or unresolved.
+test_levels:
+  - id: T0
+    name: In-process (unit, state-machine/property)
+    environment: k8s-test
+    covers: [L1, L2]
+    commands:
+      build: {planned: "npm ci --ignore-scripts && tsc build", ref: "ADR-001 item 3; macos-service §15.1 build"}
+      lint: {planned: "eslint, prettier, markdownlint, actionlint", ref: "macos-service §15.1 lint"}
+      typecheck: {planned: "tsc --noEmit (strict)", ref: "macos-service §15.1 typecheck"}
+      test: {planned: "test-unit: state machine, admission, credited-time math (FakeClock both modes), redactor, migrations; coverage >= 85 % core/", ref: "macos-service §15.1 test-unit; verification-plan §3 L1/L2"}
+      scan: {planned: "secret scan + ID/pointer/parameter lint", ref: "issue-breakdown MERC-030; TC-OPS-009/010"}
+      deployment_validation: {not_applicable: "No deployment at T0."}
+    fake_results_verify: false
+    ref: verification-plan §2.1 T0
+  - id: T1
+    name: Local integration (SQLite both drivers, git, child processes; fakes for agents/broker/GitHub/Linear)
+    environment: k8s-test
+    covers: [L3, L4, L9-crash, L11]
+    commands:
+      build: {planned: "npm ci --ignore-scripts", ref: "ADR-001 item 3"}
+      lint: {not_applicable: "Covered at T0."}
+      test: {planned: "test-integration and test-contracts (Linux part)", ref: "macos-service §15.1 test-integration, test-contracts"}
+      scan: {not_applicable: "Covered at T0."}
+      deployment_validation: {not_applicable: "No deployment at T1."}
+    fake_results_verify: false
+    ref: "verification-plan §2.1 T1 ('CI, macOS runner preferred'); L4 exit requires the macOS runner — see test level T1-mac"
+  - id: T1-mac
+    name: macOS-specific CI jobs (wrappers, launchd plist lint, same-uid spawn, fullfsync pragma, temporary keychain)
+    environment: gh-hosted-macos
+    covers: [L4-macos, test-wrappers, test-macos]
+    commands:
+      build: {planned: "build agent-exec/agent-ctl/helpers", ref: "macos-service §15.1 test-wrappers", runner: macos-15}
+      lint: {planned: "plutil -lint; visudo -cf of the rendered drop-in", ref: "macos-service §15.1 test-macos, test-wrappers", runner: macos-15}
+      test: {planned: "grammar unit tests and argv fuzzing; same-uid spawn/kill/adoption with a fake agent; caffeinate -w; socket checks", ref: "macos-service §15.1", runner: macos-15}
+      scan: {not_applicable: "Covered at T0."}
+      deployment_validation: {not_applicable: "Not a deployment."}
+    fake_results_verify: false
+    ref: "macos-service §15.1 (GitHub-hosted runners only, no self-hosted runner); ASM-F-07"
+  - id: T2
+    name: E2E simulation (whole daemon + CLI + socket against fakes, FaultProxy, virtual clock)
+    environment: k8s-test
+    covers: [L5, L7, L8, L10]
+    commands:
+      build: {planned: "npm ci --ignore-scripts", ref: "ADR-001 item 3"}
+      lint: {not_applicable: "Covered at T0."}
+      test: {planned: "E2E with fakes, agent failure simulation, network interruption (FaultProxy), duplicate events", ref: "verification-plan §3 L5, L7, L8, L10"}
+      scan: {not_applicable: "Covered at T0."}
+      deployment_validation: {not_applicable: "No deployment at T2."}
+    fake_results_verify: false
+    ref: verification-plan §2.1 T2
+  - id: T3
+    name: Sandbox (real GitHub sandbox repo with production ruleset, Linear sandbox team)
+    environment: k8s-sandbox
+    covers: [L6, L13, L12-partial, L15-partial]
+    commands:
+      build: {planned: "npm ci --ignore-scripts", ref: "ADR-001 item 3"}
+      lint: {not_applicable: "Covered at T0."}
+      test: {planned: "sandbox integration suites behind the test-targets.allow guard", ref: "verification-plan §2.3; TC-OPS-009"}
+      scan: {not_applicable: "Covered at T0."}
+      deployment_validation: {not_applicable: "Not a deployment."}
+    needs_secrets: [mercury-sandbox-bot-key, mercury-sandbox-ops-key, mercury-sandbox-linear-app]
+    fake_results_verify: true
+    ref: "verification-plan §2.3, §2.5 (ready at P0c exit)"
+  - id: T4
+    name: Real Mac (launchd, Keychain, Seatbelt, _mercuryagent, sudoers wrappers, presence/power helpers, sleep)
+    environment: macos-lane
+    covers: [L0, L9-mac, L12, L15]
+    commands:
+      build: {not_applicable: "Operator-run procedures; the platform schedules mac_validation tasks and imports evidence."}
+      lint: {not_applicable: "Operator-run."}
+      test: {planned: "Mac procedures prepared as scripts by agents, executed by the operator", ref: "verification-plan §2.1 T4; macos-service §16; recovery.md §6"}
+      scan: {not_applicable: "Operator-run."}
+      deployment_validation: {planned: "LaunchAgent install/upgrade/rollback demos (operator)", ref: "macos-service §13; TDD §24"}
+    fake_results_verify: true
+    ref: verification-plan §2.1 T4 ("Operator's Mac only")
+  - id: T4v
+    name: macOS guest VM power-loss cycles
+    environment: macos-vm-lane
+    covers: [TC-REC-020]
+    commands:
+      build: {not_applicable: "Operator-run rig."}
+      lint: {not_applicable: "Operator-run rig."}
+      test: {planned: "50 forced VM stops; integrity_check ok; no DB reference to a missing git object", ref: "verification-plan §2.1 T4v; macos-service §15.3"}
+      scan: {not_applicable: "Operator-run rig."}
+      deployment_validation: {not_applicable: "Not a deployment."}
+    fake_results_verify: true
+    ref: verification-plan §2.1 T4v (never hosted CI, never the operator's own Mac)
+  - id: T5
+    name: Pilot on network_monitor (production use, not a platform test level)
+    environment: macos-lane
+    covers: [L17]
+    commands:
+      build: {not_applicable: "Production pilot; outside devplat."}
+      lint: {not_applicable: "Production pilot."}
+      test: {not_applicable: "TC-PIL criteria are recorded by the operator as facts."}
+      scan: {not_applicable: "Production pilot."}
+      deployment_validation: {not_applicable: "Production deployment is the operator's act (TDD §24); devplat never deploys Mercury."}
+    fake_results_verify: true
+    ref: verification-plan §2.1 T5, §7.3
+
+required_tooling:
+  - {name: git, ref: "components.md §9 (hardened git); devorch"}
+  - {name: node + npm, version: "24 LTS", ref: ADR-001}
+  - {name: actionlint, ref: "macos-service §15.1 lint; 08-… §3 (CI/workflows)"}
+  - {name: shellcheck, ref: "08-… §3 (CI / workflows / scripts)"}
+  - name: secret scanner
+    version: {unresolved: "SEC-502 requires a pre-push secret scan; no tool is named in the design. Which scanner (and version) for development CI?", owner: security}
+    ref: threat-model SEC-502; MERC-030
+
+environments:
+  - id: k8s-exec
+    kind: kubernetes_exec
+    purpose: agent Jobs (all 12 roles + planner), no project secrets
+    task_kinds: [planning, design, implementation, test, review, integration]
+    ref: "doc 16; namespace proj-mercury-exec"
+  - id: k8s-build
+    kind: kubernetes_build
+    purpose: rootless image builds of mercury-toolchain / mercury-agent
+    task_kinds: [build]
+    ref: "doc 22; namespace proj-mercury-build"
+  - id: k8s-test
+    kind: kubernetes_ephemeral_test
+    purpose: T0–T2 in ephemeral proj-mercury-t-<runid> namespaces; no credentials; egress none
+    task_kinds: [test]
+    ref: "verification-plan §2.1 T0–T2; doc 22"
+  - id: k8s-sandbox
+    kind: kubernetes_ephemeral_test
+    purpose: T3 sandbox suites; only namespace that mounts sandbox App/Linear credentials (names only here)
+    task_kinds: [test]
+    readiness: "P0c exit recorded as operator fact (verification-plan §2.5 T3); sandbox repo and team created by the operator (OD-13)"
+    ref: verification-plan §2.3
+  - id: gh-hosted-macos
+    kind: github_hosted_ci
+    purpose: macOS-only CI jobs on GitHub-hosted macos-15 runners (repository CI, not devplat Jobs)
+    readiness: "MERC-030 CI live; ASM-F-07 verified (P0d CI spike)"
+    ref: "macos-service §15.1; RA-D2"
+  - id: macos-lane
+    kind: external_lane
+    lane: macos
+    purpose: T4 real-Mac validation, Phase 0 checks, [ROOT — operator consent] steps
+    host: "operator's Mac (MacBook Air M2, 16 GB; 09-… planning constraint)"
+    task_kinds: [mac_validation, operator_action]
+    requirements: [launchd, login Keychain, Seatbelt, _mercuryagent uid, sudoers wrappers, presence and power helpers]
+    readiness: "P0a/P0b results recorded (verification-plan §2.5 T4); G-S1 before any agent run on the Mac (threat-model §8.10)"
+    ref: verification-plan §2.1 T4
+  - id: macos-vm-lane
+    kind: external_lane
+    lane: macos-vm
+    purpose: T4v power-loss rig
+    host: {unresolved: "Which operator-controlled Apple Silicon host runs the tart/UTM guest VM (P0-047)?", owner: operator}
+    task_kinds: [mac_validation]
+    readiness: "P0-047 passed; rig per macos-service §15.3"
+    ref: verification-plan §2.1 T4v
+
+resources:
+  default_job: {unresolved: "Per-role requests/limits come from platform/agents/execution-profiles.yaml; no Mercury-specific measurement exists yet. Override needed?", owner: devops}
+  namespace_quota: {unresolved: "ResourceQuota for proj-mercury-* not sized; needs the cluster size chosen in DOD-15 and the first 10 measured tasks (09-… §4).", owner: operator}
+  max_concurrent:
+    jobs: 5                        # 3 implementation + 2 review
+    implementation: 3              # 09-… §2 (scenario B; no gain beyond 3)
+    review: 2                      # 09-… §2
+    external_lane: 1               # 09-… §2 (one operator, one Mac)
+    open_prs_awaiting_human: 4     # 09-… §2 (RISK-22)
+    ref: development-orchestration/09-resources-and-costs.md §2
+  priority_weight: {unresolved: "Fair-share weight vs. other projects (doc 17). Only Mercury is real today."}
+
+network:
+  model_providers: [anthropic]     # development agents are Claude Code; Codex runs only as FakeCodex here (contract recording is a Mac-lane suite, verification-plan §2.4)
+  classes_allowed: [none, model-only, deps]   # per-role class comes from execution-profiles.yaml, bounded by this list
+  registries_allowlist:
+    unresolved: "The design requires a registry allowlist (ADR-005 item 7, FR-123) but names no host. Confirm registry.npmjs.org as the only host for development installs. Until resolved the deps class is denied."
+    owner: security
+    blocks: dependency installation in Jobs (npm ci)
+  extra_egress: []
+
+identities:
+  github_app:
+    name: devplat-github-app-mercury
+    purpose: development bot (dev/* pushes, draft PRs) — NOT mercury-bot
+    holder: devplat-gitbroker
+    scope: "contents:write limited to dev/*, pull_requests:write (draft), no administration/workflows, not a CODEOWNER, no bypass"
+    provisioning: awaiting_operator
+    ref: 12-amendments.md DOD-03 (a) / DOD-13; 01-… S1–S2
+  secrets:
+    - {name: devplat-anthropic-key-mercury, purpose: model API key for Mercury agent Jobs, holder: devplat-model-gateway, scope: "dedicated key with spend limit; injected by the gateway", provisioning: awaiting_operator, ref: "DOD-08; ADR-008 pattern (dedicated key)"}
+    - {name: mercury-sandbox-bot-key, purpose: sandbox mercury-bot App private key for T3, holder: test-namespace, scope: "sandbox repo only; separate installation id", provisioning: not_created, ref: "verification-plan §2.3; OD-13"}
+    - {name: mercury-sandbox-ops-key, purpose: sandbox mercury-ops App private key for T3, holder: test-namespace, scope: sandbox only, provisioning: not_created, ref: verification-plan §2.3}
+    - {name: mercury-sandbox-linear-app, purpose: Linear app (actor=app) credentials for sandbox team MSB, holder: test-namespace, scope: "team MSB only", provisioning: not_created, ref: verification-plan §2.3}
+
+security:
+  # Development-time restrictions for agent tasks on this repository (devorch contracts, guard hook, CLAUDE.md).
+  restricted_paths:
+    - "docs/**"                      # design changes only by operator-approved amendment (CLAUDE.md; 08-… §2 D7–D8 note)
+    - ".github/**"                   # CI, workflows, CODEOWNERS: restricted until the operator decides otherwise (open question Q-M3, 26-… §2.3)
+    - ".claude/**"                   # Claude Code config (guard hook PATH_DENY; SEC-310)
+    - "CLAUDE.md"
+    - ".mcp.json"
+    - ".codex/**"
+    - ".agents/**"
+    - "AGENTS*.md"
+    - "tools/devorch/**"             # development control plane
+    - "platform/**"                  # devplat itself (ADR-030): never changed by a Mercury task
+    - ".git/**"
+  security_sensitive_paths:
+    - "src/adapters/process/**"      # AgentExecSupervisor (Security Engineer scope)
+    - "src/adapters/git/**"
+    - "src/adapters/keychain/**"
+    - "src/adapters/presence/**"
+    - "src/adapters/github/**"       # endpoint allowlist SEC-102, D6
+    - "src/core/policies/redaction*"
+    - "src/app/decision-recorder.ts" # sole writer of authority records (INV-18)
+    - "src/core/guards.ts"
+    - "src/adapters/sqlite/migrations/**"   # triggers enforce INV-nn
+    - "packaging/agent/**"           # agent-exec/agent-ctl, Seatbelt profiles, sudoers
+    - "package.json"                 # supply chain (06-… §4)
+    - "package-lock.json"
+  escalate_paths:
+    - "src/ports/**"                 # frozen interfaces (06-… §4; RA-D3): Lead Architect only, interface_frozen record
+  runtime_class: gvisor              # topology B (DOD-11); repository-derived code is untrusted
+  pod_security: restricted
+  untrusted_inputs: [agent outputs, repository content, Linear text, PR comments and reviews, CI logs, dependency source, fixtures]   # 08-… §6
+
+agent_permissions:
+  roles:
+    planner: {enabled: true, writes: false, path_scopes: [], task_kinds: [planning], ref: "brief: Principal Orchestrator reasoning as planner Jobs; proposals only"}
+    mdev-lead-architect: {enabled: true, writes: true, path_scopes: ["src/ports/**"], task_kinds: [design, design_review], ref: "gen_agents.py 01 (ADR proposals under docs/** stay outside agent scope: restricted; see 26-… §2.3 Q-M3)"}
+    mdev-tpm: {enabled: true, writes: false, path_scopes: [], task_kinds: [planning], ref: "gen_agents.py 02 (reports go to evidence only)"}
+    mdev-backend-engineer: {enabled: true, writes: true, path_scopes: ["src/core/**", "src/app/**", "src/bin/**", "src/adapters/clock/**", "src/adapters/control/**", "src/adapters/notify/**", "src/adapters/fs/**", "test/**"], task_kinds: [implementation], ref: gen_agents.py 03}
+    mdev-database-engineer: {enabled: true, writes: true, path_scopes: ["src/adapters/sqlite/**", "test/**"], task_kinds: [implementation], ref: gen_agents.py 04}
+    mdev-ai-integration-engineer: {enabled: true, writes: true, path_scopes: ["src/adapters/claude/**", "src/adapters/codex/**", "src/schemas/**", "scripts/gen-wire-schemas.ts", "test/fakes/agents/**", "test/**"], task_kinds: [implementation], ref: gen_agents.py 05}
+    mdev-platform-integration-engineer: {enabled: true, writes: true, path_scopes: ["src/adapters/github/**", "src/adapters/linear/**", "src/app/inbox-processor.ts", "src/app/outbox-worker.ts", "test/mocks/**", "test/**"], task_kinds: [implementation], ref: gen_agents.py 06}
+    mdev-security-engineer: {enabled: true, writes: true, path_scopes: ["src/adapters/process/**", "src/adapters/git/**", "src/adapters/keychain/**", "src/adapters/presence/**", "packaging/agent/**", "src/core/policies/redaction*", "test/**"], task_kinds: [implementation, security_review], ref: gen_agents.py 07}
+    mdev-devops-engineer: {enabled: true, writes: true, path_scopes: ["packaging/**", "package.json", "package-lock.json", "scripts/**"], task_kinds: [implementation, build], ref: "gen_agents.py 08 (excl. packaging/agent/**, scripts/gen-wire-schemas.ts — enforced by contracts). .github/workflows/** is in the v1 scope but restricted here until Q-M3 is answered"}
+    mdev-test-automation-engineer: {enabled: true, writes: true, path_scopes: ["test/**"], task_kinds: [test], ref: gen_agents.py 09}
+    mdev-reliability-engineer: {enabled: true, writes: true, path_scopes: ["test/recovery/**", "test/fault/**"], task_kinds: [reliability, reliability_review, mac_validation], ref: gen_agents.py 10}
+    mdev-code-reviewer: {enabled: true, writes: false, path_scopes: [], task_kinds: [code_review], ref: gen_agents.py 11}
+    mdev-integration-release-engineer: {enabled: true, writes: true, path_scopes: ["CHANGELOG.md"], task_kinds: [integration, release], ref: "gen_agents.py 12 (integration branches are controller-created, never pushed)"}
+
+review_gates:
+  gates:
+    G1: {required: true, verifier: devplat-controller (design refs on an approved commit + READY), ref: 08-… §1}
+    G2: {required: true, verifier: devplat-controller re-run in a fresh Job at the recorded head, ref: 08-… §1}
+    G3: {required: true, verifier: mdev-code-reviewer subtask bound to the tested head, ref: 08-… §1}
+    G4: {required: true, verifier: mdev-security-engineer fresh instance, depth: "every full-lifecycle task (TDD DoD D6); full depth for security_sensitive", ref: 08-… §1}
+    G5: {required: true, verifier: mdev-integration-release-engineer subtask; controller re-check, ref: 08-… §1}
+    G6: {required: true, verifier: devplat-gitbroker push + draft PR + required CI green at the tested head, ref: 08-… §1}
+    G7: {required: true, verifier: "GitHub fact: merged_by = repository owner, approving review on the G6 head", ref: 08-… §1}
+  required_reviewers:
+    default: [mdev-code-reviewer, mdev-security-engineer]
+    security_sensitive: [mdev-code-reviewer, mdev-security-engineer]
+    interface_changes: [mdev-code-reviewer, mdev-security-engineer, mdev-lead-architect]
+    root_artefacts: [operator]        # DOD-06
+  human_approvers: [usjbro]           # sole CODEOWNER (ADR-008; github.md §9.4 O2)
+  human_approver_rule: repository_owner
+  external_gates:
+    - {id: G-S1, satisfied_by: operator_fact, ref: "threat-model §8.10; 08-… §2"}
+    - {id: G-S2, satisfied_by: operator_fact, ref: "threat-model §8.10"}
+    - {id: G-S3, satisfied_by: operator_fact, ref: "threat-model §8.10"}
+    - {id: G-S4, satisfied_by: operator_fact, ref: "threat-model §8.10"}
+    - {id: G-S5, satisfied_by: operator_fact, ref: "threat-model §8.10 (includes G-ORG)"}
+    - {id: DOD-01, satisfied_by: operator_fact, ref: "12-amendments.md (TDD approved as design baseline)"}
+    - {id: DOD-02, satisfied_by: operator_fact, ref: "12-amendments.md (main ruleset)"}
+
+github_policy:
+  pr_mode: draft
+  branch_prefix: dev/
+  branch_pattern: "^dev/(merc-[0-9a-z]+|dt-[0-9]{4})-[a-z0-9-]{1,40}$"     # 06-… §2 (never collides with production mercury/*)
+  base_branch: main
+  merge_by: human
+  agent_may: [push_branch_prefix, open_draft_pr, comment]
+  ruleset:
+    spec_ref: "12-amendments.md DOD-02 (development); production target ruleset: integrations/github.md §9.1"
+    state: awaiting_operator
+    fact: DOD-02
+  codeowners:
+    spec_ref: "github.md §9.4 O2: .github/CODEOWNERS = '* @usjbro' (file does not exist yet; MERC-030)"
+    state: awaiting_operator
+  required_ci_contexts: {unresolved: "No CI exists yet (MERC-030). Which job names become required checks (macos-service §15.1 lists lint, typecheck, test-unit, test-integration, test-contracts, test-wrappers, test-macos, build, supply-chain, codeql)?", owner: operator}
+  commit_trailers: [Devorch-Task, Devorch-Contract, Merc-Issue, Devorch-Agent]   # 06-… §3
+
+artifacts:
+  bucket: devplat-proj-mercury
+  retention_days:
+    evidence: {unresolved: "v1 keeps evidence permanently on devorch/state. Keep evidence for the project's life, or a number of days (>= 365 recommended)?", owner: operator}
+    logs: {unresolved: "Retention for Job logs (no development requirement exists; production values in macos-service §2.7 do not apply)."}
+    build_cache: {unresolved: "Retention for build caches."}
+
+budgets:
+  cost_usd_per_day: {unresolved: "Daily development cost cap is the operator's decision (DOD-08).", owner: operator, blocks: "status active"}
+  tokens_per_day: {unresolved: "Token cap per day (optional if a cost cap is set)."}
+  stop_dispatch_at_fraction: 0.8      # 09-… §5 (dispatch stops at 80 % of the daily cap)
+  max_wall_minutes_per_job: {unresolved: "Project ceiling for contract budget.max_wall_minutes (contracts set it per task)."}
+  ref: development-orchestration/09-resources-and-costs.md §5; DOD-08
+
+deployment_targets:
+  - id: mercury-production-mac
+    purpose: deployment_validation
+    production: true
+    automated: false
+    where: operator's Mac (LaunchAgent com.usjbro.mercury)
+    approval: "Operator only, per TDD §24 / macos-service §13; [ROOT — operator consent] for wrapper steps. devplat never deploys Mercury."
+    ref: TDD §18, §24
+
+execution_target:
+  cluster_ref: default
+  namespace_prefix: proj-mercury
+
+notes:
+  - "status stays onboarding until DOD-01, DOD-02, DOD-13 (dev bot), DOD-08 (budget) are recorded and the toolchain image digest exists; then every unresolved above must be answered before active."
+  - "Self-hosting (11-…) and production MERCURY are out of scope of this file: production runs on the operator's Mac per the TDD."

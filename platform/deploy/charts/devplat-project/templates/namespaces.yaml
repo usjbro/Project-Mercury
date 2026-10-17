@@ -1,0 +1,33 @@
+{{- include "proj.assert" . }}
+{{- /* Persistent project namespaces. Ephemeral proj-<P>-t-<runid> namespaces are created by devplat-controller
+from the profile in test-profile.yaml, never by this chart. */}}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ include "proj.ns" (dict "Values" .Values "role" "exec") }}
+  labels:
+    {{- include "proj.labels" . | nindent 4 }}
+    devplat.io/ns-role: exec
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
+{{- if .Values.build.enabled }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ include "proj.ns" (dict "Values" .Values "role" "build") }}
+  labels:
+    {{- include "proj.labels" . | nindent 4 }}
+    devplat.io/ns-role: build
+    pod-security.kubernetes.io/enforce: {{ .Values.build.podSecurityLevel }}
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
+  {{- if eq .Values.build.podSecurityLevel "privileged" }}
+  annotations:
+    devplat.io/assurance: reduced
+    devplat.io/reason: "Unconfined seccomp/AppArmor accepted for rootless BuildKit (build.acceptUnconfined)"
+  {{- end }}
+{{- end }}

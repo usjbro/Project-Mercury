@@ -1,0 +1,82 @@
+{{- /* Default deny in every project namespace; explicit egress only. No ingress at all. */}}
+{{- $exec := include "proj.ns" (dict "Values" .Values "role" "exec") }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: {{ $exec }}
+  labels:
+    {{- include "proj.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agent-egress
+  namespace: {{ $exec }}
+  labels:
+    {{- include "proj.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: ["Egress"]
+  egress:
+    {{- include "proj.baseEgress" . | nindent 4 }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.platformNamespace }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: devplat-model-gateway
+      ports:
+        - {protocol: TCP, port: 8080}
+{{- if .Values.registryProxy.enabled }}
+---
+# network_class=deps only: pods labelled devplat.io/network-class=deps (set by the controller from the
+# execution profile) may also reach the package-registry proxy.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agent-deps-egress
+  namespace: {{ $exec }}
+  labels:
+    {{- include "proj.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      devplat.io/network-class: deps
+  policyTypes: ["Egress"]
+  egress:
+    {{- include "proj.registryEgress" . | nindent 4 }}
+{{- end }}
+{{- if .Values.build.enabled }}
+{{- $build := include "proj.ns" (dict "Values" .Values "role" "build") }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: {{ $build }}
+  labels:
+    {{- include "proj.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+---
+# Builds: source bundle from gitbroker, outputs to the artifact store, base images and packages only via the proxy.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: build-egress
+  namespace: {{ $build }}
+  labels:
+    {{- include "proj.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: ["Egress"]
+  egress:
+    {{- include "proj.baseEgress" . | nindent 4 }}
+    {{- include "proj.registryEgress" . | nindent 4 }}
+{{- end }}

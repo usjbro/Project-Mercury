@@ -1,0 +1,222 @@
+# devplat agent execution profiles — one per role (12 mdev-* specialists + planner).
+# Schema: platform/schemas/execution-profiles.schema.json
+# Spec:   docs/mercury/development-orchestration/16-agent-execution-and-job-lifecycle.md §4, §9
+#         docs/mercury/development-orchestration/17-multi-project-scheduling.md §3
+#
+# Role definitions stay in .claude/agents/mdev-*.md (byte-identical); everything Kubernetes-specific
+# lives here. Resource figures are PLANNING VALUES, not measurements: no agent Job has run on any
+# cluster. Re-fit them from measured usage (17-... §10) before raising concurrency.
+# Kinds mirror devorch KIND_AGENT (tools/devorch/devorch.py) and 03-agents.md §1; `plan_proposal` is
+# a new kind proposed for planner Jobs (needs a contract schema change, 16-... §10).
+schema: devplat.execution_profiles.v1
+status: Documented only
+description: >-
+  Default execution profiles. A project configuration may lower (never raise) concurrency, wall time or
+  network class per role; raising any value is an operator-approved change to this file.
+defaults:
+  setup_grace_seconds: 600          # fetch (init) + upload (runner) on top of the wall budget
+  ttl_seconds_after_finished: 86400 # backstop; the controller deletes Jobs after collection
+  termination_grace_seconds: 60     # runner uploads partial logs on SIGTERM
+  priority_class: devplat-agent     # below devplat-platform; preemptionPolicy Never
+profiles:
+  - role: mdev-lead-architect
+    agent_definition: .claude/agents/mdev-lead-architect.md
+    kinds: [design, design_review]
+    llm: true
+    resources:
+      requests: {cpu: 500m, memory: 1Gi, ephemeral-storage: 2Gi}
+      limits:   {cpu: "1", memory: 2Gi, ephemeral-storage: 4Gi}
+    max_wall_minutes: 60
+    max_turns: 60
+    network_class: deps              # typechecks src/ports/** interfaces
+    runtime_class: gvisor
+    workspace_size: 4Gi
+    writes_allowed: true             # design kind writes src/ports/** and proposed ADRs; design_review is read-only by contract rule
+    max_concurrent_per_project: 1
+
+  - role: mdev-tpm
+    agent_definition: .claude/agents/mdev-tpm.md
+    kinds: [planning]
+    llm: true
+    extra_disallowed_tools: [Edit, NotebookEdit]   # planning is a read-only kind; Write only into /out
+    resources:
+      requests: {cpu: 250m, memory: 512Mi, ephemeral-storage: 1Gi}
+      limits:   {cpu: 500m, memory: 1Gi, ephemeral-storage: 2Gi}
+    max_wall_minutes: 20
+    max_turns: 30
+    network_class: model-only        # Linear reads go through devplat-linear-adapter, not from the pod
+    runtime_class: gvisor
+    workspace_size: 2Gi
+    writes_allowed: false
+    max_concurrent_per_project: 1
+
+  - role: mdev-backend-engineer
+    agent_definition: .claude/agents/mdev-backend-engineer.md
+    kinds: [implementation]
+    llm: true
+    resources:
+      requests: {cpu: "1", memory: 2Gi, ephemeral-storage: 4Gi}
+      limits:   {cpu: "2", memory: 4Gi, ephemeral-storage: 8Gi}
+    max_wall_minutes: 60
+    max_turns: 80
+    network_class: deps
+    runtime_class: gvisor
+    workspace_size: 8Gi
+    writes_allowed: true
+    max_concurrent_per_project: 2
+
+  - role: mdev-database-engineer
+    agent_definition: .claude/agents/mdev-database-engineer.md
+    kinds: [implementation]
+    llm: true
+    resources:
+      requests: {cpu: "1", memory: 2Gi, ephemeral-storage: 4Gi}
+      limits:   {cpu: "2", memory: 4Gi, ephemeral-storage: 8Gi}
+    max_wall_minutes: 60
+    max_turns: 80
+    network_class: deps
+    runtime_class: gvisor
+    workspace_size: 8Gi
+    writes_allowed: true
+    max_concurrent_per_project: 1    # one migration sequence owner at a time
+
+  - role: mdev-ai-integration-engineer
+    agent_definition: .claude/agents/mdev-ai-integration-engineer.md
+    kinds: [implementation]
+    llm: true
+    resources:
+      requests: {cpu: "1", memory: 2Gi, ephemeral-storage: 4Gi}
+      limits:   {cpu: "2", memory: 4Gi, ephemeral-storage: 8Gi}
+    max_wall_minutes: 60
+    max_turns: 80
+    network_class: deps              # fakes only; never a real agent run (definition rule)
+    runtime_class: gvisor
+    workspace_size: 8Gi
+    writes_allowed: true
+    max_concurrent_per_project: 1
+
+  - role: mdev-platform-integration-engineer
+    agent_definition: .claude/agents/mdev-platform-integration-engineer.md
+    kinds: [implementation]
+    llm: true
+    resources:
+      requests: {cpu: "1", memory: 2Gi, ephemeral-storage: 4Gi}
+      limits:   {cpu: "2", memory: 4Gi, ephemeral-storage: 8Gi}
+    max_wall_minutes: 60
+    max_turns: 80
+    network_class: deps              # mocks only; no GitHub/Linear egress from the pod
+    runtime_class: gvisor
+    workspace_size: 8Gi
+    writes_allowed: true
+    max_concurrent_per_project: 1
+
+  - role: mdev-security-engineer
+    agent_definition: .claude/agents/mdev-security-engineer.md
+    kinds: [implementation, security_review]
+    llm: true
+    resources:
+      requests: {cpu: "1", memory: 2Gi, ephemeral-storage: 4Gi}
+      limits:   {cpu: "2", memory: 4Gi, ephemeral-storage: 8Gi}
+    max_wall_minutes: 60
+    max_turns: 80
+    network_class: deps
+    runtime_class: gvisor
+    workspace_size: 8Gi
+    writes_allowed: true             # security_review subtasks are read-only by contract rule
+    max_concurrent_per_project: 2    # G4 runs on every full-lifecycle task; see 17-... §8
+    notes: A security_review Job is always a fresh Job and never shares a workspace with the author's Job (CI-1).
+
+  - role: mdev-devops-engineer
+    agent_definition: .claude/agents/mdev-devops-engineer.md
+    kinds: [implementation, release]
+    llm: true
+    resources:
+      requests: {cpu: "1", memory: 2Gi, ephemeral-storage: 4Gi}
+      limits:   {cpu: "2", memory: 4Gi, ephemeral-storage: 8Gi}
+    max_wall_minutes: 45
+    max_turns: 60
+    network_class: deps
+    runtime_class: gvisor
+    workspace_size: 8Gi
+    writes_allowed: true
+    max_concurrent_per_project: 1    # single owner of package.json and the lockfile
+    notes: Never builds images itself; image builds are BuildKit Jobs in proj-<P>-build (22-...).
+
+  - role: mdev-test-automation-engineer
+    agent_definition: .claude/agents/mdev-test-automation-engineer.md
+    kinds: [test]
+    llm: true
+    resources:
+      requests: {cpu: 1500m, memory: 3Gi, ephemeral-storage: 5Gi}
+      limits:   {cpu: "3", memory: 6Gi, ephemeral-storage: 10Gi}
+    max_wall_minutes: 60
+    max_turns: 80
+    network_class: deps
+    runtime_class: gvisor
+    workspace_size: 10Gi
+    writes_allowed: true
+    max_concurrent_per_project: 1
+
+  - role: mdev-reliability-engineer
+    agent_definition: .claude/agents/mdev-reliability-engineer.md
+    kinds: [reliability, reliability_review]
+    llm: true
+    resources:
+      requests: {cpu: 1500m, memory: 3Gi, ephemeral-storage: 5Gi}
+      limits:   {cpu: "3", memory: 6Gi, ephemeral-storage: 10Gi}
+    max_wall_minutes: 90
+    max_turns: 100
+    network_class: deps
+    runtime_class: gvisor
+    workspace_size: 10Gi
+    writes_allowed: true             # reliability_review is read-only by contract rule
+    max_concurrent_per_project: 1
+
+  - role: mdev-code-reviewer
+    agent_definition: .claude/agents/mdev-code-reviewer.md
+    kinds: [code_review]
+    llm: true
+    resources:
+      requests: {cpu: 500m, memory: 1536Mi, ephemeral-storage: 3Gi}
+      limits:   {cpu: "2", memory: 3Gi, ephemeral-storage: 6Gi}
+    max_wall_minutes: 30
+    max_turns: 50
+    network_class: deps              # re-runs tests, so installs from the lockfile via the proxy
+    runtime_class: gvisor
+    workspace_size: 6Gi
+    writes_allowed: false
+    max_concurrent_per_project: 2
+
+  - role: mdev-integration-release-engineer
+    agent_definition: .claude/agents/mdev-integration-release-engineer.md
+    kinds: [integration, release]
+    llm: true
+    resources:
+      requests: {cpu: "1", memory: 2Gi, ephemeral-storage: 4Gi}
+      limits:   {cpu: "2", memory: 4Gi, ephemeral-storage: 8Gi}
+    max_wall_minutes: 45
+    max_turns: 60
+    network_class: deps
+    runtime_class: gvisor
+    workspace_size: 8Gi
+    writes_allowed: true             # local integration branch only; gitbroker never pushes -int- branches
+    max_concurrent_per_project: 1
+
+  - role: planner
+    agent_definition: .claude/agents/mdev-principal-orchestrator.md
+    kinds: [plan_proposal]
+    llm: true
+    # The orchestrator definition lists Agent(...) and GitHub/Linear MCP tools for the v1 main session.
+    # A planner Job may only read and propose: no nesting, no MCP, no edits to the workspace.
+    extra_disallowed_tools: [Agent, Edit, NotebookEdit, "mcp__github", "mcp__Linear"]
+    resources:
+      requests: {cpu: 250m, memory: 512Mi, ephemeral-storage: 1Gi}
+      limits:   {cpu: 500m, memory: 1Gi, ephemeral-storage: 2Gi}
+    max_wall_minutes: 15
+    max_turns: 30
+    network_class: model-only
+    runtime_class: gvisor
+    workspace_size: 2Gi
+    writes_allowed: false
+    max_concurrent_per_project: 1
+    notes: Outputs are proposals in /out (contracts, triage, escalation drafts); the controller validates them and alone records state.

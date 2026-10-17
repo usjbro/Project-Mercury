@@ -1,0 +1,184 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "devplat chart values",
+  "description": "Values contract for the devplat control-plane chart (proposed, Amendment 001). Unknown keys are rejected so that typos cannot silently disable a control.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["platform", "placement", "image", "controller", "api", "gitbroker", "modelGateway", "postgres", "artifacts", "ingress", "networkPolicy", "serviceAccount"],
+  "definitions": {
+    "digest": {"type": "string", "pattern": "^(sha256:[a-f0-9]{64})?$", "description": "Empty until an image exists; templates fail on empty."},
+    "image": {
+      "type": "object", "additionalProperties": false, "required": ["repository", "digest"],
+      "properties": {
+        "repository": {"type": "string", "pattern": "^[a-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._-]+)+$"},
+        "digest": {"$ref": "#/definitions/digest"}
+      }
+    },
+    "quantity": {"type": ["string", "number"], "pattern": "^[0-9]+(\\.[0-9]+)?(m|Ki|Mi|Gi|Ti|k|M|G|T)?$"},
+    "resources": {
+      "type": "object", "additionalProperties": false, "required": ["requests", "limits"],
+      "properties": {
+        "requests": {"type": "object", "additionalProperties": false, "required": ["cpu", "memory"], "properties": {"cpu": {"$ref": "#/definitions/quantity"}, "memory": {"$ref": "#/definitions/quantity"}}},
+        "limits": {"type": "object", "additionalProperties": false, "required": ["cpu", "memory"], "properties": {"cpu": {"$ref": "#/definitions/quantity"}, "memory": {"$ref": "#/definitions/quantity"}}}
+      }
+    },
+    "secretKeyRef": {
+      "type": "object", "additionalProperties": false, "required": ["name", "key"],
+      "properties": {"name": {"type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", "maxLength": 253}, "key": {"type": "string", "minLength": 1}}
+    },
+    "servicePort": {"type": "object", "additionalProperties": false, "required": ["port"], "properties": {"port": {"type": "integer", "minimum": 1024, "maximum": 65535}}},
+    "replicas": {"type": "integer", "minimum": 1, "maximum": 5}
+  },
+  "properties": {
+    "platform": {
+      "type": "object", "additionalProperties": false, "required": ["clusterRef", "assuranceMode"],
+      "properties": {
+        "clusterRef": {"type": "string", "pattern": "^[a-z0-9]([-a-z0-9]{0,30}[a-z0-9])?$"},
+        "assuranceMode": {"enum": ["standard", "reduced"]}
+      }
+    },
+    "placement": {
+      "type": "object", "additionalProperties": false, "required": ["control"],
+      "properties": {
+        "control": {
+          "type": "object", "additionalProperties": false, "required": ["nodeSelector", "tolerations"],
+          "properties": {"nodeSelector": {"type": "object", "additionalProperties": {"type": "string"}}, "tolerations": {"type": "array", "items": {"type": "object"}}}
+        }
+      }
+    },
+    "image": {
+      "type": "object", "additionalProperties": false, "required": ["pullPolicy", "pullSecrets"],
+      "properties": {"pullPolicy": {"enum": ["IfNotPresent", "Always"]}, "pullSecrets": {"type": "array", "items": {"type": "string"}}}
+    },
+    "controller": {
+      "type": "object", "additionalProperties": false, "required": ["replicas", "image", "leaderElection", "admission", "resources"],
+      "properties": {
+        "replicas": {"$ref": "#/definitions/replicas"},
+        "image": {"$ref": "#/definitions/image"},
+        "leaderElection": {
+          "type": "object", "additionalProperties": false, "required": ["leaseName", "leaseDurationSeconds", "renewDeadlineSeconds", "retryPeriodSeconds"],
+          "properties": {
+            "leaseName": {"type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"},
+            "leaseDurationSeconds": {"type": "integer", "minimum": 5, "maximum": 120},
+            "renewDeadlineSeconds": {"type": "integer", "minimum": 2, "maximum": 100},
+            "retryPeriodSeconds": {"type": "integer", "minimum": 1, "maximum": 30}
+          }
+        },
+        "admission": {
+          "type": "object", "additionalProperties": false, "required": ["globalMaxConcurrentJobs", "defaultPerProjectMaxConcurrentJobs", "testNamespaceTtlSeconds", "maxTestNamespacesPerProject"],
+          "properties": {
+            "globalMaxConcurrentJobs": {"type": "integer", "minimum": 1, "maximum": 200},
+            "defaultPerProjectMaxConcurrentJobs": {"type": "integer", "minimum": 1, "maximum": 50},
+            "testNamespaceTtlSeconds": {"type": "integer", "minimum": 0, "maximum": 86400},
+            "maxTestNamespacesPerProject": {"type": "integer", "minimum": 0, "maximum": 20}
+          }
+        },
+        "resources": {"$ref": "#/definitions/resources"}
+      }
+    },
+    "api": {
+      "type": "object", "additionalProperties": false, "required": ["replicas", "image", "service", "oidc", "resources"],
+      "properties": {
+        "replicas": {"$ref": "#/definitions/replicas"},
+        "image": {"$ref": "#/definitions/image"},
+        "service": {"$ref": "#/definitions/servicePort"},
+        "oidc": {
+          "type": "object", "additionalProperties": false, "required": ["issuerUrl", "clientId", "allowedSubjects"],
+          "properties": {
+            "issuerUrl": {"type": "string", "pattern": "^(https://.+)?$"},
+            "clientId": {"type": "string"},
+            "allowedSubjects": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true}
+          }
+        },
+        "resources": {"$ref": "#/definitions/resources"}
+      }
+    },
+    "gitbroker": {
+      "type": "object", "additionalProperties": false, "required": ["replicas", "image", "service", "githubApp", "pushRefPrefix", "draftPullRequestsOnly", "resources"],
+      "properties": {
+        "replicas": {"const": 1, "description": "Single active broker; no concurrent pushes from two replicas."},
+        "image": {"$ref": "#/definitions/image"},
+        "service": {"$ref": "#/definitions/servicePort"},
+        "githubApp": {
+          "type": "object", "additionalProperties": false, "required": ["appId", "privateKeySecretRef"],
+          "properties": {"appId": {"type": "string", "pattern": "^([0-9]+)?$"}, "privateKeySecretRef": {"$ref": "#/definitions/secretKeyRef"}}
+        },
+        "pushRefPrefix": {"const": "dev/", "description": "gitbroker never pushes outside dev/*."},
+        "draftPullRequestsOnly": {"const": true, "description": "The platform opens draft PRs only; there is deliberately no merge or approve setting."},
+        "resources": {"$ref": "#/definitions/resources"}
+      }
+    },
+    "modelGateway": {
+      "type": "object", "additionalProperties": false, "required": ["replicas", "image", "service", "providers", "resources"],
+      "properties": {
+        "replicas": {"$ref": "#/definitions/replicas"},
+        "image": {"$ref": "#/definitions/image"},
+        "service": {"$ref": "#/definitions/servicePort"},
+        "providers": {
+          "type": "array", "minItems": 1,
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["name", "host", "apiKeySecretRef"],
+            "properties": {
+              "name": {"enum": ["anthropic", "openai"]},
+              "host": {"type": "string", "pattern": "^[a-z0-9.-]+\\.[a-z]{2,}$"},
+              "apiKeySecretRef": {"$ref": "#/definitions/secretKeyRef"}
+            }
+          }
+        },
+        "resources": {"$ref": "#/definitions/resources"}
+      }
+    },
+    "postgres": {
+      "type": "object", "additionalProperties": false, "required": ["mode", "cnpg", "external"],
+      "properties": {
+        "mode": {"enum": ["cnpg", "external"]},
+        "cnpg": {
+          "type": "object", "additionalProperties": false, "required": ["instances", "imageName", "storage", "backup"],
+          "properties": {
+            "instances": {"type": "integer", "minimum": 1, "maximum": 5},
+            "imageName": {"type": "string"},
+            "storage": {"type": "object", "additionalProperties": false, "required": ["size", "storageClass"], "properties": {"size": {"$ref": "#/definitions/quantity"}, "storageClass": {"type": "string"}}},
+            "backup": {
+              "type": "object", "additionalProperties": false, "required": ["enabled", "destinationPath", "credentialsSecretRef"],
+              "properties": {"enabled": {"type": "boolean"}, "destinationPath": {"type": "string", "pattern": "^(s3://.+)?$"}, "credentialsSecretRef": {"type": "string"}}
+            }
+          }
+        },
+        "external": {
+          "type": "object", "additionalProperties": false, "required": ["host", "port", "database", "sslmode", "credentialsSecretRef"],
+          "properties": {
+            "host": {"type": "string"}, "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+            "database": {"type": "string", "minLength": 1},
+            "sslmode": {"enum": ["require", "verify-ca", "verify-full"]},
+            "credentialsSecretRef": {"type": "string"}
+          }
+        }
+      },
+      "if": {"properties": {"mode": {"const": "external"}}},
+      "then": {"properties": {"external": {"properties": {"host": {"minLength": 1}, "credentialsSecretRef": {"minLength": 1}}}}}
+    },
+    "artifacts": {
+      "type": "object", "additionalProperties": false, "required": ["endpoint", "region", "bucketPrefix", "credentialsSecretRef"],
+      "properties": {
+        "endpoint": {"type": "string", "pattern": "^(https?://.+)?$"},
+        "region": {"type": "string"},
+        "bucketPrefix": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,30}$"},
+        "credentialsSecretRef": {"type": "string", "minLength": 1}
+      }
+    },
+    "ingress": {
+      "type": "object", "additionalProperties": false, "required": ["enabled", "className", "host", "tlsSecretName"],
+      "properties": {"enabled": {"type": "boolean"}, "className": {"type": "string"}, "host": {"type": "string"}, "tlsSecretName": {"type": "string"}},
+      "if": {"properties": {"enabled": {"const": true}}},
+      "then": {"properties": {"host": {"minLength": 1}, "tlsSecretName": {"minLength": 1}}}
+    },
+    "networkPolicy": {
+      "type": "object", "additionalProperties": false, "required": ["enabled"],
+      "properties": {"enabled": {"type": "boolean", "description": "false only for profiles without NetworkPolicy enforcement; forces assuranceMode reduced (checked in templates)."}}
+    },
+    "serviceAccount": {
+      "type": "object", "additionalProperties": false, "required": ["annotations"],
+      "properties": {"annotations": {"type": "object", "additionalProperties": {"type": "string"}}}
+    }
+  }
+}

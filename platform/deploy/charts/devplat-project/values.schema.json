@@ -1,0 +1,95 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "devplat-project chart values",
+  "description": "Per-project bundle values, generated from the project configuration. Unknown keys are rejected.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["project", "platformNamespace", "artifacts", "registryProxy", "exec", "build", "test"],
+  "definitions": {
+    "dnsLabel": {"type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", "maxLength": 63},
+    "quantity": {"type": "string", "pattern": "^[0-9]+(\\.[0-9]+)?(m|Ki|Mi|Gi|Ti|k|M|G|T)?$"},
+    "cidr": {"type": "string", "pattern": "^([0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}$|^[0-9a-fA-F:]+/[0-9]{1,3}$"},
+    "quota": {
+      "type": "object", "additionalProperties": false,
+      "required": ["pods", "requestsCpu", "requestsMemory", "limitsCpu", "limitsMemory", "requestsEphemeralStorage", "limitsEphemeralStorage"],
+      "properties": {
+        "pods": {"type": "string", "pattern": "^[0-9]+$"},
+        "requestsCpu": {"$ref": "#/definitions/quantity"}, "requestsMemory": {"$ref": "#/definitions/quantity"},
+        "limitsCpu": {"$ref": "#/definitions/quantity"}, "limitsMemory": {"$ref": "#/definitions/quantity"},
+        "requestsEphemeralStorage": {"$ref": "#/definitions/quantity"}, "limitsEphemeralStorage": {"$ref": "#/definitions/quantity"}
+      }
+    }
+  },
+  "properties": {
+    "project": {
+      "type": "object", "additionalProperties": false, "required": ["id", "namespacePrefix", "clusterRef"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,22}[a-z0-9]$", "description": "Short id; keeps proj-<id>-t-<8> and Job names within 63 characters."},
+        "namespacePrefix": {"type": "string", "pattern": "^proj-[a-z][a-z0-9-]{0,22}[a-z0-9]$"},
+        "clusterRef": {"$ref": "#/definitions/dnsLabel"}
+      }
+    },
+    "platformNamespace": {"$ref": "#/definitions/dnsLabel"},
+    "artifacts": {
+      "type": "object", "additionalProperties": false, "required": ["egressCidrs", "inClusterNamespace", "inClusterPort"],
+      "properties": {
+        "egressCidrs": {"type": "array", "items": {"$ref": "#/definitions/cidr"}, "uniqueItems": true},
+        "inClusterNamespace": {"$ref": "#/definitions/dnsLabel"},
+        "inClusterPort": {"type": "integer", "minimum": 1, "maximum": 65535}
+      }
+    },
+    "registryProxy": {
+      "type": "object", "additionalProperties": false, "required": ["enabled", "namespace", "podLabels", "port"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "namespace": {"$ref": "#/definitions/dnsLabel"},
+        "podLabels": {"type": "object", "minProperties": 1, "additionalProperties": {"type": "string"}},
+        "port": {"type": "integer", "minimum": 1, "maximum": 65535}
+      }
+    },
+    "exec": {
+      "type": "object", "additionalProperties": false, "required": ["requiredRuntimeClassName", "quota", "limits"],
+      "properties": {
+        "requiredRuntimeClassName": {"type": "string", "pattern": "^([a-z0-9]([-a-z0-9]*[a-z0-9])?)?$"},
+        "quota": {"$ref": "#/definitions/quota"},
+        "limits": {
+          "type": "object", "additionalProperties": false,
+          "required": ["defaultCpu", "defaultMemory", "defaultRequestCpu", "defaultRequestMemory", "maxCpu", "maxMemory"],
+          "properties": {
+            "defaultCpu": {"$ref": "#/definitions/quantity"}, "defaultMemory": {"$ref": "#/definitions/quantity"},
+            "defaultRequestCpu": {"$ref": "#/definitions/quantity"}, "defaultRequestMemory": {"$ref": "#/definitions/quantity"},
+            "maxCpu": {"$ref": "#/definitions/quantity"}, "maxMemory": {"$ref": "#/definitions/quantity"}
+          }
+        }
+      }
+    },
+    "build": {
+      "type": "object", "additionalProperties": false, "required": ["enabled", "podSecurityLevel", "acceptUnconfined", "allowedBuilderImages", "quota"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "podSecurityLevel": {"enum": ["baseline", "privileged"]},
+        "acceptUnconfined": {"type": "boolean"},
+        "allowedBuilderImages": {"type": "array", "items": {"type": "string", "pattern": "^[a-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._-]+)+@sha256:[a-f0-9]{64}$"}, "uniqueItems": true},
+        "quota": {"$ref": "#/definitions/quota"}
+      },
+      "if": {"properties": {"podSecurityLevel": {"const": "privileged"}}},
+      "then": {"properties": {"acceptUnconfined": {"const": true}}}
+    },
+    "test": {
+      "type": "object", "additionalProperties": false,
+      "required": ["maxConcurrentNamespaces", "ttlSecondsAfterSuccess", "ttlSecondsAfterFailure", "maxLifetimeSeconds", "quota", "allowArtifacts", "sandboxEgress"],
+      "properties": {
+        "maxConcurrentNamespaces": {"type": "integer", "minimum": 0, "maximum": 20},
+        "ttlSecondsAfterSuccess": {"type": "integer", "minimum": 0, "maximum": 86400},
+        "ttlSecondsAfterFailure": {"type": "integer", "minimum": 0, "maximum": 86400},
+        "maxLifetimeSeconds": {"type": "integer", "minimum": 300, "maximum": 86400},
+        "quota": {"$ref": "#/definitions/quota"},
+        "allowArtifacts": {"type": "boolean"},
+        "sandboxEgress": {
+          "type": "object", "additionalProperties": false, "required": ["enabled", "egressCidrs"],
+          "properties": {"enabled": {"type": "boolean"}, "egressCidrs": {"type": "array", "items": {"$ref": "#/definitions/cidr"}}}
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,79 @@
+{{- /*
+Controller RBAC. Least privilege is enforced in two layers:
+1. RBAC below: leases in the release namespace; namespaced Job/test resources cluster-wide (needed for the
+   ephemeral proj-<P>-t-<runid> namespaces it creates); namespace create/delete.
+2. controller-scope-policy.yaml (ValidatingAdmissionPolicy): every write by this ServiceAccount must target a
+   proj-* namespace that carries devplat labels, and namespaces it creates/deletes must match proj-<P>-t-<runid>.
+No access to Secrets, RBAC objects, nodes, CRDs, webhooks or policies. No pods/exec, no pods/attach.
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: devplat-controller-leader-election
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "devplat.labels" (dict "root" . "name" "devplat-controller") | nindent 4 }}
+rules:
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: devplat-controller-leader-election
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "devplat.labels" (dict "root" . "name" "devplat-controller") | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: devplat-controller-leader-election
+subjects:
+  - kind: ServiceAccount
+    name: devplat-controller
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: devplat-controller
+  labels:
+    {{- include "devplat.labels" (dict "root" . "name" "devplat-controller") | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["configmaps", "resourcequotas", "limitranges"]
+    verbs: ["get", "list", "watch", "create", "update", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list", "watch", "create", "update", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: devplat-controller
+  labels:
+    {{- include "devplat.labels" (dict "root" . "name" "devplat-controller") | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: devplat-controller
+subjects:
+  - kind: ServiceAccount
+    name: devplat-controller
+    namespace: {{ .Release.Namespace }}

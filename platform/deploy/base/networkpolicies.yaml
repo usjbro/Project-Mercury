@@ -1,0 +1,1184 @@
+# devplat base: NetworkPolicies (networking.k8s.io/v1). Status: Documented only / not deployed.
+# Flows table: docs/mercury/development-orchestration/18-kubernetes-security-model.md §6.
+# Every devplat namespace starts with default-deny-all (ingress+egress). Ephemeral test namespaces get the same
+# default-deny plus the test flows (doc 18 §6.3) from the controller (as devplat-namespacer) at creation time.
+# Selectors: namespaces by devplat.io/ns-role; project pods by devplat.io/workload and devplat.io/network-class
+# (none | model-only | deps), both set by the controller from the execution profile, checked by admission.
+# Requires a CNI that enforces NetworkPolicy (e.g. Cilium, Calico; verify the workstation CNI). Plain flannel does NOT: then
+# every policy here is inert -> reduced-assurance mode (doc 18 §12).
+# PLACEHOLDERS the overlay MUST replace: 192.0.2.10/32 (TEST-NET-1) = kube-apiserver endpoint IPs (post-DNAT);
+# namespace label devplat.io/ingress-gateway=true = the operator's ingress controller namespace; cnpg-system.
+# Port convention (aligned with charts/devplat values and doc 16): api, gitbroker, model-gateway 8080;
+# gitbroker-fetch 8081; model-gateway admin 9443; registry-proxy 4873 (packages) and 5000 (OCI mirror);
+# devplat-dns pod port 1053 (Service port 53); artifact store 9000; postgres 5432 (+8000 CNPG status);
+# metrics 9090; grafana 3000. Policies match pod (target) ports, i.e. after Service translation.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: devplat-system
+  annotations:
+    devplat.io/purpose: Deny all ingress and egress; every flow below is an explicit
+      exception.
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-kube-dns-egress
+  namespace: devplat-system
+  annotations:
+    devplat.io/purpose: Platform namespaces only. Project namespaces never reach kube-dns
+      (it forwards to the internet).
+spec:
+  podSelector: {}
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-metrics-scrape
+  namespace: devplat-system
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: devplat-observability
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: devplat-prometheus
+    ports:
+    - protocol: TCP
+      port: 9090
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: controller
+  namespace: devplat-system
+  annotations:
+    devplat.io/purpose: 'Controller: DB, gitbroker internal API, model-gateway admin
+      API (budgets, run tokens), artifact store, kube-apiserver. No internet.'
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: devplat-controller
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          cnpg.io/cluster: devplat-db
+    ports:
+    - protocol: TCP
+      port: 5432
+  - to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: devplat-gitbroker
+    ports:
+    - protocol: TCP
+      port: 8080
+  - to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: devplat-model-gateway
+    ports:
+    - protocol: TCP
+      port: 9443
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: devplat-artifacts
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: devplat-artifacts
+    ports:
+    - protocol: TCP
+      port: 9000
+  - to:
+    - ipBlock:
+        cidr: 192.0.2.10/32
+    ports:
+    - protocol: TCP
+      port: 443
+    - protocol: TCP
+      port: 6443
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: api
+  namespace: devplat-system
+  annotations:
+    devplat.io/purpose: 'API/dashboard: operator traffic from the ingress gateway
+      namespace; DB; evidence reads; public 443 for OIDC issuer and Linear (host allowlist
+      enforced in-app).'
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: devplat-api
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          devplat.io/ingress-gateway: 'true'
+    ports:
+    - protocol: TCP
+      port: 8080
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          cnpg.io/cluster: devplat-db
+    ports:
+    - protocol: TCP
+      port: 5432
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: devplat-artifacts
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: devplat-artifacts
+    ports:
+    - protocol: TCP
+      port: 9000
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except:
+        - 10.0.0.0/8
+        - 100.64.0.0/10
+        - 169.254.0.0/16
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+    - ipBlock:
+        cidr: ::/0
+        except:
+        - fc00::/7
+        - fe80::/10
+    ports:
+    - protocol: TCP
+      port: 443
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gitbroker
+  namespace: devplat-system
+  annotations:
+    devplat.io/purpose: 'Git broker (GitHub App key): called only by the controller,
+      never by project pods; GitHub over public 443 (host allowlist in-app); bundles
+      via artifact store.'
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: devplat-gitbroker
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: devplat-controller
+    ports:
+    - protocol: TCP
+      port: 8080
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: devplat-artifacts
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: devplat-artifacts
+    ports:
+    - protocol: TCP
+      port: 9000
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except:
+        - 10.0.0.0/8
+        - 100.64.0.0/10
+        - 169.254.0.0/16
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+    - ipBlock:
+        cidr: ::/0
+        except:
+        - fc00::/7
+        - fe80::/10
+    ports:
+    - protocol: TCP
+      port: 443
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gitbroker-fetch
+  namespace: devplat-system
+  annotations:
+    devplat.io/purpose: 'One-time bundle endpoint without any GitHub credential: project
+      pods'' fetch init containers; reads prepared bundles from the artifact store.'
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: devplat-gitbroker-fetch
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchExpressions:
+        - key: devplat.io/ns-role
+          operator: In
+          values:
+          - exec
+          - test
+      podSelector:
+        matchExpressions:
+        - key: devplat.io/workload
+          operator: In
+          values:
+          - agent
+          - planner
+          - verifier
+          - test
+    ports:
+    - protocol: TCP
+      port: 8081
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: devplat-artifacts
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: devplat-artifacts
+    ports:
+    - protocol: TCP
+      port: 9000
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: model-gateway
+  namespace: devplat-system
+  annotations:
+    devplat.io/purpose: 'Model gateway (LLM keys): exec-namespace pods of network
+      class model-only/deps (the per-Job token decides project and budget); controller
+      admin port; providers over public 443 (host allowlist in-app). Never test or
+      build namespaces.'
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: devplat-model-gateway
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchExpressions:
+        - key: devplat.io/ns-role
+          operator: In
+          values:
+          - exec
+      podSelector:
+        matchExpressions:
+        - key: devplat.io/workload
+          operator: In
+          values:
+          - agent
+          - planner
+          - verifier
+        - key: devplat.io/network-class
+          operator: In
+          values:
+          - model-only
+          - deps
+    ports:
+    - protocol: TCP
+      port: 8080
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: devplat-controller
+    ports:
+    - protocol: TCP
+      port: 9443
+  egress:
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except:
+        - 10.0.0.0/8
+        - 100.64.0.0/10
+        - 169.254.0.0/16
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+    - ipBlock:
+        cidr: ::/0
+        except:
+        - fc00::/7
+        - fe80::/10
+    ports:
+    - protocol: TCP
+      port: 443
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: registry-proxy
+  namespace: devplat-system
+  annotations:
+    devplat.io/purpose: 'Package proxy (4873) and OCI pull-through mirror (5000):
+      network-class deps pods and build pods; upstream registries over public 443
+      (per-project registries_allowlist in the proxy).'
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: devplat-registry-proxy
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchExpressions:
+        - key: devplat.io/ns-role
+          operator: In
+          values:
+          - exec
+          - test
+      podSelector:
+        matchExpressions:
+        - key: devplat.io/network-class
+          operator: In
+          values:
+          - deps
+    - namespaceSelector:
+        matchExpressions:
+        - key: devplat.io/ns-role
+          operator: In
+          values:
+          - build
+      podSelector:
+        matchExpressions:
+        - key: devplat.io/workload
+          operator: In
+          values:
+          - build
+    ports:
+    - protocol: TCP
+      port: 4873
+    - protocol: TCP
+      port: 5000
+  egress:
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except:
+        - 10.0.0.0/8
+        - 100.64.0.0/10
+        - 169.254.0.0/16
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+    - ipBlock:
+        cidr: ::/0
+        except:
+        - fc00::/7
+        - fe80::/10
+    ports:
+    - protocol: TCP
+      port: 443
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: devplat-dns
+  namespace: devplat-system
+  annotations:
+    devplat.io/purpose: Cluster-local resolver for project pods (CoreDNS kubernetes
+      plugin only, no forward; listens on 1053, Service port 53). No internet egress,
+      so DNS cannot tunnel data out.
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: devplat-dns
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchExpressions:
+        - key: devplat.io/ns-role
+          operator: In
+          values:
+          - exec
+          - build
+          - test
+    ports:
+    - protocol: UDP
+      port: 1053
+    - protocol: TCP
+      port: 1053
+  egress:
+  - to:
+    - ipBlock:
+        cidr: 192.0.2.10/32
+    ports:
+    - protocol: TCP
+      port: 443
+    - protocol: TCP
+      port: 6443
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres
+  namespace: devplat-system
+  annotations:
+    devplat.io/purpose: 'PostgreSQL (CloudNativePG): controller, api and model-gateway
+      (budget reservations, own DB role); replication; operator status port; backups
+      to the artifact store; instance manager to kube-apiserver.'
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: devplat-db
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: devplat-controller
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: devplat-api
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: devplat-model-gateway
+    ports:
+    - protocol: TCP
+      port: 5432
+  - from:
+    - podSelector: &id001
+        matchLabels:
+          cnpg.io/cluster: devplat-db
+    ports:
+    - protocol: TCP
+      port: 5432
+    - protocol: TCP
+      port: 8000
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: cnpg-system
+    ports:
+    - protocol: TCP
+      port: 8000
+  egress:
+  - to:
+    - podSelector: *id001
+    ports:
+    - protocol: TCP
+      port: 5432
+    - protocol: TCP
+      port: 8000
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: devplat-artifacts
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: devplat-artifacts
+    ports:
+    - protocol: TCP
+      port: 9000
+  - to:
+    - ipBlock:
+        cidr: 192.0.2.10/32
+    ports:
+    - protocol: TCP
+      port: 443
+    - protocol: TCP
+      port: 6443
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: model-gateway-db
+  namespace: devplat-system
+  annotations:
+    devplat.io/purpose: "Budget counters are atomic reservations in PostgreSQL (doc\
+      \ 15 \xA74.1); separate DB role limited to budget tables."
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: devplat-model-gateway
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          cnpg.io/cluster: devplat-db
+    ports:
+    - protocol: TCP
+      port: 5432
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: devplat-artifacts
+  annotations:
+    devplat.io/purpose: Deny all ingress and egress; every flow below is an explicit
+      exception.
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-kube-dns-egress
+  namespace: devplat-artifacts
+  annotations:
+    devplat.io/purpose: Platform namespaces only. Project namespaces never reach kube-dns
+      (it forwards to the internet).
+spec:
+  podSelector: {}
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-metrics-scrape
+  namespace: devplat-artifacts
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: devplat-observability
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: devplat-prometheus
+    ports:
+    - protocol: TCP
+      port: 9090
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: artifact-store
+  namespace: devplat-artifacts
+  annotations:
+    devplat.io/purpose: 'S3-compatible store: platform services and project workloads.
+      Reachability grants nothing: every project-side object operation needs a presigned
+      URL scoped to runs/<job-uid>/.'
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: devplat-artifacts
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: devplat-system
+      podSelector:
+        matchExpressions:
+        - key: app.kubernetes.io/name
+          operator: In
+          values:
+          - devplat-controller
+          - devplat-api
+          - devplat-gitbroker
+          - devplat-gitbroker-fetch
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: devplat-system
+      podSelector:
+        matchLabels:
+          cnpg.io/cluster: devplat-db
+    - namespaceSelector:
+        matchExpressions:
+        - key: devplat.io/ns-role
+          operator: In
+          values:
+          - exec
+          - build
+          - test
+    ports:
+    - protocol: TCP
+      port: 9000
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: devplat-observability
+  annotations:
+    devplat.io/purpose: Deny all ingress and egress; every flow below is an explicit
+      exception.
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-kube-dns-egress
+  namespace: devplat-observability
+  annotations:
+    devplat.io/purpose: Platform namespaces only. Project namespaces never reach kube-dns
+      (it forwards to the internet).
+spec:
+  podSelector: {}
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: prometheus
+  namespace: devplat-observability
+  annotations:
+    devplat.io/purpose: Prometheus scrapes platform metrics ports only; never project
+      namespaces.
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: devplat-prometheus
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: devplat-grafana
+    ports:
+    - protocol: TCP
+      port: 9090
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: devplat-system
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: devplat-artifacts
+    ports:
+    - protocol: TCP
+      port: 9090
+  - to:
+    - ipBlock:
+        cidr: 192.0.2.10/32
+    ports:
+    - protocol: TCP
+      port: 443
+    - protocol: TCP
+      port: 6443
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: grafana
+  namespace: devplat-observability
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: devplat-grafana
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          devplat.io/ingress-gateway: 'true'
+    ports:
+    - protocol: TCP
+      port: 3000
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: devplat-prometheus
+    ports:
+    - protocol: TCP
+      port: 9090
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: proj-mercury-exec
+  annotations:
+    devplat.io/purpose: Deny all ingress and egress; every flow below is an explicit
+      exception.
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: exec-base-egress
+  namespace: proj-mercury-exec
+  annotations:
+    devplat.io/purpose: 'Every exec Job (class none and up): cluster-local DNS, one-time
+      bundle fetch, presigned uploads. No internet, GitHub, Linear, kube-apiserver,
+      DB or other project.'
+spec:
+  podSelector:
+    matchExpressions:
+    - key: devplat.io/workload
+      operator: In
+      values:
+      - agent
+      - planner
+      - verifier
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: devplat-system
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: devplat-dns
+    ports:
+    - protocol: UDP
+      port: 1053
+    - protocol: TCP
+      port: 1053
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: devplat-system
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: devplat-gitbroker-fetch
+    ports:
+    - protocol: TCP
+      port: 8081
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: devplat-artifacts
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: devplat-artifacts
+    ports:
+    - protocol: TCP
+      port: 9000
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: model-egress
+  namespace: proj-mercury-exec
+  annotations:
+    devplat.io/purpose: 'Network class model-only or deps: model gateway (per-Job
+      token).'
+spec:
+  podSelector:
+    matchExpressions:
+    - key: devplat.io/workload
+      operator: In
+      values:
+      - agent
+      - planner
+      - verifier
+    - key: devplat.io/network-class
+      operator: In
+      values:
+      - model-only
+      - deps
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: devplat-system
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: devplat-model-gateway
+    ports:
+    - protocol: TCP
+      port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deps-egress
+  namespace: proj-mercury-exec
+  annotations:
+    devplat.io/purpose: 'Network class deps: package proxy (registries_allowlist of
+      the project).'
+spec:
+  podSelector:
+    matchExpressions:
+    - key: devplat.io/network-class
+      operator: In
+      values:
+      - deps
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: devplat-system
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: devplat-registry-proxy
+    ports:
+    - protocol: TCP
+      port: 4873
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: proj-mercury-build
+  annotations:
+    devplat.io/purpose: Deny all ingress and egress; every flow below is an explicit
+      exception.
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: build-egress
+  namespace: proj-mercury-build
+  annotations:
+    devplat.io/purpose: 'Build Jobs: base images and packages via the proxy/mirror;
+      OCI layout, SBOM and provenance to the artifact store. No direct internet, no
+      registry push credentials, no model gateway.'
+spec:
+  podSelector:
+    matchExpressions:
+    - key: devplat.io/workload
+      operator: In
+      values:
+      - build
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: devplat-system
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: devplat-dns
+    ports:
+    - protocol: UDP
+      port: 1053
+    - protocol: TCP
+      port: 1053
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: devplat-system
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: devplat-registry-proxy
+    ports:
+    - protocol: TCP
+      port: 4873
+    - protocol: TCP
+      port: 5000
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: devplat-artifacts
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: devplat-artifacts
+    ports:
+    - protocol: TCP
+      port: 9000
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: proj-jupiter-exec
+  annotations:
+    devplat.io/purpose: Deny all ingress and egress; every flow below is an explicit
+      exception.
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: exec-base-egress
+  namespace: proj-jupiter-exec
+  annotations:
+    devplat.io/purpose: 'Every exec Job (class none and up): cluster-local DNS, one-time
+      bundle fetch, presigned uploads. No internet, GitHub, Linear, kube-apiserver,
+      DB or other project.'
+spec:
+  podSelector:
+    matchExpressions:
+    - key: devplat.io/workload
+      operator: In
+      values:
+      - agent
+      - planner
+      - verifier
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: devplat-system
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: devplat-dns
+    ports:
+    - protocol: UDP
+      port: 1053
+    - protocol: TCP
+      port: 1053
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: devplat-system
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: devplat-gitbroker-fetch
+    ports:
+    - protocol: TCP
+      port: 8081
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: devplat-artifacts
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: devplat-artifacts
+    ports:
+    - protocol: TCP
+      port: 9000
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: model-egress
+  namespace: proj-jupiter-exec
+  annotations:
+    devplat.io/purpose: 'Network class model-only or deps: model gateway (per-Job
+      token).'
+spec:
+  podSelector:
+    matchExpressions:
+    - key: devplat.io/workload
+      operator: In
+      values:
+      - agent
+      - planner
+      - verifier
+    - key: devplat.io/network-class
+      operator: In
+      values:
+      - model-only
+      - deps
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: devplat-system
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: devplat-model-gateway
+    ports:
+    - protocol: TCP
+      port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deps-egress
+  namespace: proj-jupiter-exec
+  annotations:
+    devplat.io/purpose: 'Network class deps: package proxy (registries_allowlist of
+      the project).'
+spec:
+  podSelector:
+    matchExpressions:
+    - key: devplat.io/network-class
+      operator: In
+      values:
+      - deps
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: devplat-system
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: devplat-registry-proxy
+    ports:
+    - protocol: TCP
+      port: 4873
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: proj-jupiter-build
+  annotations:
+    devplat.io/purpose: Deny all ingress and egress; every flow below is an explicit
+      exception.
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: build-egress
+  namespace: proj-jupiter-build
+  annotations:
+    devplat.io/purpose: 'Build Jobs: base images and packages via the proxy/mirror;
+      OCI layout, SBOM and provenance to the artifact store. No direct internet, no
+      registry push credentials, no model gateway.'
+spec:
+  podSelector:
+    matchExpressions:
+    - key: devplat.io/workload
+      operator: In
+      values:
+      - build
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: devplat-system
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: devplat-dns
+    ports:
+    - protocol: UDP
+      port: 1053
+    - protocol: TCP
+      port: 1053
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: devplat-system
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: devplat-registry-proxy
+    ports:
+    - protocol: TCP
+      port: 4873
+    - protocol: TCP
+      port: 5000
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: devplat-artifacts
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: devplat-artifacts
+    ports:
+    - protocol: TCP
+      port: 9000

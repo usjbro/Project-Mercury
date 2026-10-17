@@ -1,0 +1,13 @@
+devplat {{ .Chart.AppVersion }} (chart {{ .Chart.Version }}) in namespace {{ .Release.Namespace }}.
+
+STATUS: proposed design (Architecture Amendment 001). Only the operator installs this chart. Before it is useful:
+  1. Secrets (created by the operator, never by this chart): {{ .Values.gitbroker.githubApp.privateKeySecretRef.name }},
+     {{- range .Values.modelGateway.providers }} {{ .apiKeySecretRef.name }},{{ end }} {{ .Values.artifacts.credentialsSecretRef }}{{ if eq .Values.postgres.mode "cnpg" }}, devplat-pg-controller, devplat-pg-api{{ end }}.
+  2. Run the bootstrap verification (24-helm-and-gitops.md section 9, steps 6-10), including the negative-path
+     smoke tests: an agent-like pod must NOT reach PostgreSQL, the Kubernetes API or the internet.
+  3. Install one devplat-project release per project (chart devplat-project).
+
+Assurance mode: {{ .Values.platform.assuranceMode }}{{ if eq .Values.platform.assuranceMode "reduced" }} - REDUCED: evidence produced by this install is labelled reduced-assurance and does not satisfy gates that require standard assurance.{{ end }}
+NetworkPolicy objects: {{ if .Values.networkPolicy.enabled }}rendered (enforcement depends on the CNI - verify){{ else }}NOT rendered{{ end }}.
+
+The platform never merges or approves pull requests. G7 is an observed human merge on GitHub.

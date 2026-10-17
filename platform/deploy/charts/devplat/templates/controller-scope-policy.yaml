@@ -1,0 +1,63 @@
+{{- /*
+Admission-level scope for the controller ServiceAccount (Kubernetes >= 1.30, ValidatingAdmissionPolicy GA).
+Narrows the cluster-wide RBAC in controller-rbac.yaml to devplat-managed project namespaces. Security policies for
+agent pods themselves are owned by 18-security-architecture (platform/deploy/base); this policy only constrains the
+controller.
+*/}}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: devplat-controller-scope
+  labels:
+    {{- include "devplat.labels" (dict "root" . "name" "devplat-controller") | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["namespaces", "configmaps", "resourcequotas", "limitranges", "pods"]
+      - apiGroups: ["batch"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["jobs"]
+      - apiGroups: ["networking.k8s.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["networkpolicies"]
+  matchConditions:
+    - name: is-devplat-controller
+      expression: "request.userInfo.username == 'system:serviceaccount:{{ .Release.Namespace }}:devplat-controller'"
+  validations:
+    - expression: >-
+        request.resource.resource != 'namespaces' ||
+        request.name.matches('^proj-[a-z0-9]([-a-z0-9]*[a-z0-9])?-t-[a-z0-9]{8}$')
+      message: "devplat-controller may create or delete only ephemeral test namespaces proj-<P>-t-<runid>"
+    - expression: >-
+        request.resource.resource != 'namespaces' || request.operation != 'CREATE' ||
+        (has(object.metadata.labels) &&
+         object.metadata.labels.exists(k, k == 'devplat.io/managed-by') &&
+         object.metadata.labels['devplat.io/managed-by'] == 'devplat-controller' &&
+         object.metadata.labels.exists(k, k == 'devplat.io/project') &&
+         object.metadata.labels.exists(k, k == 'devplat.io/ns-role') &&
+         object.metadata.labels['devplat.io/ns-role'] == 'test' &&
+         object.metadata.labels.exists(k, k == 'pod-security.kubernetes.io/enforce') &&
+         object.metadata.labels['pod-security.kubernetes.io/enforce'] == 'restricted')
+      message: "test namespaces must carry devplat.io/managed-by, devplat.io/project, devplat.io/ns-role=test and PSA enforce=restricted"
+    - expression: >-
+        request.resource.resource == 'namespaces' ||
+        (namespaceObject != null && namespaceObject.metadata.name.startsWith('proj-') &&
+         has(namespaceObject.metadata.labels) &&
+         namespaceObject.metadata.labels.exists(k, k == 'devplat.io/project'))
+      message: "devplat-controller may write only inside devplat project namespaces (proj-*)"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: devplat-controller-scope
+  labels:
+    {{- include "devplat.labels" (dict "root" . "name" "devplat-controller") | nindent 4 }}
+spec:
+  policyName: devplat-controller-scope
+  validationActions: ["Deny"]

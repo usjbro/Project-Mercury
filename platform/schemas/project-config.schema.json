@@ -1,0 +1,398 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://devplat.invalid/schemas/project-config.schema.json",
+  "title": "devplat project configuration (devplat.project.v1)",
+  "description": "Registration of one project on the devplat AI development platform. One file per project in the project registry (platform/projects/). The controller, gitbroker, model-gateway and the devplat-project Helm chart read ONLY this document for project-specific facts; no project literal lives in platform code. Values that are not known are written as {\"unresolved\": \"<question or reason>\"}; commands that are designed but do not exist yet are written as {\"planned\": \"<what>\", \"ref\": \"<design reference>\"}. Secret VALUES never appear here, only secret names. Contract and versioning rules: docs/mercury/development-orchestration/26-project-configuration.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "schema_minor", "project_id", "display_name", "status", "config_version", "verified",
+    "source_repository", "issue_tracker", "documentation", "architecture_constraints", "coding_standards",
+    "languages", "toolchains", "container_images", "test_levels", "required_tooling", "environments",
+    "resources", "network", "identities", "security", "agent_permissions", "review_gates", "github_policy",
+    "artifacts", "budgets", "deployment_targets", "execution_target"
+  ],
+  "properties": {
+    "schema": { "const": "devplat.project.v1", "description": "Major version. A breaking change creates devplat.project.v2; the controller accepts N and N-1 during a migration window." },
+    "schema_minor": { "type": "integer", "minimum": 0, "description": "Additive changes (new optional fields) bump the minor. Readers ignore nothing: unknown fields are rejected, so a reader must support the file's minor." },
+    "project_id": { "$ref": "#/$defs/project_id" },
+    "display_name": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "status": {
+      "enum": ["draft", "onboarding", "active"],
+      "description": "draft: registered, nothing scheduled, unresolved allowed everywhere. onboarding: security core resolved, only planning/design/discovery tasks may run. active: every field resolved (no 'unresolved' anywhere); implementation Jobs may run. Enforced by platform/tools/validate_projects.py and the controller's admission."
+    },
+    "config_version": { "type": "integer", "minimum": 1, "description": "Monotonic revision of THIS file; every change is a reviewed PR to the registry and bumps it. Tasks record the config_version they were admitted under." },
+    "verified": {
+      "type": "object", "additionalProperties": false, "required": ["date", "by", "sources"],
+      "properties": {
+        "date": { "type": "string", "format": "date" },
+        "by": { "type": "string", "minLength": 1 },
+        "sources": { "type": "array", "items": { "type": "string", "minLength": 1 }, "description": "Documents or observations every value was taken from." }
+      }
+    },
+
+    "source_repository": {
+      "type": "object", "additionalProperties": false,
+      "required": ["url", "default_branch", "protected_branches", "visibility", "owner_kind"],
+      "properties": {
+        "url": { "oneOf": [ { "type": "string", "pattern": "^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$" }, { "$ref": "#/$defs/unresolved" } ] },
+        "default_branch": { "$ref": "#/$defs/str_or_unresolved" },
+        "protected_branches": { "oneOf": [ { "type": "array", "items": { "type": "string", "minLength": 1 } }, { "$ref": "#/$defs/unresolved" } ] },
+        "visibility": { "oneOf": [ { "enum": ["public", "private", "internal"] }, { "$ref": "#/$defs/unresolved" } ] },
+        "owner_kind": { "oneOf": [ { "enum": ["user", "organization"] }, { "$ref": "#/$defs/unresolved" } ], "description": "user = G-DETECT only (merge actor verified after the fact); organization = G-ORG possible." }
+      }
+    },
+
+    "issue_tracker": {
+      "oneOf": [
+        { "type": "object", "additionalProperties": false, "required": ["kind", "team", "project", "write_mode"],
+          "properties": {
+            "kind": { "const": "linear" },
+            "team": { "$ref": "#/$defs/str_or_unresolved" },
+            "project": { "$ref": "#/$defs/str_or_unresolved" },
+            "write_mode": { "enum": ["read_only", "comments", "status_and_comments"], "description": "Linear writes need an operator decision (v1 DOD-05); default read_only." }
+          } },
+        { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "none" } } },
+        { "$ref": "#/$defs/unresolved" }
+      ]
+    },
+
+    "documentation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["requirements", "design", "adr", "runbooks", "test_plan"],
+      "properties": {
+        "requirements": { "$ref": "#/$defs/refs_or_unresolved" },
+        "design": { "$ref": "#/$defs/refs_or_unresolved" },
+        "adr": { "$ref": "#/$defs/refs_or_unresolved" },
+        "runbooks": { "$ref": "#/$defs/refs_or_unresolved" },
+        "test_plan": { "$ref": "#/$defs/refs_or_unresolved" },
+        "design_approval": { "oneOf": [ { "type": "object", "additionalProperties": false, "required": ["state", "ref"], "properties": { "state": { "enum": ["approved", "awaiting_operator", "none"] }, "ref": { "type": "string" } } }, { "$ref": "#/$defs/unresolved" } ], "description": "G1 only accepts design refs on an approved commit." }
+      }
+    },
+    "architecture_constraints": { "$ref": "#/$defs/refs_or_unresolved" },
+    "coding_standards": { "$ref": "#/$defs/refs_or_unresolved" },
+
+    "languages": {
+      "oneOf": [
+        { "type": "array", "minItems": 1, "items": { "type": "object", "additionalProperties": false, "required": ["name", "version"], "properties": { "name": { "type": "string" }, "version": { "$ref": "#/$defs/str_or_unresolved" }, "ref": { "type": "string" } } } },
+        { "$ref": "#/$defs/unresolved" }
+      ]
+    },
+    "toolchains": {
+      "oneOf": [
+        { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["name", "version", "ref"], "properties": { "name": { "type": "string" }, "version": { "$ref": "#/$defs/str_or_unresolved" }, "role": { "type": "string" }, "ref": { "type": "string" } } } },
+        { "$ref": "#/$defs/unresolved" }
+      ]
+    },
+    "container_images": {
+      "oneOf": [
+        { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["name", "purpose", "image", "platforms"],
+          "properties": {
+            "name": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,40}$" },
+            "purpose": { "enum": ["toolchain", "agent", "test", "build"] },
+            "image": { "oneOf": [ { "$ref": "#/$defs/digest_image" }, { "$ref": "#/$defs/unresolved" } ] },
+            "platforms": { "oneOf": [ { "type": "array", "items": { "enum": ["linux/amd64", "linux/arm64"] }, "minItems": 1 }, { "$ref": "#/$defs/unresolved" } ], "description": "Only platforms verified for this image." }
+          } } },
+        { "$ref": "#/$defs/unresolved" }
+      ]
+    },
+
+    "test_levels": {
+      "oneOf": [
+        { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/test_level" } },
+        { "$ref": "#/$defs/unresolved" }
+      ]
+    },
+    "required_tooling": {
+      "oneOf": [
+        { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["name", "ref"], "properties": { "name": { "type": "string" }, "version": { "$ref": "#/$defs/str_or_unresolved" }, "ref": { "type": "string" } } } },
+        { "$ref": "#/$defs/unresolved" }
+      ]
+    },
+    "environments": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["id", "kind", "purpose"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,30}$" },
+          "kind": { "enum": ["kubernetes_exec", "kubernetes_ephemeral_test", "kubernetes_build", "external_lane", "github_hosted_ci"] },
+          "purpose": { "type": "string" },
+          "lane": { "type": "string", "description": "external_lane only, e.g. macos. The platform schedules mac_validation / operator_action tasks for it and imports operator evidence; it never runs code there." },
+          "host": { "$ref": "#/$defs/str_or_unresolved" },
+          "task_kinds": { "type": "array", "items": { "enum": ["mac_validation", "operator_action", "implementation", "test", "review", "integration", "build", "planning", "design"] } },
+          "requirements": { "type": "array", "items": { "type": "string" } },
+          "readiness": { "type": "string", "description": "What must be true before this environment is used (e.g. an operator fact)." },
+          "ref": { "type": "string" }
+        },
+        "allOf": [ { "if": { "properties": { "kind": { "const": "external_lane" } } }, "then": { "required": ["lane", "task_kinds", "readiness"] } } ]
+      }
+    },
+
+    "resources": {
+      "type": "object", "additionalProperties": false,
+      "required": ["default_job", "namespace_quota", "max_concurrent"],
+      "properties": {
+        "default_job": { "oneOf": [ { "$ref": "#/$defs/req_lim" }, { "$ref": "#/$defs/unresolved" } ] },
+        "namespace_quota": { "oneOf": [
+          { "type": "object", "additionalProperties": false, "required": ["requests_cpu", "requests_memory", "limits_cpu", "limits_memory", "pods", "ephemeral_storage"],
+            "properties": { "requests_cpu": { "$ref": "#/$defs/quantity" }, "requests_memory": { "$ref": "#/$defs/quantity" }, "limits_cpu": { "$ref": "#/$defs/quantity" }, "limits_memory": { "$ref": "#/$defs/quantity" }, "pods": { "type": "integer", "minimum": 1 }, "ephemeral_storage": { "$ref": "#/$defs/quantity" } } },
+          { "$ref": "#/$defs/unresolved" } ] },
+        "max_concurrent": {
+          "type": "object", "additionalProperties": false, "required": ["jobs", "implementation", "review", "external_lane", "open_prs_awaiting_human"],
+          "properties": {
+            "jobs": { "$ref": "#/$defs/int_or_unresolved" },
+            "implementation": { "$ref": "#/$defs/int_or_unresolved" },
+            "review": { "$ref": "#/$defs/int_or_unresolved" },
+            "external_lane": { "$ref": "#/$defs/int_or_unresolved" },
+            "open_prs_awaiting_human": { "$ref": "#/$defs/int_or_unresolved" },
+            "ref": { "type": "string" }
+          }
+        },
+        "priority_weight": { "$ref": "#/$defs/int_or_unresolved", "description": "Weight in the cross-project weighted fair share (doc 17)." }
+      }
+    },
+
+    "network": {
+      "type": "object", "additionalProperties": false,
+      "required": ["model_providers", "classes_allowed", "registries_allowlist"],
+      "properties": {
+        "model_providers": { "type": "array", "items": { "enum": ["anthropic", "openai"] }, "description": "Reached only through devplat-model-gateway; agent pods never see a key." },
+        "classes_allowed": { "type": "array", "items": { "enum": ["none", "model-only", "deps"] }, "description": "Egress classes Jobs of this project may get. 'artifact' (presigned uploads) and 'fetch' (gitbroker one-time URL) are implicit for every agent Job." },
+        "registries_allowlist": { "oneOf": [ { "type": "array", "items": { "type": "string", "pattern": "^[a-z0-9.-]+(:[0-9]+)?$" } }, { "$ref": "#/$defs/unresolved" } ], "description": "Hosts the package-registry proxy may reach for this project. Unresolved = empty = the deps class is denied (fail closed)." },
+        "extra_egress": { "type": "array", "maxItems": 0, "description": "Reserved; any project-specific egress needs a reviewed schema minor and a Security review." }
+      }
+    },
+
+    "identities": {
+      "type": "object", "additionalProperties": false, "required": ["github_app", "secrets"],
+      "properties": {
+        "github_app": { "$ref": "#/$defs/secret_ref" },
+        "secrets": { "type": "array", "items": { "$ref": "#/$defs/secret_ref" } }
+      }
+    },
+
+    "security": {
+      "type": "object", "additionalProperties": false,
+      "required": ["restricted_paths", "security_sensitive_paths", "runtime_class", "pod_security", "untrusted_inputs"],
+      "properties": {
+        "restricted_paths": { "oneOf": [ { "$ref": "#/$defs/globs" }, { "$ref": "#/$defs/unresolved" } ], "description": "Never changed by any agent task of this project; gitbroker refuses a bundle touching them (port of devorch result_errors)." },
+        "security_sensitive_paths": { "oneOf": [ { "$ref": "#/$defs/globs" }, { "$ref": "#/$defs/unresolved" } ], "description": "A task touching them is security_sensitive: full-depth G4 by a fresh Security Engineer instance." },
+        "escalate_paths": { "oneOf": [ { "$ref": "#/$defs/globs" }, { "$ref": "#/$defs/unresolved" } ], "description": "Allowed only when the contract names them explicitly; always full G4 and operator attention in the PR." },
+        "runtime_class": { "enum": ["gvisor", "kata", "default"], "description": "RuntimeClass for this project's agent and test pods. 'default' (no sandbox runtime) is accepted only in the declared reduced-assurance workstation mode (15-platform-architecture.md §7); same vocabulary as execution-profiles.schema.json plus kata." },
+        "pod_security": { "const": "restricted" },
+        "untrusted_inputs": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+
+    "agent_permissions": {
+      "type": "object", "additionalProperties": false, "required": ["roles"],
+      "properties": {
+        "roles": {
+          "type": "object", "minProperties": 1,
+          "propertyNames": { "pattern": "^(mdev-[a-z0-9-]+|planner)$" },
+          "additionalProperties": {
+            "type": "object", "additionalProperties": false, "required": ["enabled", "writes", "path_scopes"],
+            "properties": {
+              "enabled": { "type": "boolean" },
+              "writes": { "type": "boolean", "description": "false = read-only role: contracts must have allowed_paths [] and gitbroker rejects any commit." },
+              "path_scopes": { "oneOf": [ { "$ref": "#/$defs/globs" }, { "$ref": "#/$defs/unresolved" } ], "description": "Upper bound for allowed_paths of any contract assigned to this role in this project." },
+              "task_kinds": { "type": "array", "items": { "type": "string" } },
+              "network_class": { "enum": ["none", "model-only", "deps"], "description": "Optional per-role cap; may only lower the class of the role's execution profile (platform/agents/execution-profiles.yaml)." },
+              "max_concurrent": { "$ref": "#/$defs/int_or_unresolved" },
+              "ref": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+
+    "review_gates": {
+      "type": "object", "additionalProperties": false, "required": ["gates", "required_reviewers", "human_approvers", "human_approver_rule"],
+      "properties": {
+        "gates": {
+          "type": "object", "additionalProperties": false, "required": ["G1", "G2", "G3", "G4", "G5", "G6", "G7"],
+          "properties": {
+            "G1": { "$ref": "#/$defs/gate" }, "G2": { "$ref": "#/$defs/gate" }, "G3": { "$ref": "#/$defs/gate" },
+            "G4": { "$ref": "#/$defs/gate" }, "G5": { "$ref": "#/$defs/gate" }, "G6": { "$ref": "#/$defs/gate" },
+            "G7": { "allOf": [ { "$ref": "#/$defs/gate" }, { "properties": { "required": { "const": true } } } ] }
+          }
+        },
+        "required_reviewers": {
+          "type": "object", "additionalProperties": false, "required": ["default", "security_sensitive"],
+          "properties": {
+            "default": { "type": "array", "items": { "type": "string", "pattern": "^mdev-[a-z0-9-]+$" } },
+            "security_sensitive": { "type": "array", "items": { "type": "string", "pattern": "^mdev-[a-z0-9-]+$" } },
+            "interface_changes": { "type": "array", "items": { "type": "string", "pattern": "^mdev-[a-z0-9-]+$" } },
+            "root_artefacts": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "human_approvers": { "oneOf": [ { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^[A-Za-z0-9-]+$" } }, { "$ref": "#/$defs/unresolved" } ], "description": "GitHub logins whose approval and merge satisfy G7." },
+        "human_approver_rule": { "const": "repository_owner", "description": "Only the repository owner approves and merges. No agent, App or platform identity ever counts." },
+        "external_gates": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["id", "satisfied_by", "ref"], "properties": { "id": { "type": "string" }, "satisfied_by": { "const": "operator_fact" }, "ref": { "type": "string" } } }, "description": "Project-specific READY preconditions (e.g. Mercury G-S1…G-S5) satisfied only by OIDC-authenticated operator facts." }
+      }
+    },
+
+    "github_policy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["pr_mode", "branch_prefix", "branch_pattern", "base_branch", "merge_by", "agent_may", "ruleset", "codeowners"],
+      "properties": {
+        "pr_mode": { "const": "draft" },
+        "branch_prefix": { "type": "string", "pattern": "^[a-z0-9-]+/$" },
+        "branch_pattern": { "type": "string", "minLength": 1 },
+        "base_branch": { "$ref": "#/$defs/str_or_unresolved" },
+        "merge_by": { "const": "human" },
+        "agent_may": { "type": "array", "items": { "enum": ["push_branch_prefix", "open_draft_pr", "comment"] }, "uniqueItems": true, "description": "Exhaustive. Approve, merge, auto-merge, mark ready, edit rulesets/settings are not representable." },
+        "ruleset": { "oneOf": [ { "$ref": "#/$defs/operator_control" }, { "$ref": "#/$defs/unresolved" } ] },
+        "codeowners": { "oneOf": [ { "$ref": "#/$defs/operator_control" }, { "$ref": "#/$defs/unresolved" } ] },
+        "required_ci_contexts": { "oneOf": [ { "type": "array", "items": { "type": "string" } }, { "$ref": "#/$defs/unresolved" } ] },
+        "commit_trailers": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+
+    "artifacts": {
+      "type": "object", "additionalProperties": false, "required": ["bucket", "retention_days"],
+      "properties": {
+        "bucket": { "type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{2,62}$" },
+        "retention_days": {
+          "type": "object", "additionalProperties": false, "required": ["evidence", "logs", "build_cache"],
+          "properties": { "evidence": { "$ref": "#/$defs/int_or_unresolved" }, "logs": { "$ref": "#/$defs/int_or_unresolved" }, "build_cache": { "$ref": "#/$defs/int_or_unresolved" } }
+        }
+      }
+    },
+
+    "budgets": {
+      "type": "object", "additionalProperties": false, "required": ["cost_usd_per_day", "tokens_per_day", "stop_dispatch_at_fraction", "max_wall_minutes_per_job"],
+      "properties": {
+        "cost_usd_per_day": { "oneOf": [ { "type": "number", "exclusiveMinimum": 0 }, { "$ref": "#/$defs/unresolved" } ] },
+        "tokens_per_day": { "$ref": "#/$defs/int_or_unresolved" },
+        "stop_dispatch_at_fraction": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+        "max_wall_minutes_per_job": { "$ref": "#/$defs/int_or_unresolved" },
+        "ref": { "type": "string" }
+      }
+    },
+
+    "deployment_targets": {
+      "oneOf": [ { "$ref": "#/$defs/deployment_target_list" }, { "$ref": "#/$defs/unresolved" } ],
+      "description": "Targets used ONLY to validate that a build deploys. A production target is never automated by the platform and requires a recorded human approval."
+    },
+
+    "execution_target": {
+      "type": "object", "additionalProperties": false, "required": ["cluster_ref", "namespace_prefix"],
+      "properties": {
+        "cluster_ref": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,40}$", "description": "Name of a cluster registered with the controller ('default' = the platform's own cluster). Moving a project to its own cluster (topology C) changes only this value." },
+        "namespace_prefix": { "type": "string", "pattern": "^proj-[a-z0-9][a-z0-9-]{0,30}$", "description": "Namespaces <prefix>-exec, <prefix>-build and ephemeral <prefix>-t-<runid> are derived from it." }
+      }
+    },
+
+    "cross_project_dependencies": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["project_id", "what", "kind"],
+        "properties": {
+          "project_id": { "$ref": "#/$defs/project_id" },
+          "what": { "type": "string", "description": "Task id, release or artifact of the other project this project waits for." },
+          "kind": { "enum": ["task_completed", "artifact_published"] }
+        }
+      },
+      "description": "Declared dependencies on other projects, evaluated by the controller like contract dependencies[] (15-… §2, 17-… §9). No Job ever receives another project's code; only the dependency's completion fact or a published artifact digest crosses."
+    },
+    "notes": { "type": "array", "items": { "type": "string" } }
+  },
+
+  "$defs": {
+    "project_id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,30}$", "description": "DNS-1123 label fragment; used in namespaces, labels and Job names." },
+    "unresolved": {
+      "type": "object", "additionalProperties": false, "required": ["unresolved"],
+      "properties": {
+        "unresolved": { "type": "string", "minLength": 10, "description": "Why the value is unknown, phrased as the question the operator must answer." },
+        "owner": { "enum": ["operator", "lead-architect", "security", "devops", "tpm"] },
+        "blocks": { "type": "string", "description": "What cannot happen until it is resolved." }
+      }
+    },
+    "planned": {
+      "type": "object", "additionalProperties": false, "required": ["planned", "ref"],
+      "properties": {
+        "planned": { "type": "string", "minLength": 3, "description": "Designed command or job that does not exist in the repository yet." },
+        "ref": { "type": "string", "minLength": 3 },
+        "runner": { "type": "string" }
+      }
+    },
+    "command": {
+      "oneOf": [
+        { "type": "object", "additionalProperties": false, "required": ["run"], "properties": { "run": { "type": "array", "minItems": 1, "items": { "type": "string" } }, "timeout_minutes": { "type": "integer", "minimum": 1 }, "ref": { "type": "string" } } },
+        { "$ref": "#/$defs/planned" },
+        { "$ref": "#/$defs/unresolved" },
+        { "type": "object", "additionalProperties": false, "required": ["not_applicable"], "properties": { "not_applicable": { "type": "string", "minLength": 3 } } }
+      ]
+    },
+    "test_level": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "name", "environment", "commands", "ref"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[A-Za-z0-9-]{1,12}$" },
+        "name": { "type": "string" },
+        "environment": { "type": "string", "description": "id of an entry in environments[]" },
+        "covers": { "type": "array", "items": { "type": "string" }, "description": "Project test levels / suites covered (e.g. L1, L2)." },
+        "commands": {
+          "type": "object", "additionalProperties": false,
+          "required": ["build", "lint", "test", "scan", "deployment_validation"],
+          "properties": {
+            "build": { "$ref": "#/$defs/command" }, "lint": { "$ref": "#/$defs/command" }, "typecheck": { "$ref": "#/$defs/command" },
+            "test": { "$ref": "#/$defs/command" }, "scan": { "$ref": "#/$defs/command" }, "deployment_validation": { "$ref": "#/$defs/command" }
+          }
+        },
+        "needs_secrets": { "type": "array", "items": { "type": "string" } },
+        "fake_results_verify": { "type": "boolean", "description": "false: results at this level never verify a requirement defined at a higher level." },
+        "ref": { "type": "string" }
+      }
+    },
+    "secret_ref": {
+      "type": "object", "additionalProperties": false, "required": ["name", "purpose", "holder", "provisioning"],
+      "properties": {
+        "name": { "type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{2,62}$", "description": "Kubernetes Secret (or external KMS key) NAME only. Never a value." },
+        "purpose": { "type": "string" },
+        "holder": { "enum": ["devplat-gitbroker", "devplat-model-gateway", "devplat-controller", "devplat-api", "test-namespace", "external-lane"], "description": "The only component that mounts it. Never an agent Job." },
+        "scope": { "type": "string" },
+        "provisioning": { "enum": ["not_created", "awaiting_operator", "provisioned"], "description": "Created only by the operator." },
+        "ref": { "type": "string" }
+      }
+    },
+    "operator_control": {
+      "type": "object", "additionalProperties": false, "required": ["spec_ref", "state"],
+      "properties": { "spec_ref": { "type": "string" }, "state": { "enum": ["applied_verified", "awaiting_operator", "not_applicable"] }, "fact": { "type": "string" } }
+    },
+    "gate": {
+      "type": "object", "additionalProperties": false, "required": ["required", "verifier"],
+      "properties": { "required": { "type": "boolean" }, "verifier": { "type": "string" }, "depth": { "type": "string" }, "ref": { "type": "string" } }
+    },
+    "deployment_target_list": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["id", "purpose", "production", "automated"],
+        "properties": {
+          "id": { "type": "string" },
+          "purpose": { "enum": ["deployment_validation"] },
+          "production": { "type": "boolean" },
+          "automated": { "type": "boolean" },
+          "where": { "$ref": "#/$defs/str_or_unresolved" },
+          "approval": { "type": "string" },
+          "ref": { "type": "string" }
+        },
+        "allOf": [ { "if": { "properties": { "production": { "const": true } }, "required": ["production"] }, "then": { "properties": { "automated": { "const": false } }, "required": ["approval"] } } ]
+      }
+    },
+    "digest_image": { "type": "string", "pattern": "^[a-z0-9][a-z0-9./:_-]*@sha256:[0-9a-f]{64}$" },
+    "quantity": { "oneOf": [ { "type": "string", "pattern": "^[0-9]+(\\.[0-9]+)?(m|Ki|Mi|Gi|Ti)?$" }, { "$ref": "#/$defs/unresolved" } ] },
+    "req_lim": {
+      "type": "object", "additionalProperties": false, "required": ["requests", "limits"],
+      "properties": {
+        "requests": { "type": "object", "additionalProperties": false, "required": ["cpu", "memory"], "properties": { "cpu": { "$ref": "#/$defs/quantity" }, "memory": { "$ref": "#/$defs/quantity" } } },
+        "limits": { "type": "object", "additionalProperties": false, "required": ["cpu", "memory"], "properties": { "cpu": { "$ref": "#/$defs/quantity" }, "memory": { "$ref": "#/$defs/quantity" } } }
+      }
+    },
+    "globs": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "str_or_unresolved": { "oneOf": [ { "type": "string", "minLength": 1 }, { "$ref": "#/$defs/unresolved" } ] },
+    "int_or_unresolved": { "oneOf": [ { "type": "integer", "minimum": 0 }, { "$ref": "#/$defs/unresolved" } ] },
+    "refs_or_unresolved": { "oneOf": [ { "type": "array", "items": { "type": "string", "minLength": 1 } }, { "$ref": "#/$defs/unresolved" } ] }
+  }
+}

@@ -1,0 +1,14 @@
+{{- /*
+devplat-model-gateway: the only egress path from agent pods to LLM APIs. Injects the provider API key (agents never
+see it), enforces a host allowlist and per-project token/cost budgets. No DB credentials; budget counters are
+reported to the controller.
+*/}}
+{{- $env := "" -}}
+{{- $vols := "" -}}
+{{- $mounts := "" -}}
+{{- range $i, $p := .Values.modelGateway.providers -}}
+{{- $env = printf "%s- name: DEVPLAT_PROVIDER_%d_NAME\n  value: %q\n- name: DEVPLAT_PROVIDER_%d_HOST\n  value: %q\n- name: DEVPLAT_PROVIDER_%d_KEY_FILE\n  value: \"/var/run/devplat/providers/%s/%s\"\n" $env $i $p.name $i $p.host $i $p.name $p.apiKeySecretRef.key -}}
+{{- $vols = printf "%s- name: provider-%s\n  secret:\n    secretName: %s\n    defaultMode: 0400\n    items:\n      - key: %s\n        path: %s\n" $vols $p.name $p.apiKeySecretRef.name $p.apiKeySecretRef.key $p.apiKeySecretRef.key -}}
+{{- $mounts = printf "%s- name: provider-%s\n  mountPath: /var/run/devplat/providers/%s\n  readOnly: true\n" $mounts $p.name $p.name -}}
+{{- end -}}
+{{ include "devplat.workload" (dict "root" . "name" "devplat-model-gateway" "key" "modelGateway" "comp" .Values.modelGateway "port" (int .Values.modelGateway.service.port) "env" (trimSuffix "\n" $env) "automount" false "volumes" (trimSuffix "\n" $vols) "volumeMounts" (trimSuffix "\n" $mounts)) }}

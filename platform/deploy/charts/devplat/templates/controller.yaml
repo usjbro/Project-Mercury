@@ -1,0 +1,68 @@
+{{- /*
+devplat-controller: deterministic task state machine, multi-project admission, Job creation/reconciliation,
+gate verification. Sole writer of task state (DB role devplat_controller). 2 replicas, one active leader
+(coordination.k8s.io Lease); the standby does no writes.
+*/}}
+{{- $env := printf `- name: DEVPLAT_LEADER_ELECTION_LEASE
+  value: %q
+- name: DEVPLAT_LEASE_DURATION_SECONDS
+  value: %q
+- name: DEVPLAT_RENEW_DEADLINE_SECONDS
+  value: %q
+- name: DEVPLAT_RETRY_PERIOD_SECONDS
+  value: %q
+- name: DEVPLAT_GLOBAL_MAX_JOBS
+  value: %q
+- name: DEVPLAT_DEFAULT_PROJECT_MAX_JOBS
+  value: %q
+- name: DEVPLAT_TEST_NS_TTL_SECONDS
+  value: %q
+- name: DEVPLAT_MAX_TEST_NS_PER_PROJECT
+  value: %q
+- name: DEVPLAT_GITBROKER_URL
+  value: "http://devplat-gitbroker.%s.svc:%d"
+- name: DEVPLAT_ARTIFACTS_ENDPOINT
+  value: %q
+- name: DEVPLAT_ARTIFACTS_BUCKET_PREFIX
+  value: %q
+- name: DEVPLAT_DB_HOST
+  value: %q
+- name: DEVPLAT_DB_NAME
+  value: "devplat"
+- name: DEVPLAT_DB_USER
+  valueFrom:
+    secretKeyRef:
+      name: %s
+      key: username
+- name: DEVPLAT_DB_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: %s
+      key: password
+- name: AWS_ACCESS_KEY_ID
+  valueFrom:
+    secretKeyRef:
+      name: %s
+      key: access-key-id
+- name: AWS_SECRET_ACCESS_KEY
+  valueFrom:
+    secretKeyRef:
+      name: %s
+      key: secret-access-key`
+  .Values.controller.leaderElection.leaseName
+  (toString .Values.controller.leaderElection.leaseDurationSeconds)
+  (toString .Values.controller.leaderElection.renewDeadlineSeconds)
+  (toString .Values.controller.leaderElection.retryPeriodSeconds)
+  (toString .Values.controller.admission.globalMaxConcurrentJobs)
+  (toString .Values.controller.admission.defaultPerProjectMaxConcurrentJobs)
+  (toString .Values.controller.admission.testNamespaceTtlSeconds)
+  (toString .Values.controller.admission.maxTestNamespacesPerProject)
+  .Release.Namespace (int .Values.gitbroker.service.port)
+  .Values.artifacts.endpoint
+  .Values.artifacts.bucketPrefix
+  (include "devplat.pgHost" .)
+  (include "devplat.pgSecret" (dict "root" . "role" "controller"))
+  (include "devplat.pgSecret" (dict "root" . "role" "controller"))
+  .Values.artifacts.credentialsSecretRef
+  .Values.artifacts.credentialsSecretRef -}}
+{{ include "devplat.workload" (dict "root" . "name" "devplat-controller" "key" "controller" "comp" .Values.controller "port" 9090 "env" $env "automount" true "volumes" "" "volumeMounts" "") }}
