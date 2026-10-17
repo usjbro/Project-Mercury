@@ -32,15 +32,21 @@ def frontmatter(text):
     return yaml.safe_load(text.split("---")[1])
 
 
+def read_at(commit, rel):
+    """Read a repository file at the pinned commit (provenance must match the annotation; R6 F28)."""
+    r = subprocess.run(["git", "show", f"{commit}:{rel}"], cwd=ROOT, capture_output=True)
+    if r.returncode != 0:
+        raise SystemExit(f"cannot read {rel} at {commit}: {r.stderr.decode().strip()}")
+    return r.stdout.decode("utf-8")
+
+
 def build(project, namespace, commit):
-    profiles = yaml.safe_load(open(os.path.join(ROOT, "platform/agents/execution-profiles.yaml")))["profiles"]
-    deny = json.load(open(os.path.join(ROOT, ".claude/settings.json")))["permissions"]["deny"]
+    profiles = yaml.safe_load(read_at(commit, "platform/agents/execution-profiles.yaml"))["profiles"]
+    deny = json.loads(read_at(commit, ".claude/settings.json"))["permissions"]["deny"]
     data, ann = {}, {"devplat.io/source-commit": commit}
     for p in profiles:
-        path = os.path.join(ROOT, p["agent_definition"])
-        if not os.path.exists(path):
-            raise SystemExit(f"missing agent definition {p['agent_definition']} for role {p['role']}")
-        raw = open(path, encoding="utf-8").read()
+        path = p["agent_definition"]
+        raw = read_at(commit, path)
         out = raw.replace(HOOK_FROM, HOOK_TO)
         key = os.path.basename(path)
         data[key] = out
@@ -67,7 +73,7 @@ def main():
     ap.add_argument("--namespace", required=True)
     ap.add_argument("--commit")
     a = ap.parse_args()
-    commit = a.commit or subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True).stdout.strip()
+    commit = subprocess.run(["git", "rev-parse", a.commit or "HEAD"], cwd=ROOT, capture_output=True, text=True).stdout.strip()
     yaml.safe_dump(build(a.project, a.namespace, commit), sys.stdout, sort_keys=False, width=1000)
 
 

@@ -33,7 +33,7 @@ Levels:
 | AT-17 | Untrusted-code isolation | Exec pods run under gVisor on the exec pool (`runsc` visible in the pod sandbox). The reduced-assurance mode is flagged on a single node without gVisor | K2 | Not run |
 | AT-18 | Container crash recovery | Kill the agent container. Expected: attempt_failed or env_retry per classification, a new attempt within budget, evidence kept | K1 | Not run |
 | AT-19 | Controller restart recovery | Delete the leader pod during a run. Expected: a new leader within the lease duration, Jobs adopted by label, no duplicate Job, no lost event | K1 | Not run |
-| AT-20 | Node failure | Drain or kill the exec node. Expected: a DisruptionTarget pod is ignored by `podFailurePolicy` and recreated; or the attempt is reclaimed, with idempotent side effects | K2 | Not run |
+| AT-20 | Node failure | Drain or kill the exec node. Expected: the pod gets `DisruptionTarget`; `podFailurePolicy` fails the Job (`FailJob`); the controller classifies it as environmental and records `env_retry`; a new dispatch (`-d<n+1>`, new uid) runs in the same attempt; side effects stay idempotent; the evidence of the failed dispatch is kept | K2 | Not run |
 | AT-21 | Network interruption and rate limits | Fault proxy in front of GitHub, Linear and the LLM. Expected: backoff, no duplicate outbox side effects (dedup keys) | K1 | Not run |
 | AT-22 | Bootstrap step 10 | Simulated worker failure recovered, with evidence | K1 | Not run |
 | AT-23 | Concurrency when safe | The amendment's mix runs together: 2 backend Mercury, 1 DB Jupiter-dummy, 1 test Mercury, 1 review Jupiter-dummy. Quotas and fair share are respected; ownership conflicts are refused | K1/K2 | Not run |
