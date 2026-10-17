@@ -1,26 +1,29 @@
 # devplat base: ValidatingAdmissionPolicies (admissionregistration.k8s.io/v1, GA since v1.30).
-# Status: Documented only / not deployed. CEL expressions were syntax-checked offline only (see doc 18 §13);
-# they have NOT been evaluated by a kube-apiserver. Deploy first with validationActions [Warn, Audit] in a
-# scratch cluster, confirm status.typeChecking is empty, then switch to [Deny, Audit].
+# Status: Documented only / not deployed. CEL expressions were compiled offline with the Kubernetes v0.33 CEL
+# environment and evaluated against sample requests with untyped (dynamic) objects (doc 18 §13); they have NOT
+# been evaluated by a kube-apiserver. Deploy first with validationActions [Warn, Audit] in a scratch cluster,
+# confirm status.typeChecking is empty, then switch to [Deny, Audit].
 # Design and rationale: docs/mercury/development-orchestration/18-kubernetes-security-model.md §10.
 #
-# Scope is by namespace label (devplat.io/managed, devplat.io/tier). Only the operator can change namespace labels
-# (no devplat identity has namespaces update); devplat-namespacer-scope pins the labels of ephemeral namespaces.
+# Scope is by namespace label devplat.io/ns-role. Only the operator can change namespace labels (no devplat
+# identity has namespaces update); devplat-namespacer-scope pins the labels of test namespaces.
 # failurePolicy: Fail everywhere: a broken or unevaluable policy denies.
 #
 # Policies
-#   devplat-pod-hardening            all managed namespaces: no host namespaces/paths/ports, privileged, added caps,
-#                                    unmasked /proc, sysctls, ephemeral containers (covers the PSA "privileged" build tier)
-#   devplat-proj-pod-identity        project tiers: no SA token, fixed SA per tier, volume type allowlist, only
-#                                    per-run (dp-*) Secrets, no imagePullSecrets, labels match the namespace's project
-#   devplat-proj-runtime-placement   project tiers: sandboxed RuntimeClass (exec/test); build: sandbox or build pool
-#   devplat-platform-placement       platform tiers: may not tolerate the exec taint
-#   devplat-build-exceptions         build tier: restricted-equivalent except named BuildKit exceptions
-#   devplat-image-pinning            all managed namespaces: digest-pinned images from allowed prefixes (params)
-#   devplat-job-shape                project tiers: Job invariants owned by the controller (backoffLimit 0, deadline,
-#                                    TTL, labels, no manualSelector, single pod)
+#   devplat-pod-hardening            every devplat namespace: no host namespaces/paths/ports, privileged, added caps,
+#                                    unmasked /proc (BuildKit+userns exception), sysctls, ephemeral containers.
+#                                    Covers the PSA "privileged" build namespaces.
+#   devplat-proj-pod-identity        project namespaces: no SA token, fixed SA, volume allowlist, only per-run (dp-*)
+#                                    Secrets, no imagePullSecrets, project/workload/network-class labels
+#   devplat-proj-runtime-placement   project namespaces: sandboxed RuntimeClass (exec/test); build: sandbox or build pool
+#   devplat-platform-placement       platform namespaces: may not tolerate exec/build taints or use sandbox classes
+#   devplat-build-exceptions         build namespaces: restricted-equivalent except the named BuildKit exceptions
+#   devplat-image-pinning            every devplat namespace: digest-pinned images from allowed prefixes (params)
+#   devplat-job-shape                project namespaces: Job invariants (backoffLimit 0, deadline, TTL, labels, 1 pod)
 #   devplat-secret-pinning           devplat-system: each platform credential mountable only by its owner SA
 #   devplat-namespacer-scope         every write by devplat-namespacer confined to proj-<P>-t-<runid>
+#   devplat-controller-job-update    the controller's only Job mutation is unsuspend
+#   devplat-controller-run-objects   the controller's ConfigMaps/Secrets: dp-* names, owned by one Job, immutable
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -30,12 +33,12 @@ metadata:
   labels:
     app.kubernetes.io/part-of: devplat
   annotations:
-    devplat.io/placeholder: "registry.example.invalid is a placeholder; the overlay sets the real registry/mirror prefixes"
+    devplat.io/placeholder: "registry.devplat.internal (as in doc 16) is a placeholder; the overlay sets the real registry/mirror prefixes"
 data:
   # Comma-separated image reference prefixes. Every image must ALSO contain '@sha256:'.
-  allowedImagePrefixes: "registry.example.invalid/devplat/,registry.example.invalid/projects/,registry.example.invalid/mirror/"
+  allowedImagePrefixes: "registry.devplat.internal/devplat/,registry.devplat.internal/projects/,registry.devplat.internal/mirror/"
   # The only image that may run as the named container 'buildkitd' with the BuildKit exceptions.
-  buildkitImagePrefix: "registry.example.invalid/mirror/moby/buildkit@sha256:"
+  buildkitImagePrefix: "registry.devplat.internal/mirror/moby/buildkit@sha256:"
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
@@ -45,8 +48,10 @@ spec:
   failurePolicy: Fail
   matchConstraints:
     namespaceSelector:
-      matchLabels:
-        devplat.io/managed: "true"
+      matchExpressions:
+        - key: devplat.io/ns-role
+          operator: In
+          values: ["system", "artifacts", "observability", "exec", "build", "test"]
     resourceRules:
       - apiGroups: [""]
         apiVersions: ["v1"]
@@ -55,6 +60,8 @@ spec:
   variables:
     - name: containers
       expression: "object.spec.containers + (has(object.spec.initContainers) ? object.spec.initContainers : [])"
+    - name: nsRole
+      expression: "namespaceObject.metadata.labels['devplat.io/ns-role']"
   validations:
     - expression: "!has(object.spec.hostNetwork) || object.spec.hostNetwork == false"
       message: "hostNetwork is forbidden in devplat namespaces."
@@ -69,9 +76,9 @@ spec:
     - expression: "variables.containers.all(c, !has(c.ports) || c.ports.all(p, !has(p.hostPort) || p.hostPort == 0))"
       message: "hostPort is forbidden."
     - expression: "variables.containers.all(c, !has(c.securityContext) || !has(c.securityContext.capabilities) || !has(c.securityContext.capabilities.add) || size(c.securityContext.capabilities.add) == 0)"
-      message: "adding Linux capabilities is forbidden."
-    - expression: "variables.containers.all(c, !has(c.securityContext) || !has(c.securityContext.procMount) || c.securityContext.procMount == 'Default')"
-      message: "procMount Unmasked is forbidden."
+      message: "adding Linux capabilities is forbidden (services listen on ports >= 1024)."
+    - expression: "variables.containers.all(c, !has(c.securityContext) || !has(c.securityContext.procMount) || c.securityContext.procMount == 'Default' || (variables.nsRole == 'build' && c.name == 'buildkitd' && has(object.spec.hostUsers) && object.spec.hostUsers == false))"
+      message: "procMount Unmasked is forbidden (exception: buildkitd in a build namespace with a user namespace, hostUsers: false)."
     - expression: "!has(object.spec.securityContext) || !has(object.spec.securityContext.sysctls) || size(object.spec.securityContext.sysctls) == 0"
       message: "pod sysctls are forbidden."
     - expression: "!has(object.spec.ephemeralContainers) || size(object.spec.ephemeralContainers) == 0"
@@ -94,10 +101,7 @@ spec:
   matchConstraints:
     namespaceSelector:
       matchExpressions:
-        - key: devplat.io/managed
-          operator: In
-          values: ["true"]
-        - key: devplat.io/tier
+        - key: devplat.io/ns-role
           operator: In
           values: ["exec", "build", "test"]
     resourceRules:
@@ -106,12 +110,16 @@ spec:
         operations: ["CREATE"]
         resources: ["pods"]
   variables:
-    - name: tier
-      expression: "namespaceObject.metadata.labels['devplat.io/tier']"
+    - name: nsRole
+      expression: "namespaceObject.metadata.labels['devplat.io/ns-role']"
+    - name: project
+      expression: "namespaceObject.metadata.labels['devplat.io/project']"
     - name: allowedServiceAccounts
-      expression: "{'exec': ['devplat-agent', 'devplat-planner'], 'build': ['devplat-build'], 'test': ['default']}"
-    - name: allowedRoles
-      expression: "{'exec': ['agent', 'planner'], 'build': ['build'], 'test': ['test', 'fixture']}"
+      expression: "{'exec': [variables.project + '-agent'], 'build': [variables.project + '-build'], 'test': ['default']}"
+    - name: allowedWorkloads
+      expression: "{'exec': ['agent', 'planner', 'verifier'], 'build': ['build'], 'test': ['test', 'fixture']}"
+    - name: allowedNetworkClasses
+      expression: "{'exec': ['none', 'model-only', 'deps'], 'build': ['none'], 'test': ['none', 'deps']}"
     - name: containers
       expression: "object.spec.containers + (has(object.spec.initContainers) ? object.spec.initContainers : [])"
     - name: labels
@@ -119,8 +127,8 @@ spec:
   validations:
     - expression: "has(object.spec.automountServiceAccountToken) && object.spec.automountServiceAccountToken == false"
       message: "project pods must set automountServiceAccountToken: false (no Kubernetes API credential in agent, build or test pods)."
-    - expression: "object.spec.serviceAccountName in variables.allowedServiceAccounts[variables.tier]"
-      message: "project pods must use the tier's zero-RBAC ServiceAccount."
+    - expression: "object.spec.serviceAccountName in variables.allowedServiceAccounts[variables.nsRole]"
+      message: "project pods must use the namespace role's zero-RBAC ServiceAccount (<project>-agent, <project>-build, default in test)."
     - expression: "!has(object.spec.volumes) || object.spec.volumes.all(v, !has(v.projected) || !has(v.projected.sources) || v.projected.sources.all(s, !has(s.serviceAccountToken)))"
       message: "projected ServiceAccount tokens are forbidden in project pods."
     - expression: "!has(object.spec.volumes) || object.spec.volumes.all(v, has(v.emptyDir) || has(v.configMap) || has(v.secret) || has(v.projected) || has(v.downwardAPI) || has(v.ephemeral) || has(v.persistentVolumeClaim))"
@@ -131,12 +139,12 @@ spec:
       message: "project pods may reference only per-run Secrets (name prefix dp-) from env."
     - expression: "!has(object.spec.imagePullSecrets) || size(object.spec.imagePullSecrets) == 0"
       message: "imagePullSecrets are forbidden in project pods (images come from the node-authenticated mirror)."
-    - expression: "'devplat.io/project' in variables.labels && 'devplat.io/project' in namespaceObject.metadata.labels && variables.labels['devplat.io/project'] == namespaceObject.metadata.labels['devplat.io/project']"
+    - expression: "'devplat.io/project' in variables.labels && variables.labels['devplat.io/project'] == variables.project"
       message: "pod label devplat.io/project must equal the namespace's project."
-    - expression: "'devplat.io/role' in variables.labels && variables.labels['devplat.io/role'] in variables.allowedRoles[variables.tier]"
-      message: "pod label devplat.io/role must be one of the tier's roles."
-    - expression: "!('devplat.io/network-class' in variables.labels) || variables.labels['devplat.io/network-class'] in ['none', 'deps']"
-      message: "devplat.io/network-class must be none or deps."
+    - expression: "'devplat.io/workload' in variables.labels && variables.labels['devplat.io/workload'] in variables.allowedWorkloads[variables.nsRole]"
+      message: "pod label devplat.io/workload must be one of the namespace role's workloads (NetworkPolicies select on it)."
+    - expression: "!('devplat.io/network-class' in variables.labels) || variables.labels['devplat.io/network-class'] in variables.allowedNetworkClasses[variables.nsRole]"
+      message: "devplat.io/network-class must be allowed for this namespace role (exec: none|model-only|deps; build: none; test: none|deps)."
     - expression: "!has(object.spec.shareProcessNamespace) || object.spec.shareProcessNamespace == false"
       message: "shareProcessNamespace is forbidden in project pods."
 ---
@@ -157,10 +165,7 @@ spec:
   matchConstraints:
     namespaceSelector:
       matchExpressions:
-        - key: devplat.io/managed
-          operator: In
-          values: ["true"]
-        - key: devplat.io/tier
+        - key: devplat.io/ns-role
           operator: In
           values: ["exec", "build", "test"]
     resourceRules:
@@ -169,20 +174,20 @@ spec:
         operations: ["CREATE"]
         resources: ["pods"]
   variables:
-    - name: tier
-      expression: "namespaceObject.metadata.labels['devplat.io/tier']"
+    - name: nsRole
+      expression: "namespaceObject.metadata.labels['devplat.io/ns-role']"
     - name: sandboxed
       expression: "has(object.spec.runtimeClassName) && object.spec.runtimeClassName in ['gvisor', 'kata']"
     - name: onBuildPool
       expression: "has(object.spec.nodeSelector) && 'devplat.io/pool' in object.spec.nodeSelector && object.spec.nodeSelector['devplat.io/pool'] == 'build'"
   validations:
-    - expression: "variables.tier == 'build' || variables.sandboxed"
-      message: "agent, planner and test pods must use RuntimeClass gvisor or kata (exec node pool)."
-    - expression: "variables.tier != 'build' || variables.sandboxed || variables.onBuildPool"
+    - expression: "variables.nsRole == 'build' || variables.sandboxed"
+      message: "agent, planner, verifier and test pods must use RuntimeClass gvisor or kata (exec node pool)."
+    - expression: "variables.nsRole != 'build' || variables.sandboxed || variables.onBuildPool"
       message: "build pods must use RuntimeClass gvisor/kata or run on the dedicated build pool (nodeSelector devplat.io/pool=build)."
 ---
 # Reduced-assurance (single-node workstation without gVisor/Kata): the workstation overlay changes ONLY this
-# binding to validationActions [Warn, Audit] and the controller records assurance=reduced in every run's evidence.
+# binding to validationActions [Warn, Audit], and the controller records assurance=reduced on every task event.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding
 metadata:
@@ -202,10 +207,7 @@ spec:
   matchConstraints:
     namespaceSelector:
       matchExpressions:
-        - key: devplat.io/managed
-          operator: In
-          values: ["true"]
-        - key: devplat.io/tier
+        - key: devplat.io/ns-role
           operator: In
           values: ["system", "artifacts", "observability"]
     resourceRules:
@@ -239,8 +241,7 @@ spec:
   matchConstraints:
     namespaceSelector:
       matchLabels:
-        devplat.io/managed: "true"
-        devplat.io/tier: build
+        devplat.io/ns-role: build
     resourceRules:
       - apiGroups: [""]
         apiVersions: ["v1"]
@@ -267,7 +268,7 @@ spec:
     - expression: "variables.containers.all(c, has(c.securityContext) && has(c.securityContext.capabilities) && has(c.securityContext.capabilities.drop) && 'ALL' in c.securityContext.capabilities.drop)"
       message: "build containers must drop ALL capabilities."
     - expression: "variables.containers.all(c, ((has(c.securityContext) && has(c.securityContext.seccompProfile)) ? c.securityContext.seccompProfile.type : variables.podSeccomp) in ['RuntimeDefault', 'Localhost'] || (c.name == 'buildkitd' && ((has(c.securityContext) && has(c.securityContext.seccompProfile)) ? c.securityContext.seccompProfile.type : variables.podSeccomp) == 'Unconfined'))"
-      message: "seccomp must be RuntimeDefault or Localhost; only buildkitd may be Unconfined (prefer the Localhost profile devplat-buildkit)."
+      message: "seccomp must be RuntimeDefault or Localhost; only buildkitd may be Unconfined (prefer a Localhost profile)."
     - expression: "variables.containers.all(c, ((has(c.securityContext) && has(c.securityContext.appArmorProfile)) ? c.securityContext.appArmorProfile.type : variables.podAppArmor) != 'Unconfined' || c.name == 'buildkitd')"
       message: "AppArmor Unconfined is allowed only for buildkitd."
     - expression: "!has(object.metadata.annotations) || object.metadata.annotations.all(k, !k.startsWith('container.apparmor.security.beta.kubernetes.io/') || object.metadata.annotations[k] != 'unconfined' || k == 'container.apparmor.security.beta.kubernetes.io/buildkitd')"
@@ -298,8 +299,10 @@ spec:
     kind: ConfigMap
   matchConstraints:
     namespaceSelector:
-      matchLabels:
-        devplat.io/managed: "true"
+      matchExpressions:
+        - key: devplat.io/ns-role
+          operator: In
+          values: ["system", "artifacts", "observability", "exec", "build", "test"]
     resourceRules:
       - apiGroups: [""]
         apiVersions: ["v1"]
@@ -337,10 +340,7 @@ spec:
   matchConstraints:
     namespaceSelector:
       matchExpressions:
-        - key: devplat.io/managed
-          operator: In
-          values: ["true"]
-        - key: devplat.io/tier
+        - key: devplat.io/ns-role
           operator: In
           values: ["exec", "build", "test"]
     resourceRules:
@@ -353,8 +353,10 @@ spec:
       expression: "has(object.metadata.labels) ? object.metadata.labels : {}"
     - name: podLabels
       expression: "has(object.spec.template.metadata) && has(object.spec.template.metadata.labels) ? object.spec.template.metadata.labels : {}"
-    - name: required
-      expression: "['devplat.io/project', 'devplat.io/task', 'devplat.io/attempt', 'devplat.io/role', 'devplat.io/idempotency-key']"
+    - name: requiredJob
+      expression: "['devplat.io/project', 'devplat.io/task', 'devplat.io/attempt', 'devplat.io/role', 'devplat.io/idempotency-key', 'devplat.io/network-class']"
+    - name: mirrored
+      expression: "['devplat.io/project', 'devplat.io/task', 'devplat.io/attempt', 'devplat.io/role', 'devplat.io/network-class']"
   validations:
     - expression: "object.metadata.name.matches('^dp-[a-z0-9]([-a-z0-9]*[a-z0-9])?$') && size(object.metadata.name) <= 63"
       message: "Job names are deterministic dp-<project>-<task>-a<attempt> DNS-1123 labels of at most 63 characters."
@@ -368,8 +370,10 @@ spec:
       message: "manualSelector is forbidden (a Job could adopt foreign pods)."
     - expression: "(!has(object.spec.parallelism) || object.spec.parallelism == 1) && (!has(object.spec.completions) || object.spec.completions == 1)"
       message: "one Job = one pod run."
-    - expression: "variables.required.all(k, k in variables.labels && k in variables.podLabels && variables.labels[k] == variables.podLabels[k])"
-      message: "Job and pod template must carry identical devplat.io/project, task, attempt, role and idempotency-key labels."
+    - expression: "variables.requiredJob.all(k, k in variables.labels)"
+      message: "Jobs must carry devplat.io/project, task, attempt, role, idempotency-key and network-class labels."
+    - expression: "variables.mirrored.all(k, k in variables.podLabels && variables.labels[k] == variables.podLabels[k]) && 'devplat.io/workload' in variables.podLabels"
+      message: "the pod template must repeat project, task, attempt, role and network-class and carry devplat.io/workload."
     - expression: "'devplat.io/project' in namespaceObject.metadata.labels && variables.labels['devplat.io/project'] == namespaceObject.metadata.labels['devplat.io/project']"
       message: "devplat.io/project must equal the namespace's project (no cross-project Jobs)."
     - expression: "has(object.spec.template.spec.automountServiceAccountToken) && object.spec.template.spec.automountServiceAccountToken == false"
@@ -399,9 +403,10 @@ spec:
         operations: ["CREATE"]
         resources: ["pods"]
   variables:
-    # Secret name -> the only ServiceAccounts whose pods may reference it. Names are fixed by this base.
+    # Secret name -> the only ServiceAccounts whose pods may reference it. Names are fixed by this base; the chart
+    # values must use the same names (doc 18 §5.1).
     - name: pinned
-      expression: "{'devplat-gitbroker-github-app': ['devplat-gitbroker'], 'devplat-model-gateway-llm-keys': ['devplat-model-gateway'], 'devplat-db-controller': ['devplat-controller'], 'devplat-db-api': ['devplat-api'], 'devplat-artifacts-controller': ['devplat-controller'], 'devplat-artifacts-gitbroker': ['devplat-gitbroker'], 'devplat-artifacts-api': ['devplat-api'], 'devplat-oidc-client': ['devplat-api'], 'devplat-linear-token': ['devplat-api']}"
+      expression: "{'devplat-gitbroker-github-app': ['devplat-gitbroker'], 'devplat-model-gateway-llm-keys': ['devplat-model-gateway'], 'devplat-db-controller': ['devplat-controller'], 'devplat-db-api': ['devplat-api'], 'devplat-db-model-gateway': ['devplat-model-gateway'], 'devplat-artifacts-controller': ['devplat-controller'], 'devplat-artifacts-gitbroker': ['devplat-gitbroker'], 'devplat-artifacts-gitbroker-fetch': ['devplat-gitbroker-fetch'], 'devplat-artifacts-api': ['devplat-api'], 'devplat-oidc-client': ['devplat-api'], 'devplat-linear-token': ['devplat-api']}"
     - name: sa
       expression: "has(object.spec.serviceAccountName) ? object.spec.serviceAccountName : 'default'"
     - name: containers
@@ -455,12 +460,12 @@ spec:
     - name: newLabels
       expression: "has(object.metadata.labels) ? object.metadata.labels : {}"
   validations:
-    - expression: "variables.targetName.matches('^proj-[a-z0-9]([a-z0-9]{0,18}[a-z0-9])?-t-[a-z0-9]{6,20}$')"
-      message: "devplat-namespacer may act only on ephemeral test namespaces proj-<project>-t-<runid>."
-    - expression: "!variables.isNamespace || request.operation != 'CREATE' || ('devplat.io/managed' in variables.newLabels && variables.newLabels['devplat.io/managed'] == 'true' && 'devplat.io/tier' in variables.newLabels && variables.newLabels['devplat.io/tier'] == 'test' && 'devplat.io/ephemeral' in variables.newLabels && variables.newLabels['devplat.io/ephemeral'] == 'true' && 'pod-security.kubernetes.io/enforce' in variables.newLabels && variables.newLabels['pod-security.kubernetes.io/enforce'] == 'restricted' && 'devplat.io/project' in variables.newLabels && variables.targetName.startsWith('proj-' + variables.newLabels['devplat.io/project'] + '-t-'))"
-      message: "ephemeral namespaces must be created with devplat.io/managed=true, tier=test, ephemeral=true, PSA enforce=restricted and a devplat.io/project matching the name."
-    - expression: "!variables.isNamespace || request.operation != 'DELETE' || (has(oldObject.metadata.labels) && 'devplat.io/ephemeral' in oldObject.metadata.labels && oldObject.metadata.labels['devplat.io/ephemeral'] == 'true')"
-      message: "devplat-namespacer may delete only namespaces labelled devplat.io/ephemeral=true."
+    - expression: "variables.targetName.matches('^proj-[a-z0-9]([-a-z0-9]{0,22}[a-z0-9])?-t-[0-9a-f]{8}$')"
+      message: "devplat-namespacer may act only on test namespaces proj-<project>-t-<8 hex runid>."
+    - expression: "!variables.isNamespace || request.operation != 'CREATE' || ('devplat.io/managed-by' in variables.newLabels && variables.newLabels['devplat.io/managed-by'] == 'devplat-controller' && 'devplat.io/ns-role' in variables.newLabels && variables.newLabels['devplat.io/ns-role'] == 'test' && 'pod-security.kubernetes.io/enforce' in variables.newLabels && variables.newLabels['pod-security.kubernetes.io/enforce'] == 'restricted' && 'devplat.io/project' in variables.newLabels && variables.targetName.startsWith('proj-' + variables.newLabels['devplat.io/project'] + '-t-'))"
+      message: "test namespaces must be created with devplat.io/managed-by=devplat-controller, devplat.io/ns-role=test, PSA enforce=restricted and a devplat.io/project matching the name."
+    - expression: "!variables.isNamespace || request.operation != 'DELETE' || (has(oldObject.metadata.labels) && 'devplat.io/ns-role' in oldObject.metadata.labels && oldObject.metadata.labels['devplat.io/ns-role'] == 'test' && 'devplat.io/managed-by' in oldObject.metadata.labels && oldObject.metadata.labels['devplat.io/managed-by'] == 'devplat-controller')"
+      message: "devplat-namespacer may delete only test namespaces it manages (ns-role=test, managed-by=devplat-controller)."
     - expression: "request.kind.kind != 'RoleBinding' || (object.roleRef.kind == 'ClusterRole' && object.roleRef.name == 'devplat-test-runner' && has(object.subjects) && size(object.subjects) == 1 && object.subjects[0].kind == 'ServiceAccount' && object.subjects[0].name == 'devplat-controller' && has(object.subjects[0].namespace) && object.subjects[0].namespace == 'devplat-system')"
       message: "devplat-namespacer may only bind ClusterRole devplat-test-runner to the controller ServiceAccount."
 ---
@@ -470,4 +475,76 @@ metadata:
   name: devplat-namespacer-scope
 spec:
   policyName: devplat-namespacer-scope
+  validationActions: ["Deny", "Audit"]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: devplat-controller-job-update
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["batch"]
+        apiVersions: ["v1"]
+        operations: ["UPDATE"]
+        resources: ["jobs"]
+  matchConditions:
+    - name: is-controller
+      expression: "request.userInfo.username == 'system:serviceaccount:devplat-system:devplat-controller'"
+  variables:
+    - name: wasSuspended
+      expression: "has(oldObject.spec.suspend) && oldObject.spec.suspend == true"
+    - name: isSuspended
+      expression: "has(object.spec.suspend) && object.spec.suspend == true"
+  validations:
+    - expression: "object.spec.template == oldObject.spec.template"
+      message: "the controller may not change a Job's pod template (also not the scheduling directives mutable while suspended)."
+    - expression: "(has(object.metadata.labels) ? object.metadata.labels : {}) == (has(oldObject.metadata.labels) ? oldObject.metadata.labels : {})"
+      message: "the controller may not relabel a Job."
+    - expression: "variables.isSuspended == variables.wasSuspended || (variables.wasSuspended && !variables.isSuspended)"
+      message: "the only Job change the controller makes is unsuspend (suspend true -> false)."
+    - expression: "object.spec.backoffLimit == oldObject.spec.backoffLimit && (has(object.spec.activeDeadlineSeconds) ? object.spec.activeDeadlineSeconds : 0) == (has(oldObject.spec.activeDeadlineSeconds) ? oldObject.spec.activeDeadlineSeconds : 0) && (has(object.spec.ttlSecondsAfterFinished) ? object.spec.ttlSecondsAfterFinished : -1) == (has(oldObject.spec.ttlSecondsAfterFinished) ? oldObject.spec.ttlSecondsAfterFinished : -1)"
+      message: "backoffLimit, activeDeadlineSeconds and ttlSecondsAfterFinished are fixed at creation."
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: devplat-controller-job-update
+spec:
+  policyName: devplat-controller-job-update
+  validationActions: ["Deny", "Audit"]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: devplat-controller-run-objects
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "DELETE"]
+        resources: ["configmaps", "secrets"]
+  matchConditions:
+    - name: is-controller
+      expression: "request.userInfo.username == 'system:serviceaccount:devplat-system:devplat-controller'"
+  variables:
+    - name: name
+      expression: "request.operation == 'DELETE' ? oldObject.metadata.name : object.metadata.name"
+  validations:
+    - expression: "variables.name.startsWith('dp-')"
+      message: "the controller creates and deletes only per-run objects named dp-*."
+    - expression: "request.operation != 'CREATE' || (has(object.metadata.ownerReferences) && size(object.metadata.ownerReferences) == 1 && object.metadata.ownerReferences[0].apiVersion == 'batch/v1' && object.metadata.ownerReferences[0].kind == 'Job' && object.metadata.name.startsWith(object.metadata.ownerReferences[0].name + '-'))"
+      message: "per-run ConfigMaps/Secrets must be owned by exactly one Job whose name prefixes theirs."
+    - expression: "request.operation != 'CREATE' || (has(object.immutable) && object.immutable == true)"
+      message: "per-run ConfigMaps/Secrets must be immutable."
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: devplat-controller-run-objects
+spec:
+  policyName: devplat-controller-run-objects
   validationActions: ["Deny", "Audit"]

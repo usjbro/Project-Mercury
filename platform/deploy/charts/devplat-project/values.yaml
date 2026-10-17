@@ -1,13 +1,17 @@
-# devplat-project values. GENERATED from the project configuration (26-..., platform/projects/<id>.yaml) by the
-# platform's config renderer; hand edits are overwritten. Example below = Mercury on a standard-assurance cluster.
-# Jupiter: every Jupiter-specific value is UNRESOLVED (no repository or specification exists); its release is not
-# rendered until its project configuration is complete.
+# devplat-project values. In use they are GENERATED from the project configuration (26-..., platform/projects/<id>.yaml)
+# by the platform's config renderer; hand edits are overwritten.
+# The defaults below describe a HYPOTHETICAL project `example-a` (the synthetic fixture of 23-... section 5.3).
+# Every number is a GENERIC EXAMPLE VALUE, not a decision for any real project:
+# - Mercury: quotas are `unresolved` in platform/projects/mercury.yaml (namespace_quota); its release is rendered
+#   only after the operator sizes them (cluster size per DOD-15, first measured tasks per 09-... section 4).
+# - Jupiter: every value is unresolved (no repository or specification exists); nothing is rendered for it.
 
 project:
-  id: mercury
-  namespacePrefix: proj-mercury        # = execution_target.namespace_prefix
-  # Execution target cluster (Option C later = a different clusterRef; this chart is installed there instead).
-  clusterRef: local
+  id: example-a
+  namespacePrefix: proj-example-a      # = execution_target.namespace_prefix
+  # Execution target cluster (`default` = the platform's own cluster). Option C later = a different clusterRef;
+  # this chart is then installed in that cluster instead.
+  clusterRef: default
 
 platformNamespace: devplat-system
 
@@ -77,7 +81,7 @@ test:
     limitsEphemeralStorage: 40Gi
   # Test namespaces never reach the internet, LLMs or GitHub; only DNS, the artifact store and in-namespace pods.
   allowArtifacts: true
-  # Mercury T3 (sandbox repo + sandbox Apps) needs HTTPS egress from a dedicated test class. Off by default; turning
+  # Sandbox-integration suites (e.g. Mercury T3: sandbox repo + sandbox Apps) need HTTPS egress from a dedicated test class. Off by default; turning
   # it on is an operator decision (22-... section 4.3). Sandbox credentials are never part of these values.
   sandboxEgress:
     enabled: false

@@ -6,7 +6,7 @@
 
 platform:
   # Logical cluster name used in execution targets {cluster_ref, namespace_prefix} (15-...).
-  clusterRef: local
+  clusterRef: default
   # Assurance mode of this install (25-deployment-profiles.md): standard | reduced
   # reduced = workstation profile without gVisor or without enforced NetworkPolicy; recorded in every evidence item.
   assuranceMode: standard

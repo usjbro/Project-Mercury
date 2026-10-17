@@ -143,7 +143,7 @@ These run in every profile before the first dispatch (bootstrap step 7, `24-…`
 
 - **Platform images** (`devplat-*`) are built in devplat's own GitHub Actions CI, not in the cluster (`23-…` §5).
 - **Project release images** are built by the project's own repository CI (CI of record).
-- **In-cluster builds** exist only for test images, when the project configuration declares `builds.images`. Mercury declares none: it ships as a macOS daemon, and its tests run in a pinned toolchain image. Jupiter: unresolved.
+- **In-cluster builds** exist only for test images, when the project configuration declares `builds.images`. Mercury ships as a macOS daemon, not a container image, so it needs no release image from the cluster. It does need a pinned toolchain/test image: `platform/projects/mercury.yaml` currently plans to build that image rootless in `proj-mercury-build`. This document recommends building toolchain images in devplat CI instead (§10); the choice is open question O-5. Jupiter: unresolved.
 - For **Phase 1 the recommendation is no in-cluster image builds at all**. Build namespaces exist (chart `build.enabled`), but their builder allowlist is empty until a project needs builds.
 
 ### 9.2 Options evaluated (checked 2026-10-17)
@@ -239,6 +239,7 @@ The gate rules are v1's (`08-…` §1), ported into the controller (`19-…`). "
 2. **O-2:** Node OS for the `build`/`exec` pools: needed to decide Localhost seccomp/AppArmor profiles, kernel ≥ 6.3 for user namespaces, and gVisor support.
 3. **O-3:** Are GitHub-hosted arm64 Linux runners available to this account and repository type? This decides native multi-arch builds in CI versus an arm64 node.
 4. **O-4:** Jupiter's test suites, toolchain and whether it ships container images: **unresolved** until a Jupiter repository and specification exist.
+5. **O-5:** Where Mercury's toolchain/test image is built: in devplat CI (recommended) or rootless in `proj-mercury-build` (as `platform/projects/mercury.yaml` currently says).
 
 ## Sources (accessed 2026-10-17; untrusted web content, used as data)
 

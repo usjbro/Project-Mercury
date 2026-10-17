@@ -10,18 +10,18 @@ The chart value `platform.assuranceMode` is `standard` or `reduced`. It is recor
 | Mode | Required controls (all verified by the isolation probes, `22-…` §7) | Allowed work |
 |---|---|---|
 | **standard** | Enforced NetworkPolicy (default deny); PSA `restricted` for agent and test namespaces; admission policies active; agent pods under a sandboxing RuntimeClass (gVisor, or Kata where gVisor is unavailable); no agent credentials (gitbroker / model-gateway pattern); platform DB unreachable from agent pods | All task kinds, within v1 hard preconditions (DOD-02/03) |
-| **reduced** | Anything less. Typically: no sandboxing RuntimeClass, or a CNI that does not enforce NetworkPolicy, or control-plane services and agent pods on one node and kernel without gVisor | Design, planning, fake-agent and platform development. **Code tasks on a real repository need an operator decision** (open question O-1), because agent code then shares the host kernel with gitbroker's GitHub App key |
+| **reduced** | Anything less. Always for Option A (one node, `15-…` §7). Otherwise: no sandboxing RuntimeClass (`runtime_class: default` admitted only in this mode), or a CNI that does not enforce NetworkPolicy | Same gates (`15-…` §7); every task event and PR body states `assurance: reduced`. Whether code tasks on non-sandbox repositories run here is open question O-1 |
 
-Topology adds a dimension. **Option A** (one node or one pool) can reach `standard` only with gVisor/Kata, and even then the controls share a kernel boundary with the sandbox. **Option B** (separate tainted `exec` pool) is the target. **Option C** (separate cluster per project) is a configuration change of the execution target.
+Topology decides the ceiling. Following `15-…` §7, **Option A** (control-plane services and agent pods on one node) is **always `reduced`**, even with gVisor: the gitbroker key and model-gateway key share a node with agent code. In reduced mode gates do not change, but isolation claims do (`15-…` §7). **Option B** (separate tainted `exec` pool, or two VMs on one host as in `17-…` §12) can be `standard`. **Option C** (separate cluster per project) is a configuration change of the execution target.
 
 ## 2. Profiles overview
 
 | Profile | Typical stack | Topology | gVisor / sandbox | NetworkPolicy | Max achievable mode |
 |---|---|---|---|---|---|
-| P1 macOS workstation | Docker Desktop, Rancher Desktop, OrbStack or colima (Linux VM) + kind / k3d / minikube | A | Not available by default in the VM. Possible in principle via a custom node image or the minikube gVisor addon; **unverified** on macOS VMs (incl. arm64) | kind: kindnet now implements NetworkPolicy via kube-network-policies [S1] (version-dependent: install Calico/Cilium for certainty); k3d/k3s: embedded policy controller; minikube: `--cni=calico` | **reduced** (standard only if a sandbox runtime is proven by probe) |
+| P1 macOS workstation | Docker Desktop, Rancher Desktop, OrbStack or colima (Linux VM) + kind / k3d / minikube | A | Not available by default in the VM. Possible in principle via a custom node image or the minikube gVisor addon; **unverified** on macOS VMs (incl. arm64) | kind: kindnet now implements NetworkPolicy via kube-network-policies [S1] (version-dependent: install Calico/Cilium for certainty); k3d/k3s: embedded policy controller; minikube: `--cni=calico` | **reduced** (Option A, `15-…` §7) |
 | P2 Windows workstation | Docker Desktop (WSL2 backend) or Rancher Desktop + kind / k3d inside WSL2 | A | Same as P1; not verified | Same as P1 | **reduced** |
-| P3 Linux workstation | k3s, kind, k3d or minikube on the host kernel | A (or 2 kind nodes, one tainted) | **Installable**: `runsc` + containerd shim on the host (k3s) or in kind node images; minikube gVisor addon [S2] | k3s built-in; kind/minikube with Calico/Cilium | **standard** (Option A) after the probes pass |
-| P4 Single-node server | k3s (or kubeadm) on a Linux server or VM | A | Installable on the host | k3s built-in or Calico/Cilium | **standard** (Option A) |
+| P3 Linux workstation | k3s, kind, k3d or minikube on the host kernel | A (or B with two VMs: control, exec) | **Installable**: `runsc` + containerd shim on the host (k3s) or in kind node images; minikube gVisor addon [S2] | k3s built-in; kind/minikube with Calico/Cilium | **reduced** as Option A; **standard** only as Option B on two VMs, after the probes pass |
+| P4 Single server | k3s (or kubeadm) on a Linux server; preferably two VMs (control, exec) | A, or B on two VMs | Installable on the exec host/VM | k3s built-in or Calico/Cilium | **reduced** (A); **standard** (B on two VMs) |
 | P5 Self-managed multi-node | k3s HA (embedded etcd), kubeadm, or Talos Linux | **B**: `control` pool + tainted `exec` pool (+ optional `build` pool) | Installable per node (Talos: via a system extension; verify) | Calico or Cilium (Cilium adds FQDN egress policies) | **standard** (Option B) |
 | P6 Managed cloud | GKE, EKS, AKS | **B** (node pools); C by adding clusters | GKE: **GKE Sandbox** (gVisor) node pools; Container-Optimized OS only; privileged containers not supported in gVisor [S3]. EKS: no gVisor in default AMIs; custom launch template or AMI installing `runsc` [S4]. AKS: Kata-based **Pod Sandboxing** instead of gVisor [S4] | Provider CNI policy (GKE Dataplane V2 / Calico; EKS VPC CNI network policies or Calico; AKS Azure NPM / Cilium) | **standard** (Option B/C) |
 
@@ -56,7 +56,7 @@ Rule: a control counts only if the probe for it passes on that installation. Pro
 | Profile | Suggested capacity | Initial concurrency (controller admission) |
 |---|---|---|
 | P1/P2 workstation (16 GB host) | VM 6–8 GiB, 4 vCPU | 1–2 agent Jobs + 1 test namespace |
-| P3 Linux workstation (32 GB) | Host | 3 agent Jobs + 2 test namespaces |
+| P3 Linux workstation (32 GB) | Host, or two VMs for Option B | 2–3 agent Jobs + 1–2 test namespaces |
 | P4 single server (8–16 vCPU, 32–64 GB) | Host | 3–6 agent Jobs + 2 test namespaces |
 | P5 multi-node | `control` 2 × (2 vCPU, 8 GB); `exec` N × (8 vCPU, 32 GB) | 3 per project (v1 model: no gain beyond 3 for Mercury), global by capacity |
 | P6 cloud | As P5; autoscaled `exec` pool with a max node count = cost cap | Same, plus daily cost budget through model-gateway |
@@ -109,8 +109,8 @@ This is **not** a recommendation to run the platform on that machine and **not**
 
 ## 9. Open questions
 
-1. **O-1:** Are code tasks on a real repository allowed in **reduced** mode (e.g. P1 without gVisor), or only in standard mode?
-2. **O-2:** Target first profile: P4 single server (recommended for Phase 1) or P6 GKE (fastest route to gVisor and node pools)?
+1. **O-1:** `15-…` §7 keeps gates unchanged in reduced mode. Should the operator nevertheless restrict code tasks on a real repository to `standard` installations? Recommended: yes for non-sandbox repositories, because in Option A agent code shares a node with the GitHub App key.
+2. **O-2:** First target profile (DOD-15, `12-…`; its recommendation is a workstation kind/k3d for DP3, then a server or cloud for DP4): P4 as two VMs (Option B, recommended for Phase 1) or P6 GKE (fastest route to gVisor and node pools)?
 3. **O-3:** Is a second machine available, so that the M2 Mac stays dedicated to the macOS lane?
 
 ## Sources (accessed 2026-10-17; untrusted web content, used as data)

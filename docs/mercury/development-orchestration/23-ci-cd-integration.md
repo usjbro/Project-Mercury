@@ -120,7 +120,7 @@ Status: **Documented only (rejected for now).**
 1. Platform CI never checks out, builds or tests Mercury or Jupiter code. Fixtures are **synthetic projects** (`example-a`, `example-b`) with a tiny test suite and a fake agent.
 2. `platform/projects/mercury.yaml` is **data**. Validating it against the schema is allowed, but platform CI must pass with `platform/projects/` reduced to the synthetic fixtures.
 3. No platform workflow is triggered by Mercury paths, and Mercury's workflows ignore `platform/**`.
-4. **Repository location (open question O-1).** devplat lives in `Project-Mercury/platform/` today. The recommendation is to move it to its own repository (e.g. `devplat`), with its own ruleset and CODEOWNERS, before it coordinates any project other than Mercury. Then a Mercury PR can never change the system that gates it. Until the move, `platform/**` is a restricted path for every Mercury task contract. The same principle is v1 `11-…` rule 2 ("tasks that modify the development-orchestration configuration stay with Stage A").
+4. **Repository location** (ADR-030, operator decision DOD-12). devplat lives in `Project-Mercury/platform/` today, on an unmerged branch. ADR-030 recommends a dedicated operator-created repository with its own ruleset and CODEOWNERS. Then a Mercury PR can never change the system that gates it. Until the move, `platform/**` is a restricted path for every Mercury task contract. The same principle is v1 `11-…` rule 2 ("tasks that modify the development-orchestration configuration stay with Stage A").
 
 ## 6. Release and versioning of the platform
 
@@ -145,11 +145,11 @@ Status: **Documented only (rejected for now).**
 | Offline chart and manifest validation | **Implemented+tested** in the authoring environment (§5.2); not yet wired into CI |
 | Image build, scan, sign pipeline | **Documented only.** No images exist |
 | ARC in-cluster runners | **Documented only; not recommended** |
-| Separate devplat repository | **Awaiting operator approval** (O-1) |
+| Separate devplat repository | **Awaiting operator approval** (ADR-030, DOD-12) |
 
 ## 8. Open questions
 
-1. **O-1:** Move devplat to its own repository now, or after Mercury Stage A?
+1. **O-1:** Timing of the repository move (ADR-030 / DOD-12): before devplat coordinates any task, or after Mercury Stage A?
 2. **O-2:** Should gitbroker publish an informational `devplat/evidence` commit status? This needs `statuses: write` on the development bot App. Recommendation: not in Phase 1.
 3. **O-3:** OCI chart registry and image registry owner (GHCR under the operator's account or an organization, linked to G-ORG in `08-…` §5).
 
