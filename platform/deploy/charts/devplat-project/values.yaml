@@ -1,10 +1,16 @@
 # devplat-project values. In use they are GENERATED from the project configuration (26-..., platform/projects/<id>.yaml)
 # by the platform's config renderer; hand edits are overwritten.
 # The defaults below describe a HYPOTHETICAL project `example-a` (the synthetic fixture of 23-... section 5.3).
-# Every number is a GENERIC EXAMPLE VALUE, not a decision for any real project:
+# Every number is a GENERIC EXAMPLE VALUE (same magnitudes as the reference rendering in platform/deploy/base),
+# not a decision for any real project:
 # - Mercury: quotas are `unresolved` in platform/projects/mercury.yaml (namespace_quota); its release is rendered
 #   only after the operator sizes them (cluster size per DOD-15, first measured tasks per 09-... section 4).
 # - Jupiter: every value is unresolved (no repository or specification exists); nothing is rendered for it.
+#
+# This chart renders the per-project namespace layer that platform/deploy/base shows statically for
+# proj-mercury-* / proj-jupiter-* (namespaces, quotas, limit ranges, ServiceAccounts, the controller's
+# RoleBindings to devplat-job-runner, NetworkPolicies). Generic hardening (VAPs), ClusterRoles, RuntimeClasses
+# and PriorityClasses are cluster prerequisites from base and are NOT rendered here.
 
 project:
   id: example-a
@@ -15,74 +21,83 @@ project:
 
 platformNamespace: devplat-system
 
-# Egress destinations outside the cluster that project pods may reach (by CIDR; NetworkPolicy cannot match hosts).
+# Artifact store reachable from project pods (presigned URLs only).
 artifacts:
-  egressCidrs: []          # CIDRs of the S3-compatible endpoint; empty = in-cluster store selected below
-  inClusterNamespace: devplat-artifacts
-  inClusterPort: 9000
-
-# Package-registry proxy for the `deps` network class (only build Jobs and exec Jobs with network_class=deps).
-registryProxy:
-  enabled: false
-  namespace: devplat-system
-  podLabels:
-    app.kubernetes.io/name: devplat-registry-proxy
-  port: 8080
+  inCluster:
+    enabled: true                 # devplat-artifacts Service in namespace devplat-artifacts, port 9000
+  externalCidrs: []               # external S3 endpoint CIDRs on 443 (base placeholder 198.51.100.10/32)
 
 exec:
-  # gVisor required for agent pods on standard-assurance clusters; "" only in reduced-assurance profiles.
-  requiredRuntimeClassName: gvisor
+  # Base VAP devplat-proj-runtime-placement already requires RuntimeClass gvisor or kata for every exec/test pod.
+  # Set this only to pin ONE of them for this project (project-specific rule); "" = generic base rule.
+  requiredRuntimeClassName: ""
   quota:
-    pods: "6"
-    requestsCpu: "6"
-    requestsMemory: 12Gi
-    limitsCpu: "12"
-    limitsMemory: 24Gi
-    requestsEphemeralStorage: 30Gi
-    limitsEphemeralStorage: 60Gi
+    requests.cpu: "8"
+    limits.cpu: "16"
+    requests.memory: 16Gi
+    limits.memory: 32Gi
+    requests.ephemeral-storage: 60Gi
+    limits.ephemeral-storage: 120Gi
+    pods: "8"
+    count/jobs.batch: "40"
+    persistentvolumeclaims: "8"
+    requests.storage: 160Gi
+    configmaps: "100"             # per-run <job>-contract ConfigMaps
+    secrets: "100"                # per-run <job>-io Secrets (bounded, never 0: doc 18 I-5)
   limits:
-    defaultCpu: "2"
-    defaultMemory: 4Gi
-    defaultRequestCpu: "1"
-    defaultRequestMemory: 2Gi
-    maxCpu: "4"
-    maxMemory: 8Gi
+    max: {cpu: "4", memory: 8Gi, ephemeral-storage: 20Gi}
+    min: {cpu: 50m, memory: 64Mi}
+    default: {cpu: "2", memory: 4Gi, ephemeral-storage: 10Gi}
+    defaultRequest: {cpu: 500m, memory: 1Gi, ephemeral-storage: 2Gi}
+    pvcMaxStorage: 20Gi
 
 build:
   enabled: true
-  # baseline: rootless BuildKit with node-installed Localhost seccomp/AppArmor profiles (22-... section 9).
-  # privileged: only to run the upstream example with Unconfined profiles; requires acceptUnconfined=true and is
-  # labelled reduced assurance.
-  podSecurityLevel: baseline
-  acceptUnconfined: false
-  allowedBuilderImages: []   # e.g. ["docker.io/moby/buildkit@sha256:..."]; empty = no builder pod admitted
+  # Project-specific builder allowlist (digest-pinned). Empty = no build pod admitted for this project.
+  # The BuildKit exceptions themselves (container buildkitd, image prefix) are the base VAP devplat-build-exceptions.
+  allowedBuilderImages: []
   quota:
-    pods: "2"
-    requestsCpu: "4"
-    requestsMemory: 8Gi
-    limitsCpu: "8"
-    limitsMemory: 16Gi
-    requestsEphemeralStorage: 40Gi
-    limitsEphemeralStorage: 80Gi
+    requests.cpu: "8"
+    limits.cpu: "16"
+    requests.memory: 16Gi
+    limits.memory: 32Gi
+    requests.ephemeral-storage: 100Gi
+    limits.ephemeral-storage: 200Gi
+    pods: "4"
+    count/jobs.batch: "20"
+    persistentvolumeclaims: "4"
+    requests.storage: 200Gi
+    configmaps: "50"
+    secrets: "50"
+  limits:
+    max: {cpu: "4", memory: 8Gi, ephemeral-storage: 50Gi}
+    min: {cpu: 50m, memory: 64Mi}
+    default: {cpu: "2", memory: 4Gi, ephemeral-storage: 20Gi}
+    defaultRequest: {cpu: "1", memory: 2Gi, ephemeral-storage: 5Gi}
+    pvcMaxStorage: 50Gi
 
-# Profile the controller applies to every ephemeral test namespace proj-<P>-t-<runid> it creates.
+# Profile that devplat-namespacer applies to every ephemeral test namespace proj-<P>-t-<8 hex> (doc 18 section 9.3).
 test:
   maxConcurrentNamespaces: 2
   ttlSecondsAfterSuccess: 0
   ttlSecondsAfterFailure: 3600
   maxLifetimeSeconds: 14400
   quota:
+    requests.cpu: "4"
+    limits.cpu: "8"
+    requests.memory: 8Gi
+    limits.memory: 16Gi
+    requests.ephemeral-storage: 20Gi
+    limits.ephemeral-storage: 40Gi
     pods: "20"
-    requestsCpu: "4"
-    requestsMemory: 8Gi
-    limitsCpu: "8"
-    limitsMemory: 16Gi
-    requestsEphemeralStorage: 20Gi
-    limitsEphemeralStorage: 40Gi
-  # Test namespaces never reach the internet, LLMs or GitHub; only DNS, the artifact store and in-namespace pods.
-  allowArtifacts: true
-  # Sandbox-integration suites (e.g. Mercury T3: sandbox repo + sandbox Apps) need HTTPS egress from a dedicated test class. Off by default; turning
-  # it on is an operator decision (22-... section 4.3). Sandbox credentials are never part of these values.
+    count/jobs.batch: "40"
+    persistentvolumeclaims: "4"
+    requests.storage: 40Gi
+    configmaps: "100"
+    secrets: "100"
+  # Sandbox-integration suites (e.g. Mercury T3: sandbox repo + sandbox Apps) need HTTPS egress from a dedicated
+  # test class. Off by default; turning it on is an operator decision (22-... section 4.3). Sandbox credentials
+  # are never part of these values.
   sandboxEgress:
     enabled: false
     egressCidrs: []

@@ -1,10 +1,10 @@
 {{- /*
-Controller RBAC. Least privilege is enforced in two layers:
-1. RBAC below: leases in the release namespace; namespaced Job/test resources cluster-wide (needed for the
-   ephemeral proj-<P>-t-<runid> namespaces it creates); namespace create/delete.
-2. controller-scope-policy.yaml (ValidatingAdmissionPolicy): every write by this ServiceAccount must target a
-   proj-* namespace that carries devplat labels, and namespaces it creates/deletes must match proj-<P>-t-<runid>.
-No access to Secrets, RBAC objects, nodes, CRDs, webhooks or policies. No pods/exec, no pods/attach.
+Controller RBAC (doc 18 section 7; identical to platform/deploy/base/rbac.yaml for devplat-system and
+devplat-artifacts). There is NO cluster-wide grant for the controller:
+- project namespaces: RoleBinding to ClusterRole devplat-job-runner, rendered by the devplat-project chart;
+- test namespaces: created by impersonating devplat-namespacer, which binds devplat-test-runner inside each one
+  (ClusterRoles devplat-job-runner, devplat-test-runner, devplat-namespacer, devplat-dns and their bindings are
+  cluster prerequisites from platform/deploy/base, not rendered here).
 */}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -14,66 +14,74 @@ metadata:
   labels:
     {{- include "devplat.labels" (dict "root" . "name" "devplat-controller") | nindent 4 }}
 rules:
+  # create cannot be restricted by resourceNames; get/update are restricted to the one Lease.
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
-    verbs: ["get", "list", "watch", "create", "update", "patch"]
+    verbs: ["create"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "update"]
+    resourceNames: ["devplat-controller"]
   - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  - apiGroups: ["events.k8s.io"]
     resources: ["events"]
     verbs: ["create", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
+kind: Role
 metadata:
-  name: devplat-controller-leader-election
+  name: devplat-controller-impersonate-namespacer
   namespace: {{ .Release.Namespace }}
-  labels:
-    {{- include "devplat.labels" (dict "root" . "name" "devplat-controller") | nindent 4 }}
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: devplat-controller-leader-election
-subjects:
-  - kind: ServiceAccount
-    name: devplat-controller
-    namespace: {{ .Release.Namespace }}
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: devplat-controller
   labels:
     {{- include "devplat.labels" (dict "root" . "name" "devplat-controller") | nindent 4 }}
 rules:
   - apiGroups: [""]
-    resources: ["namespaces"]
-    verbs: ["get", "list", "watch", "create", "delete"]
-  - apiGroups: ["batch"]
-    resources: ["jobs"]
-    verbs: ["get", "list", "watch", "create", "delete"]
-  - apiGroups: [""]
-    resources: ["pods"]
-    verbs: ["get", "list", "watch", "delete"]
-  - apiGroups: [""]
-    resources: ["pods/log"]
-    verbs: ["get"]
-  - apiGroups: [""]
-    resources: ["configmaps", "resourcequotas", "limitranges"]
-    verbs: ["get", "list", "watch", "create", "update", "delete"]
-  - apiGroups: ["networking.k8s.io"]
-    resources: ["networkpolicies"]
-    verbs: ["get", "list", "watch", "create", "update", "delete"]
+    resources: ["serviceaccounts"]
+    verbs: ["impersonate"]
+    resourceNames: ["devplat-namespacer"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
+kind: Role
 metadata:
-  name: devplat-controller
+  name: devplat-controller-service-lookup
+  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "devplat.labels" (dict "root" . "name" "devplat-controller") | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get"]
+    resourceNames: ["devplat-model-gateway", "devplat-registry-proxy", "devplat-gitbroker-fetch", "devplat-dns"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: devplat-controller-service-lookup
+  namespace: devplat-artifacts
+  labels:
+    {{- include "devplat.labels" (dict "root" . "name" "devplat-controller") | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get"]
+    resourceNames: ["devplat-artifacts"]
+{{- range $rb := list (dict "name" "devplat-controller-leader-election" "ns" .Release.Namespace) (dict "name" "devplat-controller-impersonate-namespacer" "ns" .Release.Namespace) (dict "name" "devplat-controller-service-lookup" "ns" .Release.Namespace) (dict "name" "devplat-controller-service-lookup" "ns" "devplat-artifacts") }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $rb.name }}
+  namespace: {{ $rb.ns }}
+  labels:
+    {{- include "devplat.labels" (dict "root" $ "name" "devplat-controller") | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: devplat-controller
+  kind: Role
+  name: {{ $rb.name }}
 subjects:
   - kind: ServiceAccount
     name: devplat-controller
-    namespace: {{ .Release.Namespace }}
+    namespace: {{ $.Release.Namespace }}
+{{- end }}

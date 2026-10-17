@@ -25,7 +25,7 @@ Reuses / supersedes: **supersedes for the platform** `02-principal-orchestrator.
 | 7 | **Deliver contract** | Create ConfigMap `<job>-contract` (contract with `worktree=/workspace/repo`, `evidence_dir=/out`) and Secret `<job>-io` (fetch URL, presigned upload targets scoped to `runs/<job-uid>/`, gateway token), both with `ownerReferences` → the Job uid; then set `suspend: false` | `dispatched` (`session` = Job uid, attempt N) | Setup incomplete after 5 min → delete Job, `env_retry` |
 | 8 | **Monitor** | Watch Job and pod; renew the task lease; pending timeout (10 min unschedulable / image pull); `activeDeadlineSeconds`; stale detection after controller restart (§6) | `started` (FULL lifecycle, pod Running) | §6 mapping |
 | 9 | **Collect** | On a terminal Job condition: list `runs/<job-uid>/` (result.json, result.bundle, agent.stream.jsonl, runner.json, fetch.log); if the pod died before uploading, read container logs through the API (bounded) | — | Missing objects are evidence of failure, classified in §6 |
-| 10 | **Persist** | Size-check, hash, copy into immutable `sha256/<hex>`; insert `evidence` rows (`19-…`) with source `pod_upload` or `kube_pod_log`; write a MANIFEST evidence object; then delete the Job (`propagationPolicy: Background`) | evidence rows (not a transition) | Store unavailable → keep the Job (TTL 24 h) and retry |
+| 10 | **Persist** | Size-check, hash, copy into immutable `sha256/<hex>`; insert `artifacts` rows (`19-…`; origin `runs/<job-uid>/` upload or API-read pod log recorded in the MANIFEST); write a MANIFEST evidence object; then delete the Job (`propagationPolicy: Background`) | `artifacts` rows (not a transition) | Store unavailable → keep the Job (TTL 24 h) and retry |
 | 11 | **Validate** | Gitbroker: quarantine fetch of the bundle and the port of devorch `result_errors` (§7.2). Controller: result schema, `task_id`/`contract_version`/`attempt`/`agent` match, review binding (`reviewed_head_commit`), integration binding (`integrated_heads`), required tests reported | `implementation_completed` (FULL) or `result_accepted` (SHORT) — or `attempt_failed` / `env_retry` / `escalated` | Budgets as in devorch; exhausted → `failed` |
 | 12 | **Test and review** | Verifier Job re-runs `required_tests` at the validated head in a fresh workspace (G2); review subtasks `<task>-rN` (code/design/reliability) and `<task>-sN` (security, fresh Job, never the author's workspace) bound to the tested head (G3/G4); integration subtask `<first covered>-iN` (G5) | `tests_passed` (head), `code_review_passed`, `security_review_passed`, `integration_verified` | `tests_failed`, `code_review_changes_required`, `security_review_blocked`, `integration_failed` → correction attempt N+1 |
 | 13 | **Pull request** | Gitbroker pushes `dev/*` only if tip = tested head and G1–G5 are recorded; finds or creates a **draft** PR; controller waits for CI on that head | `pr_prepared` (G6, `pr` + `ci_run` evidence) | CI red → correction |
@@ -59,7 +59,7 @@ sequenceDiagram
 
 ## 3. Naming, idempotency and adoption
 
-**Name.** `dp-<project>-<task>-a<attempt>`, lower-case, DNS-1123 label, ≤ 63 characters (the Job name becomes the `job-name` pod label value). Project slugs are ≤ 20 characters (`26-…`); task ids are lower-cased (`DT-0001-s1` → `dt-0001-s1`). Verifier Jobs append `-t<k>`. If a name would exceed 63 characters, the controller uses `dp-<first 45 chars>-<8 hex of sha256(full name)>`; the full name stays in the labels and annotations.
+**Name.** `dp-<project>-<task>-a<attempt>-d<dispatch>`, lower-case, DNS-1123 label, ≤ 63 characters (the Job name becomes the `job-name` pod label value). Project slugs are ≤ 20 characters (`26-…`); task ids are lower-cased (`DT-0001-s1` → `dt-0001-s1`). Verifier Jobs append `-t<k>`. If a name would exceed 63 characters, the controller uses `dp-<first 45 chars>-<8 hex of sha256(full name)>`; the full name stays in the labels and annotations.
 
 **Labels** (all Jobs): `devplat.io/project`, `devplat.io/task`, `devplat.io/attempt`, `devplat.io/role`, `devplat.io/kind`, `devplat.io/network-class`, `devplat.io/idempotency-key` = first 40 hex of `sha256(project | task | contract_core_sha256 | attempt)`; annotations carry the full contract-core hash, contract version, base commit and role-definition hash.
 
@@ -73,7 +73,7 @@ sequenceDiagram
 | Found | Action |
 |---|---|
 | Job for the task's current attempt | Adopt; continue monitoring |
-| RUNNING task, no Job, no uploaded result | `stale_detected` → `env_retry` (new attempt) |
+| RUNNING task, no Job, no uploaded result | `stale_detected` → `env_retry` (same attempt, new dispatch `-d<n+1>`; not charged) |
 | RUNNING task, no Job, uploaded result under `runs/<uid>/` of the recorded uid | Continue at step 9 |
 | Job with no matching RUNNING task/attempt (orphan) | Collect its logs as evidence, delete it, report |
 
@@ -89,17 +89,18 @@ The contract is the v1 example `examples/contract-implementation.json` (budget `
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: dp-mercury-dt-0001-a2                 # dp-<project>-<task>-a<attempt>; deterministic => create is idempotent
+  name: dp-mercury-dt-0001-a2-d1                 # dp-<project>-<task>-a<attempt>-d<dispatch>; deterministic => create is idempotent
   namespace: proj-mercury-exec                # from the project's execution target {cluster_ref, namespace_prefix}
   labels:
     app.kubernetes.io/managed-by: devplat-controller
     devplat.io/project: mercury
     devplat.io/task: dt-0001
     devplat.io/attempt: "2"
+    devplat.io/dispatch: "1"
     devplat.io/role: mdev-backend-engineer
     devplat.io/kind: implementation
     devplat.io/network-class: deps            # selects the egress NetworkPolicy
-    devplat.io/idempotency-key: 2dab2a1a1818e824a35878a3df2ed72f1f733e39   # sha256(project|task|contract_core|attempt)[:40]; computed by platform/controller/jobspec.py
+    devplat.io/idempotency-key: 236b93d0c657f40e8603a992840ceb18a8ec0978   # sha256(project|task|contract_core|attempt|dispatch)[:40]; computed by platform/controller/jobspec.py
   annotations:
     devplat.io/contract-core-sha256: 4b1e0c3a9d7f25e86c1b0a4f3e9d2c7b6a5f4e3d2c1b0a9f8e7d6c5b4a392817
     devplat.io/contract-version: "1"
@@ -136,14 +137,21 @@ spec:
         devplat.io/project: mercury
         devplat.io/task: dt-0001
         devplat.io/attempt: "2"
+        devplat.io/dispatch: "1"
         devplat.io/role: mdev-backend-engineer
         devplat.io/network-class: deps
         devplat.io/workload: agent            # NetworkPolicy and admission policy selector
     spec:
       restartPolicy: Never                    # required by podFailurePolicy
-      serviceAccountName: proj-mercury-agent  # zero RBAC bindings
+      serviceAccountName: mercury-agent       # <project>-agent; zero RBAC bindings (18-… §7)
       automountServiceAccountToken: false
       enableServiceLinks: false
+      dnsPolicy: "None"                       # devplat-dns only (no internet forwarding: no DNS exfiltration, 18-… §10)
+      dnsConfig:
+        nameservers: [10.96.100.53]           # ClusterIP of devplat-dns, looked up by the controller (placeholder)
+        searches: [proj-mercury-exec.svc.cluster.local, svc.cluster.local, cluster.local]
+        options:
+          - {name: ndots, value: "5"}
       runtimeClassName: gvisor                # 'default' only in reduced-assurance workstation mode
       priorityClassName: devplat-agent
       terminationGracePeriodSeconds: 60
@@ -193,7 +201,7 @@ spec:
             - {name: ANTHROPIC_BASE_URL, value: "http://devplat-model-gateway.devplat-system.svc:8080/p/mercury"}
             - name: ANTHROPIC_AUTH_TOKEN      # per-Job gateway token, not the API key; revoked when the Job ends
               valueFrom:
-                secretKeyRef: {name: dp-mercury-dt-0001-a2-io, key: gateway_token}
+                secretKeyRef: {name: dp-mercury-dt-0001-a2-d1-io, key: gateway_token}
             - {name: NPM_CONFIG_REGISTRY, value: "http://devplat-registry-proxy.devplat-system.svc:4873/"}
             - {name: DISABLE_AUTOUPDATER, value: "1"}
             - {name: CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, value: "1"}
@@ -234,10 +242,10 @@ spec:
               - {key: managed-settings.mdev-backend-engineer.json, path: managed-settings.json}   # one settings key per role
         - name: contract
           configMap:
-            name: dp-mercury-dt-0001-a2-contract   # ownerReference -> this Job
+            name: dp-mercury-dt-0001-a2-d1-contract   # ownerReference -> this Job
         - name: io
           secret:
-            secretName: dp-mercury-dt-0001-a2-io   # one-time bundle URL, presigned upload URLs, gateway token; ownerReference -> this Job
+            secretName: dp-mercury-dt-0001-a2-d1-io   # one-time bundle URL, presigned upload URLs, gateway token; ownerReference -> this Job
             defaultMode: 0400
 ```
 
@@ -247,10 +255,10 @@ spec:
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: dp-mercury-dt-0001-a2-contract
+  name: dp-mercury-dt-0001-a2-d1-contract
   namespace: proj-mercury-exec
   ownerReferences:
-    - {apiVersion: batch/v1, kind: Job, name: dp-mercury-dt-0001-a2, uid: "<job uid>", controller: true}
+    - {apiVersion: batch/v1, kind: Job, name: dp-mercury-dt-0001-a2-d1, uid: "<job uid>", controller: true}
 immutable: true
 data:
   contract.json: '{"schema":"devorch.task_contract.v1","task_id":"DT-0001","attempt":2,"worktree":"/workspace/repo","evidence_dir":"/out", ...}'
@@ -258,10 +266,10 @@ data:
 apiVersion: v1
 kind: Secret
 metadata:
-  name: dp-mercury-dt-0001-a2-io
+  name: dp-mercury-dt-0001-a2-d1-io
   namespace: proj-mercury-exec
   ownerReferences:
-    - {apiVersion: batch/v1, kind: Job, name: dp-mercury-dt-0001-a2, uid: "<job uid>", controller: true}
+    - {apiVersion: batch/v1, kind: Job, name: dp-mercury-dt-0001-a2-d1, uid: "<job uid>", controller: true}
 immutable: true
 type: Opaque
 stringData:

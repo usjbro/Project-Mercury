@@ -5,7 +5,7 @@
 {{- /*
 CloudNativePG Cluster (custom resource; requires the CloudNativePG operator, installed beforehand by the operator).
 No superuser access from applications. Component roles are managed roles whose passwords come from basic-auth
-Secrets the operator creates: devplat-pg-controller, devplat-pg-api. Table grants (controller = sole writer of
+Secrets the operator creates: devplat-db-controller, devplat-db-api, devplat-db-model-gateway. Table grants (controller = sole writer of
 task state) are applied by the platform's migrations (19-..., platform/db), not here.
 */}}
 apiVersion: postgresql.cnpg.io/v1
@@ -28,16 +28,22 @@ spec:
       owner: devplat_owner
   managed:
     roles:
+      # Passwords from the fixed basic-auth Secrets of doc 18 section 8.1 (created by the operator).
       - name: devplat_controller
         ensure: present
         login: true
         passwordSecret:
-          name: devplat-pg-controller
+          name: devplat-db-controller
       - name: devplat_api
         ensure: present
         login: true
         passwordSecret:
-          name: devplat-pg-api
+          name: devplat-db-api
+      - name: devplat_model_gateway
+        ensure: present
+        login: true
+        passwordSecret:
+          name: devplat-db-model-gateway
   storage:
     size: {{ .Values.postgres.cnpg.storage.size }}
     {{- with .Values.postgres.cnpg.storage.storageClass }}

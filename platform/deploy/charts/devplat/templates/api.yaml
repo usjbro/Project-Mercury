@@ -1,7 +1,7 @@
 {{- /*
-devplat-api: REST API + dashboard backend. Operator facts and approvals are accepted only from an OIDC-authenticated
-subject in api.oidc.allowedSubjects (closes v1 R5 N-06). It never writes task state directly: it writes operator
-facts (DB role devplat_api) that the controller consumes.
+devplat-api: REST API + dashboard backend. Operator facts and approvals only from an OIDC-authenticated subject in
+api.oidc.allowedSubjects (DOD-14; closes v1 R5 N-06). It writes operator facts (Secret devplat-db-api), never task
+state. Linear read token: Secret devplat-linear-token (optional; writes only after DOD-05).
 */}}
 {{- $env := printf `- name: DEVPLAT_OIDC_ISSUER_URL
   value: %q
@@ -9,24 +9,21 @@ facts (DB role devplat_api) that the controller consumes.
   value: %q
 - name: DEVPLAT_OIDC_ALLOWED_SUBJECTS
   value: %q
-- name: DEVPLAT_DB_HOST
-  value: %q
-- name: DEVPLAT_DB_NAME
-  value: "devplat"
-- name: DEVPLAT_DB_USER
+- name: DEVPLAT_OIDC_CLIENT_SECRET
   valueFrom:
     secretKeyRef:
-      name: %s
-      key: username
-- name: DEVPLAT_DB_PASSWORD
+      name: devplat-oidc-client
+      key: client-secret
+      optional: true
+- name: DEVPLAT_LINEAR_TOKEN
   valueFrom:
     secretKeyRef:
-      name: %s
-      key: password`
-  .Values.api.oidc.issuerUrl
-  .Values.api.oidc.clientId
-  (join "," .Values.api.oidc.allowedSubjects)
-  (include "devplat.pgHost" .)
-  (include "devplat.pgSecret" (dict "root" . "role" "api"))
-  (include "devplat.pgSecret" (dict "root" . "role" "api")) -}}
-{{ include "devplat.workload" (dict "root" . "name" "devplat-api" "key" "api" "comp" .Values.api "port" (int .Values.api.service.port) "env" $env "automount" false "volumes" "" "volumeMounts" "") }}
+      name: devplat-linear-token
+      key: token
+      optional: true`
+  .Values.api.oidc.issuerUrl .Values.api.oidc.clientId (join "," .Values.api.oidc.allowedSubjects) -}}
+{{- $env = printf "%s\n%s\n%s" $env (include "devplat.dbEnv" (dict "root" . "role" "api")) (include "devplat.artifactsEnv" (dict "root" . "component" "api")) -}}
+{{ include "devplat.workload" (dict "root" . "name" "devplat-api" "key" "api" "comp" .Values.api "replicas" .Values.api.replicas
+    "ports" (list (dict "name" "http" "containerPort" 8080 "servicePort" 8080) (dict "name" "metrics" "containerPort" 9090 "servicePort" 9090))
+    "probe" (dict "readyPath" "/readyz" "livePath" "/healthz" "port" "http")
+    "env" $env "automount" false "volumes" "" "volumeMounts" "" "args" "") }}

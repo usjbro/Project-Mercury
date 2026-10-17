@@ -1,0 +1,34 @@
+{{- /*
+devplat-dns (doc 18 section 9.4): CoreDNS with ONLY the kubernetes plugin - no forward, so project pods cannot
+resolve or tunnel to the internet. Project pods set dnsPolicy: None and dnsConfig.nameservers = the ClusterIP of
+this Service (looked up by the controller). Pod port 1053 (non-root), Service port 53. Read-only discovery RBAC is
+the cluster prerequisite ClusterRole devplat-dns (platform/deploy/base/rbac.yaml).
+*/}}
+{{- $vols := "- name: corefile\n  configMap:\n    name: devplat-dns\n    items:\n      - key: Corefile\n        path: Corefile" }}
+{{- $mounts := "- name: corefile\n  mountPath: /etc/coredns\n  readOnly: true" }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: devplat-dns
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "devplat.labels" (dict "root" . "name" "devplat-dns") | nindent 4 }}
+data:
+  Corefile: |
+    .:1053 {
+        errors
+        health :8080
+        ready :8181
+        kubernetes {{ .Values.dns.clusterDomain }} in-addr.arpa ip6.arpa {
+            pods disabled
+            fallthrough in-addr.arpa ip6.arpa
+        }
+        cache 30
+        loop
+        reload
+    }
+---
+{{ include "devplat.workload" (dict "root" . "name" "devplat-dns" "key" "dns" "comp" .Values.dns "replicas" .Values.dns.replicas
+    "ports" (list (dict "name" "dns-udp" "containerPort" 1053 "servicePort" 53 "protocol" "UDP") (dict "name" "dns-tcp" "containerPort" 1053 "servicePort" 53 "protocol" "TCP") (dict "name" "health" "containerPort" 8080) (dict "name" "ready" "containerPort" 8181))
+    "probe" (dict "readyPath" "/ready" "livePath" "/health" "port" "ready" "livePort" "health")
+    "env" "" "automount" true "volumes" $vols "volumeMounts" $mounts "args" "- -conf\n- /etc/coredns/Corefile") }}

@@ -7,6 +7,8 @@
 # Requires a CNI that enforces NetworkPolicy (e.g. Cilium, Calico; verify the workstation CNI). Plain flannel does NOT: then
 # every policy here is inert -> reduced-assurance mode (doc 18 §12).
 # PLACEHOLDERS the overlay MUST replace: 192.0.2.10/32 (TEST-NET-1) = kube-apiserver endpoint IPs (post-DNAT);
+# 198.51.100.10/32 (TEST-NET-2) = external S3-compatible artifact endpoint (the default; the in-cluster
+# devplat-artifacts store on :9000 is optional and only for profiles that run one);
 # namespace label devplat.io/ingress-gateway=true = the operator's ingress controller namespace; cnpg-system.
 # Port convention (aligned with charts/devplat values and doc 16): api, gitbroker, model-gateway 8080;
 # gitbroker-fetch 8081; model-gateway admin 9443; registry-proxy 4873 (packages) and 5000 (OCI mirror);
@@ -122,6 +124,12 @@ spec:
       port: 9000
   - to:
     - ipBlock:
+        cidr: 198.51.100.10/32
+    ports:
+    - protocol: TCP
+      port: 443
+  - to:
+    - ipBlock:
         cidr: 192.0.2.10/32
     ports:
     - protocol: TCP
@@ -171,6 +179,12 @@ spec:
     ports:
     - protocol: TCP
       port: 9000
+  - to:
+    - ipBlock:
+        cidr: 198.51.100.10/32
+    ports:
+    - protocol: TCP
+      port: 443
   - to:
     - ipBlock:
         cidr: 0.0.0.0/0
@@ -224,6 +238,12 @@ spec:
     ports:
     - protocol: TCP
       port: 9000
+  - to:
+    - ipBlock:
+        cidr: 198.51.100.10/32
+    ports:
+    - protocol: TCP
+      port: 443
   - to:
     - ipBlock:
         cidr: 0.0.0.0/0
@@ -289,6 +309,12 @@ spec:
     ports:
     - protocol: TCP
       port: 9000
+  - to:
+    - ipBlock:
+        cidr: 198.51.100.10/32
+    ports:
+    - protocol: TCP
+      port: 443
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -531,6 +557,12 @@ spec:
       port: 9000
   - to:
     - ipBlock:
+        cidr: 198.51.100.10/32
+    ports:
+    - protocol: TCP
+      port: 443
+  - to:
+    - ipBlock:
         cidr: 192.0.2.10/32
     ports:
     - protocol: TCP
@@ -628,9 +660,9 @@ metadata:
   name: artifact-store
   namespace: devplat-artifacts
   annotations:
-    devplat.io/purpose: 'S3-compatible store: platform services and project workloads.
-      Reachability grants nothing: every project-side object operation needs a presigned
-      URL scoped to runs/<job-uid>/.'
+    devplat.io/purpose: 'OPTIONAL in-cluster S3-compatible store (default is external
+      S3): platform services and project workloads. Reachability grants nothing: every
+      project-side object operation needs a presigned URL scoped to runs/<job-uid>/.'
 spec:
   podSelector:
     matchLabels:
@@ -848,6 +880,12 @@ spec:
     ports:
     - protocol: TCP
       port: 9000
+  - to:
+    - ipBlock:
+        cidr: 198.51.100.10/32
+    ports:
+    - protocol: TCP
+      port: 443
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -981,6 +1019,12 @@ spec:
     ports:
     - protocol: TCP
       port: 9000
+  - to:
+    - ipBlock:
+        cidr: 198.51.100.10/32
+    ports:
+    - protocol: TCP
+      port: 443
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -1049,6 +1093,12 @@ spec:
     ports:
     - protocol: TCP
       port: 9000
+  - to:
+    - ipBlock:
+        cidr: 198.51.100.10/32
+    ports:
+    - protocol: TCP
+      port: 443
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -1182,3 +1232,9 @@ spec:
     ports:
     - protocol: TCP
       port: 9000
+  - to:
+    - ipBlock:
+        cidr: 198.51.100.10/32
+    ports:
+    - protocol: TCP
+      port: 443

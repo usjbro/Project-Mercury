@@ -12,7 +12,8 @@ Inputs are the versioned documents the controller already holds:
   contract  devorch.task_contract.v1 (task_id, kind, base_commit, contract_version, budget)
   project   devplat.project.v1 (project_id, execution_target.namespace_prefix)
   profile   one entry of platform/agents/execution-profiles.yaml (+ its `defaults`)
-  run       facts chosen by the controller: attempt, contract_core_sha256, images, role ConfigMap
+  run       facts chosen by the controller: attempt, contract_core_sha256, images, role ConfigMap,
+            dns_ip (ClusterIP of devplat-dns, looked up by the controller)
 """
 import hashlib, os, re
 
@@ -25,18 +26,20 @@ def dns_label(s):
     return re.sub(r"[^a-z0-9-]+", "-", s.lower()).strip("-")
 
 
-def job_name(project_id, task_id, attempt):
-    """Deterministic: the same (project, task, attempt) always gives the same name, so a controller retry
-    after a crash gets AlreadyExists and adopts the existing Job instead of starting a second run."""
-    base = f"dp-{dns_label(project_id)}-{dns_label(task_id)}-a{attempt}"
+def job_name(project_id, task_id, attempt, dispatch_no=1):
+    """Deterministic: the same (project, task, attempt, dispatch) always gives the same name, so a controller
+    retry after a crash gets AlreadyExists and adopts the existing Job instead of starting a second run.
+    dispatch_no (job_runs.dispatch_no, 19-…) distinguishes environmental retries within one attempt, which must
+    get a NEW Job rather than adopt the failed one."""
+    base = f"dp-{dns_label(project_id)}-{dns_label(task_id)}-a{attempt}-d{dispatch_no}"
     if len(base) <= NAME_MAX - 9:          # leave room for the "-contract" ConfigMap suffix
         return base
     h = hashlib.sha256(base.encode()).hexdigest()[:10]
     return f"{base[:NAME_MAX - 9 - 11].rstrip('-')}-{h}"
 
 
-def idempotency_key(project_id, task_id, contract_core_sha256, attempt):
-    return hashlib.sha256(f"{project_id}|{task_id}|{contract_core_sha256}|{attempt}".encode()).hexdigest()[:40]
+def idempotency_key(project_id, task_id, contract_core_sha256, attempt, dispatch_no=1):
+    return hashlib.sha256(f"{project_id}|{task_id}|{contract_core_sha256}|{attempt}|{dispatch_no}".encode()).hexdigest()[:40]
 
 
 def _hardened():
@@ -47,17 +50,18 @@ def build_job(contract, project, profile, defaults, run):
     for img in (run["fetch_image"], run["agent_image"]):
         if not DIGEST.fullmatch(img):
             raise ValueError(f"image must be pinned by digest: {img}")
-    pid, tid, att = project["project_id"], contract["task_id"], run["attempt"]
-    name = job_name(pid, tid, att)
+    pid, tid, att, dno = project["project_id"], contract["task_id"], run["attempt"], run.get("dispatch_no", 1)
+    name = job_name(pid, tid, att, dno)
     ns = project["execution_target"]["namespace_prefix"] + "-exec"
     role = profile["role"]
     net = profile["network_class"]
     wall_min = min(contract["budget"]["max_wall_minutes"], profile["max_wall_minutes"])
     turns = min(contract["budget"]["max_turns"], profile["max_turns"])
-    sel = {f"{L}/project": dns_label(pid), f"{L}/task": dns_label(tid), f"{L}/attempt": str(att), f"{L}/role": role}
+    sel = {f"{L}/project": dns_label(pid), f"{L}/task": dns_label(tid), f"{L}/attempt": str(att),
+           f"{L}/dispatch": str(dno), f"{L}/role": role}
     labels = {"app.kubernetes.io/managed-by": "devplat-controller", **sel, f"{L}/kind": contract["kind"],
               f"{L}/network-class": net,
-              f"{L}/idempotency-key": idempotency_key(pid, tid, run["contract_core_sha256"], att)}
+              f"{L}/idempotency-key": idempotency_key(pid, tid, run["contract_core_sha256"], att, dno)}
     annotations = {f"{L}/contract-core-sha256": run["contract_core_sha256"],
                    f"{L}/contract-version": str(contract["contract_version"]),
                    f"{L}/base-commit": contract["base_commit"],
@@ -67,9 +71,14 @@ def build_job(contract, project, profile, defaults, run):
     res = profile["resources"]
     pod = {
         "restartPolicy": "Never",
-        "serviceAccountName": f"{project['execution_target']['namespace_prefix']}-agent",
+        "serviceAccountName": f"{dns_label(pid)}-agent",   # zero RBAC bindings (18-… §7)
         "automountServiceAccountToken": False,
         "enableServiceLinks": False,
+        # devplat-dns only: no internet forwarding, so DNS cannot be used to tunnel data out (18-… §10)
+        "dnsPolicy": "None",
+        "dnsConfig": {"nameservers": [run["dns_ip"]],
+                      "searches": [f"{ns}.svc.cluster.local", "svc.cluster.local", "cluster.local"],
+                      "options": [{"name": "ndots", "value": "5"}]},
         "runtimeClassName": profile["runtime_class"],
         "priorityClassName": defaults["priority_class"],
         "terminationGracePeriodSeconds": defaults["termination_grace_seconds"],

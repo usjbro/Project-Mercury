@@ -27,6 +27,9 @@ metadata:
     pod-security.kubernetes.io/warn: restricted
     pod-security.kubernetes.io/warn-version: v1.33
 ---
+# OPTIONAL. The default artifact store is an external S3-compatible endpoint (MinIO community edition is reported
+# archived, doc 22 / ADR-027). This namespace exists for profiles that run an in-cluster S3-compatible store and is
+# then empty otherwise; its default-deny policies cost nothing.
 apiVersion: v1
 kind: Namespace
 metadata:

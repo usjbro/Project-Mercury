@@ -1,10 +1,13 @@
 {{- /*
 devplat-controller: deterministic task state machine, multi-project admission, Job creation/reconciliation,
-gate verification. Sole writer of task state (DB role devplat_controller). 2 replicas, one active leader
-(coordination.k8s.io Lease); the standby does no writes.
+gate verification. Sole writer of task state (DB role in Secret devplat-db-controller). 2 replicas, one active
+leader (Lease devplat-controller); the standby does no writes. Test namespaces are created by impersonating
+devplat-namespacer (VAP devplat-namespacer-scope). Per-run objects: Job dp-<project>-<task>-a<attempt>-d<dispatch>,
+ConfigMap <job>-contract, Secret <job>-io (doc 16, doc 18 section 8.2).
 */}}
+{{- $ns := .Release.Namespace -}}
 {{- $env := printf `- name: DEVPLAT_LEADER_ELECTION_LEASE
-  value: %q
+  value: "devplat-controller"
 - name: DEVPLAT_LEASE_DURATION_SECONDS
   value: %q
 - name: DEVPLAT_RENEW_DEADLINE_SECONDS
@@ -19,37 +22,16 @@ gate verification. Sole writer of task state (DB role devplat_controller). 2 rep
   value: %q
 - name: DEVPLAT_MAX_TEST_NS_PER_PROJECT
   value: %q
+- name: DEVPLAT_NAMESPACER_IMPERSONATE
+  value: "system:serviceaccount:%s:devplat-namespacer"
 - name: DEVPLAT_GITBROKER_URL
-  value: "http://devplat-gitbroker.%s.svc:%d"
-- name: DEVPLAT_ARTIFACTS_ENDPOINT
-  value: %q
-- name: DEVPLAT_ARTIFACTS_BUCKET_PREFIX
-  value: %q
-- name: DEVPLAT_DB_HOST
-  value: %q
-- name: DEVPLAT_DB_NAME
-  value: "devplat"
-- name: DEVPLAT_DB_USER
-  valueFrom:
-    secretKeyRef:
-      name: %s
-      key: username
-- name: DEVPLAT_DB_PASSWORD
-  valueFrom:
-    secretKeyRef:
-      name: %s
-      key: password
-- name: AWS_ACCESS_KEY_ID
-  valueFrom:
-    secretKeyRef:
-      name: %s
-      key: access-key-id
-- name: AWS_SECRET_ACCESS_KEY
-  valueFrom:
-    secretKeyRef:
-      name: %s
-      key: secret-access-key`
-  .Values.controller.leaderElection.leaseName
+  value: "http://devplat-gitbroker.%s.svc:8080"
+- name: DEVPLAT_FETCH_URL
+  value: "http://devplat-gitbroker-fetch.%s.svc:8081"
+- name: DEVPLAT_MODEL_GATEWAY_ADMIN_URL
+  value: "https://devplat-model-gateway.%s.svc:9443"
+- name: DEVPLAT_DNS_SERVICE
+  value: "devplat-dns"`
   (toString .Values.controller.leaderElection.leaseDurationSeconds)
   (toString .Values.controller.leaderElection.renewDeadlineSeconds)
   (toString .Values.controller.leaderElection.retryPeriodSeconds)
@@ -57,12 +39,9 @@ gate verification. Sole writer of task state (DB role devplat_controller). 2 rep
   (toString .Values.controller.admission.defaultPerProjectMaxConcurrentJobs)
   (toString .Values.controller.admission.testNamespaceTtlSeconds)
   (toString .Values.controller.admission.maxTestNamespacesPerProject)
-  .Release.Namespace (int .Values.gitbroker.service.port)
-  .Values.artifacts.endpoint
-  .Values.artifacts.bucketPrefix
-  (include "devplat.pgHost" .)
-  (include "devplat.pgSecret" (dict "root" . "role" "controller"))
-  (include "devplat.pgSecret" (dict "root" . "role" "controller"))
-  .Values.artifacts.credentialsSecretRef
-  .Values.artifacts.credentialsSecretRef -}}
-{{ include "devplat.workload" (dict "root" . "name" "devplat-controller" "key" "controller" "comp" .Values.controller "port" 9090 "env" $env "automount" true "volumes" "" "volumeMounts" "") }}
+  $ns $ns $ns $ns -}}
+{{- $env = printf "%s\n%s\n%s" $env (include "devplat.dbEnv" (dict "root" . "role" "controller")) (include "devplat.artifactsEnv" (dict "root" . "component" "controller")) -}}
+{{ include "devplat.workload" (dict "root" . "name" "devplat-controller" "key" "controller" "comp" .Values.controller "replicas" .Values.controller.replicas
+    "ports" (list (dict "name" "metrics" "containerPort" 9090 "servicePort" 9090))
+    "probe" (dict "readyPath" "/readyz" "livePath" "/healthz" "port" "metrics")
+    "env" $env "automount" true "volumes" "" "volumeMounts" "" "args" "") }}

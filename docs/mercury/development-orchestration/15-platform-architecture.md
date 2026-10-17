@@ -51,7 +51,7 @@ The task state machine, lifecycles (FULL/SHORT), gates G1–G7, subtask ids (`-r
 | Layer | Control |
 |---|---|
 | Kubernetes namespace | One set of namespaces per project; the controller only creates Jobs in namespaces of the task's project (admission policy checks `devplat.io/project` label = namespace's project label) |
-| Identity | Per-project ServiceAccount `proj-<P>-agent` with **zero** RBAC and `automountServiceAccountToken: false` |
+| Identity | Per-project ServiceAccount `<P>-agent` (in `proj-<P>-exec`) with **zero** RBAC and `automountServiceAccountToken: false` |
 | Network | Default-deny ingress and egress in every `proj-*` namespace; allow only DNS, model-gateway, artifact store and (class `deps`) the registry proxy; no route to another project's namespaces, to `devplat-system` PostgreSQL, or to the Kubernetes API |
 | Compute | `ResourceQuota` + `LimitRange` per project namespace (backstop to controller admission, `17-…` §7); exec pool taint; gVisor `RuntimeClass` |
 | Source | A GitHub App installation scoped to the project's repositories only; tokens minted by gitbroker per operation, never given to pods |

@@ -31,7 +31,7 @@ RUN = {"attempt": 2,
        "role_definition_sha256": "0d3c5e7a9b1f2e4d6c8a0b2d4f6e8a0c2e4b6d8f0a2c4e6b8d0f2a4c6e8b0d2f",
        "fetch_image": "registry.devplat.internal/devplat/fetch@sha256:" + "1" * 64,
        "agent_image": "registry.devplat.internal/devplat/agent-node24@sha256:" + "2" * 64,
-       "role_configmap": "devplat-roles-mercury-0d3c5e7a"}
+       "role_configmap": "devplat-roles-mercury-0d3c5e7a", "dns_ip": "10.96.100.53"}
 
 
 def job(contract=None, profile=None, **run):
@@ -73,7 +73,7 @@ class T(unittest.TestCase):
 
     def test_name_deterministic_and_dns_label(self):
         self.assertEqual(job()["metadata"]["name"], job()["metadata"]["name"])
-        self.assertEqual(job()["metadata"]["name"], "dp-mercury-dt-0001-a2")
+        self.assertEqual(job()["metadata"]["name"], "dp-mercury-dt-0001-a2-d1")
         long = J.job_name("a-very-long-project-identifier-x", "DT-0001-r1-and-a-long-suffix-here", 12)
         self.assertLessEqual(len(long + "-contract"), 63)
         self.assertRegex(long, r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
@@ -82,6 +82,9 @@ class T(unittest.TestCase):
     def test_pod_has_no_credentials_or_host_access(self):
         spec = job()["spec"]["template"]["spec"]
         self.assertFalse(spec["automountServiceAccountToken"])
+        self.assertEqual(spec["serviceAccountName"], "mercury-agent")
+        self.assertEqual(spec["dnsPolicy"], "None")             # never kube-dns (DNS exfiltration)
+        self.assertEqual(spec["dnsConfig"]["nameservers"], ["10.96.100.53"])
         for k in ("hostNetwork", "hostPID", "hostIPC"):
             self.assertFalse(spec.get(k, False))
         for v in spec["volumes"]:
@@ -90,7 +93,7 @@ class T(unittest.TestCase):
         # the only credential is the per-Job gateway token, read from the run's own Secret; never an API key
         self.assertFalse([e for e in envs if "API_KEY" in e["name"] or "GITHUB" in e["name"]])
         tok = [e for e in envs if e["name"] == "ANTHROPIC_AUTH_TOKEN"][0]
-        self.assertEqual(tok["valueFrom"]["secretKeyRef"]["name"], "dp-mercury-dt-0001-a2-io")
+        self.assertEqual(tok["valueFrom"]["secretKeyRef"]["name"], "dp-mercury-dt-0001-a2-d1-io")
 
     def test_container_hardening(self):
         j = job()
@@ -123,7 +126,11 @@ class T(unittest.TestCase):
 
     def test_idempotency_key_binds_task_contract_core_and_attempt(self):
         k = lambda **r: job(**r)["metadata"]["labels"]["devplat.io/idempotency-key"]
-        self.assertEqual(len({k(), k(contract_core_sha256="b" * 64), k(attempt=3)}), 3)
+        self.assertEqual(len({k(), k(contract_core_sha256="b" * 64), k(attempt=3), k(dispatch_no=2)}), 4)
+
+    def test_env_retry_gets_a_new_job_not_the_failed_one(self):
+        # R6/C finding: an environmental retry within the same attempt must not adopt the failed Job
+        self.assertNotEqual(job()["metadata"]["name"], job(dispatch_no=2)["metadata"]["name"])
 
 
 if __name__ == "__main__":

@@ -1138,11 +1138,17 @@ BEGIN
                         k8s_namespace, k8s_job_name, lease_token)
   VALUES (t.project_id, p_task_id, p_attempt, p_role, p_dispatch_no, p_idempotency_key, p_target_id,
           p_k8s_namespace, p_k8s_job_name, p_token)
-  ON CONFLICT (idempotency_key) DO NOTHING RETURNING job_id INTO v_id;
+  -- no conflict target: a concurrent identical dispatch can collide on ANY unique key first (idempotency key,
+  -- (namespace, job name) or (task, attempt, role, dispatch_no)); all of them mean "already dispatched" (R6 race fix)
+  ON CONFLICT DO NOTHING RETURNING job_id INTO v_id;
   IF v_id IS NOT NULL THEN
     RETURN QUERY SELECT v_id, true, p_k8s_job_name; RETURN;
   END IF;
   SELECT * INTO j FROM job_runs jr WHERE jr.idempotency_key = p_idempotency_key;
+  IF NOT FOUND THEN
+    PERFORM _refuse(format('Job %s/%s or dispatch %s/%s/%s already belongs to another idempotency key',
+                           p_k8s_namespace, p_k8s_job_name, p_task_id, p_attempt, p_dispatch_no));
+  END IF;
   IF j.task_id <> p_task_id OR j.attempt <> p_attempt OR j.role <> p_role OR j.k8s_job_name <> p_k8s_job_name THEN
     PERFORM _refuse('idempotency key collision with a different job');
   END IF;

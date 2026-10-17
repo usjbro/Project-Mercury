@@ -1,13 +1,19 @@
 devplat {{ .Chart.AppVersion }} (chart {{ .Chart.Version }}) in namespace {{ .Release.Namespace }}.
 
-STATUS: proposed design (Architecture Amendment 001). Only the operator installs this chart. Before it is useful:
-  1. Secrets (created by the operator, never by this chart): {{ .Values.gitbroker.githubApp.privateKeySecretRef.name }},
-     {{- range .Values.modelGateway.providers }} {{ .apiKeySecretRef.name }},{{ end }} {{ .Values.artifacts.credentialsSecretRef }}{{ if eq .Values.postgres.mode "cnpg" }}, devplat-pg-controller, devplat-pg-api{{ end }}.
-  2. Run the bootstrap verification (24-helm-and-gitops.md section 9, steps 6-10), including the negative-path
-     smoke tests: an agent-like pod must NOT reach PostgreSQL, the Kubernetes API or the internet.
-  3. Install one devplat-project release per project (chart devplat-project).
+STATUS: proposed design (Architecture Amendment 001). Only the operator installs this chart.
+Prerequisites (platform/deploy/base, applied first): platform namespaces, ClusterRoles devplat-job-runner,
+devplat-test-runner, devplat-namespacer, devplat-dns (+ bindings), PriorityClasses, RuntimeClasses, admission
+policies + devplat-admission-params, and the platform NetworkPolicies. This chart renders none of them.
 
-Assurance mode: {{ .Values.platform.assuranceMode }}{{ if eq .Values.platform.assuranceMode "reduced" }} - REDUCED: evidence produced by this install is labelled reduced-assurance and does not satisfy gates that require standard assurance.{{ end }}
-NetworkPolicy objects: {{ if .Values.networkPolicy.enabled }}rendered (enforcement depends on the CNI - verify){{ else }}NOT rendered{{ end }}.
+Secrets (fixed names, doc 18 section 8.1; created by the operator, never by this chart):
+  devplat-gitbroker-github-app, devplat-model-gateway-llm-keys,
+  devplat-db-controller, devplat-db-api, devplat-db-model-gateway,
+  devplat-artifacts-controller, devplat-artifacts-gitbroker, devplat-artifacts-gitbroker-fetch, devplat-artifacts-api,
+  devplat-oidc-client, devplat-linear-token (optional).
 
+Next: bootstrap verification (24-helm-and-gitops.md section 9, steps 6-10), including the isolation probes: an
+agent-like pod must NOT reach PostgreSQL, gitbroker, the Kubernetes API, kube-dns or the internet.
+Then install one devplat-project release per project.
+
+Assurance mode: {{ .Values.platform.assuranceMode }}{{ if eq .Values.platform.assuranceMode "reduced" }} - REDUCED: evidence produced by this install is labelled reduced-assurance.{{ end }}
 The platform never merges or approves pull requests. G7 is an observed human merge on GitHub.
