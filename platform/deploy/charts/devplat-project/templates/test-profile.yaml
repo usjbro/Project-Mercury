@@ -1,7 +1,8 @@
 {{- /*
-Test-namespace profile read by devplat-controller (platform namespace). For every integration/e2e run the
-controller creates proj-<P>-t-<runid> with these labels, quota, LimitRange and default-deny NetworkPolicy, runs the
-test Jobs, collects evidence and deletes the namespace after the TTL (22-build-test-architecture.md section 4).
+Test-namespace profile read by devplat-controller. For every integration/e2e run the controller, impersonating
+devplat-namespacer (VAP devplat-namespacer-scope), creates proj-<P>-t-<8 hex> with these labels, quota, LimitRange,
+the NetworkPolicies of doc 18 section 9.3 and a RoleBinding controller -> devplat-test-runner; runs the test Jobs
+(SA `default`, token off, dnsPolicy None with devplat-dns); collects evidence; deletes the namespace after the TTL.
 */}}
 apiVersion: v1
 kind: ConfigMap
@@ -14,26 +15,34 @@ metadata:
 data:
   profile.yaml: |
     project: {{ .Values.project.id }}
-    namespaceNamePattern: "{{ .Values.project.namespacePrefix }}-t-<runid8>"
+    namespaceNamePattern: "^{{ .Values.project.namespacePrefix }}-t-[0-9a-f]{8}$"
+    createdBy: system:serviceaccount:{{ .Values.platformNamespace }}:devplat-namespacer
     namespaceLabels:
       devplat.io/project: {{ .Values.project.id }}
       devplat.io/ns-role: test
       devplat.io/managed-by: devplat-controller
-      pod-security.kubernetes.io/enforce: restricted
-      pod-security.kubernetes.io/enforce-version: latest
+      {{- include "proj.psa" (dict "enforce" "restricted") | nindent 6 }}
+    serviceAccount: default
+    pod:
+      automountServiceAccountToken: false
+      dnsPolicy: None
+      dnsNameserverService: {{ .Values.platformNamespace }}/devplat-dns
     maxConcurrentNamespaces: {{ .Values.test.maxConcurrentNamespaces }}
     ttlSecondsAfterSuccess: {{ .Values.test.ttlSecondsAfterSuccess }}
     ttlSecondsAfterFailure: {{ .Values.test.ttlSecondsAfterFailure }}
     maxLifetimeSeconds: {{ .Values.test.maxLifetimeSeconds }}
     resourceQuota:
       {{- include "proj.quota" .Values.test.quota | nindent 6 }}
-    networkPolicy:
-      defaultDeny: true
-      allowIntraNamespace: true
-      allowDns: true
-      allowArtifacts: {{ .Values.test.allowArtifacts }}
-      allowModelGateway: false
-      allowGitbroker: true
-      sandboxEgress:
-        enabled: {{ .Values.test.sandboxEgress.enabled }}
-        egressCidrs: {{ toJson .Values.test.sandboxEgress.egressCidrs }}
+    roleBinding:
+      clusterRole: devplat-test-runner
+      subject: {{ .Values.platformNamespace }}/devplat-controller
+    networkPolicies:
+      - default-deny-all
+      - allow-intra-namespace
+      - allow-devplat-dns
+      - allow-fetch-and-artifacts      # gitbroker-fetch 8081 + artifact store
+      - allow-deps                     # registry-proxy 4873, network-class deps only
+      # never: model-gateway, gitbroker, PostgreSQL, kube-apiserver, kube-dns, internet
+    sandboxEgress:
+      enabled: {{ .Values.test.sandboxEgress.enabled }}
+      egressCidrs: {{ toJson .Values.test.sandboxEgress.egressCidrs }}

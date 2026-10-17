@@ -1,6 +1,6 @@
 {{- include "proj.assert" . }}
-{{- /* Persistent project namespaces. Ephemeral proj-<P>-t-<runid> namespaces are created by devplat-controller
-from the profile in test-profile.yaml, never by this chart. */}}
+{{- /* Persistent project namespaces (same labels as platform/deploy/base/namespaces.yaml). Ephemeral
+proj-<P>-t-<8 hex> namespaces are created by devplat-namespacer from test-profile.yaml, never by this chart. */}}
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -8,12 +8,13 @@ metadata:
   labels:
     {{- include "proj.labels" . | nindent 4 }}
     devplat.io/ns-role: exec
-    pod-security.kubernetes.io/enforce: restricted
-    pod-security.kubernetes.io/enforce-version: latest
-    pod-security.kubernetes.io/warn: restricted
-    pod-security.kubernetes.io/audit: restricted
+    {{- include "proj.psa" (dict "enforce" "restricted") | nindent 4 }}
 {{- if .Values.build.enabled }}
 ---
+# Build namespace: PSA enforce "privileged" ONLY because rootless BuildKit needs exceptions (Unconfined or Localhost
+# seccomp/AppArmor, newuidmap) that Baseline/Restricted cannot express; audit/warn stay restricted. The real
+# controls are the base VAPs (devplat-pod-hardening, -proj-pod-identity, -build-exceptions,
+# -proj-runtime-placement, -image-pinning) plus this chart's builder allowlist (doc 18 section 10.1).
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -21,13 +22,5 @@ metadata:
   labels:
     {{- include "proj.labels" . | nindent 4 }}
     devplat.io/ns-role: build
-    pod-security.kubernetes.io/enforce: {{ .Values.build.podSecurityLevel }}
-    pod-security.kubernetes.io/enforce-version: latest
-    pod-security.kubernetes.io/warn: restricted
-    pod-security.kubernetes.io/audit: restricted
-  {{- if eq .Values.build.podSecurityLevel "privileged" }}
-  annotations:
-    devplat.io/assurance: reduced
-    devplat.io/reason: "Unconfined seccomp/AppArmor accepted for rootless BuildKit (build.acceptUnconfined)"
-  {{- end }}
+    {{- include "proj.psa" (dict "enforce" "privileged") | nindent 4 }}
 {{- end }}

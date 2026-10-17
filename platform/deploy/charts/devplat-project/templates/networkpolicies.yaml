@@ -1,9 +1,11 @@
-{{- /* Default deny in every project namespace; explicit egress only. No ingress at all. */}}
+{{- /* Same policies as platform/deploy/base/networkpolicies.yaml for proj-<P>-exec / -build (doc 18 section 9).
+Default deny; DNS only via devplat-dns; fetch via keyless gitbroker-fetch :8081; model-gateway ONLY for
+network-class model-only|deps (class none = no LLM egress, I-10); registry-proxy only for class deps. */}}
 {{- $exec := include "proj.ns" (dict "Values" .Values "role" "exec") }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: default-deny
+  name: default-deny-all
   namespace: {{ $exec }}
   labels:
     {{- include "proj.labels" . | nindent 4 }}
@@ -14,15 +16,42 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: agent-egress
+  name: exec-base-egress
   namespace: {{ $exec }}
   labels:
     {{- include "proj.labels" . | nindent 4 }}
 spec:
-  podSelector: {}
+  podSelector:
+    matchExpressions:
+      - {key: devplat.io/workload, operator: In, values: ["agent", "planner", "verifier"]}
   policyTypes: ["Egress"]
   egress:
-    {{- include "proj.baseEgress" . | nindent 4 }}
+    {{- include "proj.dnsEgress" . | nindent 4 }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.platformNamespace }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: devplat-gitbroker-fetch
+      ports:
+        - {protocol: TCP, port: 8081}
+    {{- include "proj.artifactsEgress" . | nindent 4 }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: model-egress
+  namespace: {{ $exec }}
+  labels:
+    {{- include "proj.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - {key: devplat.io/workload, operator: In, values: ["agent", "planner", "verifier"]}
+      - {key: devplat.io/network-class, operator: In, values: ["model-only", "deps"]}
+  policyTypes: ["Egress"]
+  egress:
     - to:
         - namespaceSelector:
             matchLabels:
@@ -32,32 +61,36 @@ spec:
               app.kubernetes.io/name: devplat-model-gateway
       ports:
         - {protocol: TCP, port: 8080}
-{{- if .Values.registryProxy.enabled }}
 ---
-# network_class=deps only: pods labelled devplat.io/network-class=deps (set by the controller from the
-# execution profile) may also reach the package-registry proxy.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: agent-deps-egress
+  name: deps-egress
   namespace: {{ $exec }}
   labels:
     {{- include "proj.labels" . | nindent 4 }}
 spec:
   podSelector:
-    matchLabels:
-      devplat.io/network-class: deps
+    matchExpressions:
+      - {key: devplat.io/network-class, operator: In, values: ["deps"]}
   policyTypes: ["Egress"]
   egress:
-    {{- include "proj.registryEgress" . | nindent 4 }}
-{{- end }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.platformNamespace }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: devplat-registry-proxy
+      ports:
+        - {protocol: TCP, port: 4873}
 {{- if .Values.build.enabled }}
 {{- $build := include "proj.ns" (dict "Values" .Values "role" "build") }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: default-deny
+  name: default-deny-all
   namespace: {{ $build }}
   labels:
     {{- include "proj.labels" . | nindent 4 }}
@@ -65,7 +98,8 @@ spec:
   podSelector: {}
   policyTypes: ["Ingress", "Egress"]
 ---
-# Builds: source bundle from gitbroker, outputs to the artifact store, base images and packages only via the proxy.
+# Builds: base images and packages via the proxy/mirror; OCI layout, SBOM and provenance to the artifact store.
+# No direct internet, no registry push credentials, no model gateway.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -74,9 +108,21 @@ metadata:
   labels:
     {{- include "proj.labels" . | nindent 4 }}
 spec:
-  podSelector: {}
+  podSelector:
+    matchExpressions:
+      - {key: devplat.io/workload, operator: In, values: ["build"]}
   policyTypes: ["Egress"]
   egress:
-    {{- include "proj.baseEgress" . | nindent 4 }}
-    {{- include "proj.registryEgress" . | nindent 4 }}
+    {{- include "proj.dnsEgress" . | nindent 4 }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.platformNamespace }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: devplat-registry-proxy
+      ports:
+        - {protocol: TCP, port: 4873}
+        - {protocol: TCP, port: 5000}
+    {{- include "proj.artifactsEgress" . | nindent 4 }}
 {{- end }}

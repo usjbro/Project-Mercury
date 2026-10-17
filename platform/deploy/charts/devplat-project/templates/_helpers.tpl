@@ -10,20 +10,40 @@ devplat.io/project: {{ .Values.project.id }}
 {{ .Values.project.namespacePrefix }}-{{ .role }}
 {{- end -}}
 
+{{/* PSA labels pinned to v1.33 (doc 18 I-9): upgrades never silently change the rules. */}}
+{{- define "proj.psa" -}}
+pod-security.kubernetes.io/enforce: {{ .enforce }}
+pod-security.kubernetes.io/enforce-version: v1.33
+pod-security.kubernetes.io/audit: restricted
+pod-security.kubernetes.io/audit-version: v1.33
+pod-security.kubernetes.io/warn: restricted
+pod-security.kubernetes.io/warn-version: v1.33
+{{- end -}}
+
 {{- define "proj.quota" -}}
 hard:
-  pods: {{ .pods | quote }}
-  requests.cpu: {{ .requestsCpu | quote }}
-  requests.memory: {{ .requestsMemory | quote }}
-  limits.cpu: {{ .limitsCpu | quote }}
-  limits.memory: {{ .limitsMemory | quote }}
-  requests.ephemeral-storage: {{ .requestsEphemeralStorage | quote }}
-  limits.ephemeral-storage: {{ .limitsEphemeralStorage | quote }}
-  persistentvolumeclaims: "0"
+  {{- range $k, $v := . }}
+  {{ $k }}: {{ $v | quote }}
+  {{- end }}
   services: "0"
   services.loadbalancers: "0"
   services.nodeports: "0"
-  secrets: "0"
+{{- end -}}
+
+{{- define "proj.limits" -}}
+limits:
+  - type: Container
+    max:
+      {{- toYaml .max | nindent 6 }}
+    min:
+      {{- toYaml .min | nindent 6 }}
+    default:
+      {{- toYaml .default | nindent 6 }}
+    defaultRequest:
+      {{- toYaml .defaultRequest | nindent 6 }}
+  - type: PersistentVolumeClaim
+    max:
+      storage: {{ .pvcMaxStorage }}
 {{- end -}}
 
 {{- define "proj.assert" -}}
@@ -32,55 +52,39 @@ hard:
 {{- end -}}
 {{- end -}}
 
-{{/* Egress rules shared by exec and build namespaces: DNS, gitbroker (fetch), artifact store. */}}
-{{- define "proj.baseEgress" -}}
-- to:
-    - namespaceSelector:
-        matchLabels:
-          kubernetes.io/metadata.name: kube-system
-      podSelector:
-        matchLabels:
-          k8s-app: kube-dns
-  ports:
-    - {protocol: UDP, port: 53}
-    - {protocol: TCP, port: 53}
+{{/* Egress rules for DNS (devplat-dns only; never kube-dns, doc 18 section 9.4). */}}
+{{- define "proj.dnsEgress" -}}
 - to:
     - namespaceSelector:
         matchLabels:
           kubernetes.io/metadata.name: {{ .Values.platformNamespace }}
       podSelector:
         matchLabels:
-          app.kubernetes.io/name: devplat-gitbroker
+          app.kubernetes.io/name: devplat-dns
   ports:
-    - {protocol: TCP, port: 8080}
-{{- if .Values.artifacts.egressCidrs }}
+    - {protocol: UDP, port: 1053}
+    - {protocol: TCP, port: 1053}
+{{- end -}}
+
+{{- define "proj.artifactsEgress" -}}
+{{- if .Values.artifacts.inCluster.enabled }}
 - to:
-    {{- range .Values.artifacts.egressCidrs }}
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: devplat-artifacts
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: devplat-artifacts
+  ports:
+    - {protocol: TCP, port: 9000}
+{{- end }}
+{{- with .Values.artifacts.externalCidrs }}
+- to:
+    {{- range . }}
     - ipBlock:
         cidr: {{ . }}
     {{- end }}
   ports:
     - {protocol: TCP, port: 443}
-{{- else }}
-- to:
-    - namespaceSelector:
-        matchLabels:
-          kubernetes.io/metadata.name: {{ .Values.artifacts.inClusterNamespace }}
-  ports:
-    - {protocol: TCP, port: {{ .Values.artifacts.inClusterPort }}}
-{{- end }}
-{{- end -}}
-
-{{- define "proj.registryEgress" -}}
-{{- if .Values.registryProxy.enabled }}
-- to:
-    - namespaceSelector:
-        matchLabels:
-          kubernetes.io/metadata.name: {{ .Values.registryProxy.namespace }}
-      podSelector:
-        matchLabels:
-          {{- toYaml .Values.registryProxy.podLabels | nindent 10 }}
-  ports:
-    - {protocol: TCP, port: {{ .Values.registryProxy.port }}}
 {{- end }}
 {{- end -}}

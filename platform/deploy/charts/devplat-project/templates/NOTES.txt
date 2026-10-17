@@ -1,4 +1,4 @@
-devplat-project {{ .Values.project.id }}: namespaces {{ .Values.project.namespacePrefix }}-exec{{ if .Values.build.enabled }}, {{ .Values.project.namespacePrefix }}-build{{ end }}; ephemeral {{ .Values.project.namespacePrefix }}-t-<runid> created by devplat-controller.
-Agent RuntimeClass required: {{ default "none (REDUCED assurance)" .Values.exec.requiredRuntimeClassName }}.
-Build pod security: {{ if .Values.build.enabled }}{{ .Values.build.podSecurityLevel }}{{ if eq .Values.build.podSecurityLevel "privileged" }} (REDUCED assurance){{ end }}{{ else }}builds disabled{{ end }}.
-Verify with the negative-path smoke suite (22-build-test-architecture.md section 7) before dispatching any task.
+devplat-project {{ .Values.project.id }}: namespaces {{ .Values.project.namespacePrefix }}-exec{{ if .Values.build.enabled }}, {{ .Values.project.namespacePrefix }}-build{{ end }}; ephemeral {{ .Values.project.namespacePrefix }}-t-<8 hex> created by devplat-namespacer.
+Requires the platform/deploy/base cluster prerequisites (ClusterRole devplat-job-runner, VAPs, RuntimeClasses).
+RuntimeClass: {{ default "gvisor or kata (base rule)" .Values.exec.requiredRuntimeClassName }}.
+Verify with the isolation probes (22-build-test-architecture.md section 7) before dispatching any task.

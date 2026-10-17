@@ -1,58 +1,44 @@
-apiVersion: v1
-kind: ResourceQuota
-metadata:
-  name: devplat-quota
-  namespace: {{ include "proj.ns" (dict "Values" .Values "role" "exec") }}
-  labels:
-    {{- include "proj.labels" . | nindent 4 }}
-spec:
-  {{- include "proj.quota" .Values.exec.quota | nindent 2 }}
----
-apiVersion: v1
-kind: LimitRange
-metadata:
-  name: devplat-limits
-  namespace: {{ include "proj.ns" (dict "Values" .Values "role" "exec") }}
-  labels:
-    {{- include "proj.labels" . | nindent 4 }}
-spec:
-  limits:
-    - type: Container
-      default:
-        cpu: {{ .Values.exec.limits.defaultCpu | quote }}
-        memory: {{ .Values.exec.limits.defaultMemory | quote }}
-      defaultRequest:
-        cpu: {{ .Values.exec.limits.defaultRequestCpu | quote }}
-        memory: {{ .Values.exec.limits.defaultRequestMemory | quote }}
-      max:
-        cpu: {{ .Values.exec.limits.maxCpu | quote }}
-        memory: {{ .Values.exec.limits.maxMemory | quote }}
-{{- if .Values.build.enabled }}
+{{- /* Quota backstop (names as in platform/deploy/base/quotas.yaml). Per-run Secrets/ConfigMaps are allowed but
+bounded (doc 18 I-5). Project workloads may not use platform or system PriorityClasses. */}}
+{{- $roles := list "exec" }}
+{{- if .Values.build.enabled }}{{- $roles = append $roles "build" }}{{- end }}
+{{- range $role := $roles }}
+{{- $v := index $.Values $role }}
+{{- $ns := include "proj.ns" (dict "Values" $.Values "role" $role) }}
 ---
 apiVersion: v1
 kind: ResourceQuota
 metadata:
-  name: devplat-quota
-  namespace: {{ include "proj.ns" (dict "Values" .Values "role" "build") }}
+  name: devplat-compute
+  namespace: {{ $ns }}
   labels:
-    {{- include "proj.labels" . | nindent 4 }}
+    {{- include "proj.labels" $ | nindent 4 }}
 spec:
-  {{- include "proj.quota" .Values.build.quota | nindent 2 }}
+  {{- include "proj.quota" $v.quota | nindent 2 }}
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: devplat-no-platform-priority
+  namespace: {{ $ns }}
+  labels:
+    {{- include "proj.labels" $ | nindent 4 }}
+spec:
+  hard:
+    pods: "0"
+  scopeSelector:
+    matchExpressions:
+      - scopeName: PriorityClass
+        operator: In
+        values: ["devplat-platform", "system-cluster-critical", "system-node-critical"]
 ---
 apiVersion: v1
 kind: LimitRange
 metadata:
-  name: devplat-limits
-  namespace: {{ include "proj.ns" (dict "Values" .Values "role" "build") }}
+  name: devplat-defaults
+  namespace: {{ $ns }}
   labels:
-    {{- include "proj.labels" . | nindent 4 }}
+    {{- include "proj.labels" $ | nindent 4 }}
 spec:
-  limits:
-    - type: Container
-      default:
-        cpu: "2"
-        memory: 4Gi
-      defaultRequest:
-        cpu: "1"
-        memory: 2Gi
+  {{- include "proj.limits" $v.limits | nindent 2 }}
 {{- end }}

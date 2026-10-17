@@ -1,0 +1,23 @@
+{{- /* The controller's only rights in this project: ClusterRole devplat-job-runner (base prerequisite) bound per
+namespace (doc 18 section 7, I-1): jobs create/get/list/watch/patch/delete; configmaps+secrets create/get/delete;
+pods get/list/watch; pods/log get; events read. No cluster-wide controller grant exists. */}}
+{{- $roles := list "exec" }}
+{{- if .Values.build.enabled }}{{- $roles = append $roles "build" }}{{- end }}
+{{- range $role := $roles }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: devplat-controller-job-runner
+  namespace: {{ include "proj.ns" (dict "Values" $.Values "role" $role) }}
+  labels:
+    {{- include "proj.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: devplat-job-runner
+subjects:
+  - kind: ServiceAccount
+    name: devplat-controller
+    namespace: {{ $.Values.platformNamespace }}
+{{- end }}

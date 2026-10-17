@@ -1,54 +1,17 @@
 {{- /*
-Project-specific admission (ValidatingAdmissionPolicy, Kubernetes >= 1.30). Generic pod-hardening policies for all
-project namespaces are owned by 18-security-architecture (platform/deploy/base); these add the per-project
-parameters: required RuntimeClass and ServiceAccount for agent pods, and the builder image allowlist.
+Project-specific admission ONLY (doc 18 section 15 ownership split, I-6). Generic hardening, ServiceAccount, token,
+volume, Secret-name, network-class and generic gVisor/Kata placement rules are base VAPs and are not repeated here.
+Rendered:
+- devplat-<P>-builder-allowlist: every container in this project's build namespace runs an allowlisted builder image
+  (empty list = no build pod admitted);
+- devplat-<P>-runtime-class: only when exec.requiredRuntimeClassName pins ONE sandbox class for this project.
 */}}
 {{- $id := .Values.project.id }}
-apiVersion: admissionregistration.k8s.io/v1
-kind: ValidatingAdmissionPolicy
-metadata:
-  name: devplat-{{ $id }}-exec-pods
-  labels:
-    {{- include "proj.labels" . | nindent 4 }}
-spec:
-  failurePolicy: Fail
-  matchConstraints:
-    namespaceSelector:
-      matchLabels:
-        devplat.io/project: {{ $id }}
-        devplat.io/ns-role: exec
-    resourceRules:
-      - apiGroups: [""]
-        apiVersions: ["v1"]
-        operations: ["CREATE", "UPDATE"]
-        resources: ["pods"]
-  validations:
-    - expression: "object.spec.serviceAccountName == '{{ $id }}-agent'"
-      message: "agent pods must use the zero-RBAC ServiceAccount {{ $id }}-agent"
-    - expression: "has(object.spec.automountServiceAccountToken) && object.spec.automountServiceAccountToken == false"
-      message: "agent pods must not mount a Kubernetes API token"
-    - expression: "!has(object.spec.volumes) || object.spec.volumes.all(v, !has(v.hostPath) && !has(v.secret) && !has(v.projected))"
-      message: "agent pods may not mount hostPath, Secret or projected volumes"
-    {{- with .Values.exec.requiredRuntimeClassName }}
-    - expression: "has(object.spec.runtimeClassName) && object.spec.runtimeClassName == '{{ . }}'"
-      message: "agent pods must run with RuntimeClass {{ . }} on this cluster"
-    {{- end }}
----
-apiVersion: admissionregistration.k8s.io/v1
-kind: ValidatingAdmissionPolicyBinding
-metadata:
-  name: devplat-{{ $id }}-exec-pods
-  labels:
-    {{- include "proj.labels" . | nindent 4 }}
-spec:
-  policyName: devplat-{{ $id }}-exec-pods
-  validationActions: ["Deny"]
 {{- if .Values.build.enabled }}
----
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
-  name: devplat-{{ $id }}-build-pods
+  name: devplat-{{ $id }}-builder-allowlist
   labels:
     {{- include "proj.labels" . | nindent 4 }}
 spec:
@@ -61,35 +24,56 @@ spec:
     resourceRules:
       - apiGroups: [""]
         apiVersions: ["v1"]
-        operations: ["CREATE", "UPDATE"]
+        operations: ["CREATE"]
         resources: ["pods"]
+  variables:
+    - name: containers
+      expression: "object.spec.containers + (has(object.spec.initContainers) ? object.spec.initContainers : [])"
   validations:
-    - expression: >-
-        object.spec.containers.all(c, c.image in {{ toJson .Values.build.allowedBuilderImages }}) &&
-        (!has(object.spec.initContainers) || object.spec.initContainers.all(c, c.image in {{ toJson .Values.build.allowedBuilderImages }}))
-      message: "build pods may only run allowlisted builder images pinned by digest"
-    - expression: "object.spec.serviceAccountName == '{{ $id }}-build' && has(object.spec.automountServiceAccountToken) && object.spec.automountServiceAccountToken == false"
-      message: "build pods must use {{ $id }}-build without a Kubernetes API token"
-    - expression: "!(has(object.spec.hostNetwork) && object.spec.hostNetwork) && !(has(object.spec.hostPID) && object.spec.hostPID) && !(has(object.spec.hostIPC) && object.spec.hostIPC)"
-      message: "no host namespaces"
-    - expression: "!has(object.spec.volumes) || object.spec.volumes.all(v, !has(v.hostPath) && !has(v.secret) && !has(v.projected))"
-      message: "no hostPath, Secret or projected volumes in build pods"
-    - expression: >-
-        object.spec.containers.all(c, !has(c.securityContext) ||
-          ((!has(c.securityContext.privileged) || c.securityContext.privileged == false) &&
-           (!has(c.securityContext.capabilities) || !has(c.securityContext.capabilities.add) || size(c.securityContext.capabilities.add) == 0)))
-      message: "build containers are never privileged and add no capabilities (rootless BuildKit)"
-    - expression: >-
-        object.spec.containers.all(c, has(c.securityContext) && has(c.securityContext.runAsNonRoot) && c.securityContext.runAsNonRoot == true)
-      message: "build containers must set runAsNonRoot: true"
+    - expression: "variables.containers.all(c, c.image in {{ toJson .Values.build.allowedBuilderImages }})"
+      message: "build pods of project {{ $id }} may only run its allowlisted builder images (pinned by digest)"
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding
 metadata:
-  name: devplat-{{ $id }}-build-pods
+  name: devplat-{{ $id }}-builder-allowlist
   labels:
     {{- include "proj.labels" . | nindent 4 }}
 spec:
-  policyName: devplat-{{ $id }}-build-pods
-  validationActions: ["Deny"]
+  policyName: devplat-{{ $id }}-builder-allowlist
+  validationActions: ["Deny", "Audit"]
+{{- end }}
+{{- with .Values.exec.requiredRuntimeClassName }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: devplat-{{ $id }}-runtime-class
+  labels:
+    {{- include "proj.labels" $ | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchExpressions:
+        - {key: devplat.io/project, operator: In, values: ["{{ $id }}"]}
+        - {key: devplat.io/ns-role, operator: In, values: ["exec", "test"]}
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["pods"]
+  validations:
+    - expression: "has(object.spec.runtimeClassName) && object.spec.runtimeClassName == '{{ . }}'"
+      message: "project {{ $id }} pins RuntimeClass {{ . }} for exec and test pods"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: devplat-{{ $id }}-runtime-class
+  labels:
+    {{- include "proj.labels" $ | nindent 4 }}
+spec:
+  policyName: devplat-{{ $id }}-runtime-class
+  validationActions: ["Deny", "Audit"]
 {{- end }}
