@@ -10,7 +10,7 @@
 
 ## Amendment 001 — Kubernetes-native, multi-project platform (devplat)
 
-Branch `claude/devplatform-k8s` (stacked on `claude/dev-orchestration`). **Proposed; awaits DOD-11…16.** v1 (docs 00–13, devorch) stays as **local mode**. Docs 14–29 define **devplat**, which is independent of Mercury and Jupiter. Mercury's production design is unchanged (`27-…`: 0 production changes proposed). Machine-readable artifacts are under `/platform`.
+Branch `claude/devplatform-k8s` (stacked on `claude/dev-orchestration`). **Proposed; awaits DOD-11…24.** v1 (docs 00–13, devorch) stays as **local mode**. Docs 14–29 define **devplat**, which is independent of Mercury and Jupiter. Mercury's production design is unchanged (`27-…`: 0 production changes proposed). Machine-readable artifacts are under `/platform`.
 
 | # | Amendment deliverable | Location |
 |---|---|---|
@@ -49,7 +49,7 @@ Branch `claude/devplatform-k8s` (stacked on `claude/dev-orchestration`). **Propo
 | 13 | Resource and cost management | `09-resources-and-costs.md` |
 | 14 | Integration and release process | `10-integration-and-release.md` |
 | 15 | Self-hosting transition plan | `11-self-hosting-transition.md` |
-| 16–17 | Roadmap amendments RA-D1…D9; ADR amendment; operator decisions DOD-01…16 | `12-amendments.md`, `../architecture/decisions/proposed/ADR-021-development-orchestration.md` |
+| 16–17 | Roadmap amendments RA-D1…D9; ADR amendment; operator decisions DOD-01…24 | `12-amendments.md`, `../architecture/decisions/proposed/ADR-021-development-orchestration.md` |
 | 18 | Operational runbook | `13-runbook.md` |
 | — | Independent reviews R1 (architecture), R2 (security), R3 (TPM), R4 (code/reliability) | `reviews/R1-…` … `reviews/R4-…` |
 | — | Dispositions of every review finding | `reviews/R0-dispositions.md` (every Critical/High finding of R1–R4 → fix, location, test; residual risks); `reviews/R5-recheck.md` (independent re-check of R0: new findings, fixes, what is still open) |

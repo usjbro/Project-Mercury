@@ -1,6 +1,6 @@
 # 14 — Amendment 001: inspection of existing work and Kubernetes gap analysis
 
-Status: **Proposed** (Architecture Amendment 001, 2026-10-17; awaits operator approval, see `12-amendments.md` DOD-11…DOD-16). Branch `claude/devplatform-k8s`, stacked on `claude/dev-orchestration` (nothing merged).
+Status: **Proposed** (Architecture Amendment 001, 2026-10-17; awaits operator approval, see `12-amendments.md` DOD-11…DOD-24). Branch `claude/devplatform-k8s`, stacked on `claude/dev-orchestration` (nothing merged).
 Reuses / supersedes: keeps docs 00–13 as **v1 "local mode"** (one Claude Code session, git ledger). Docs 15–29 define **v2 "devplat"**, the Kubernetes-native, multi-project platform. Where they conflict, v2 governs the development platform (amendment §Final instruction). Mercury's production design (TDD) is unchanged unless an ADR approved separately says otherwise (`27-…`).
 
 ## 1. Inspection: what already exists (facts, checked on 2026-10-17)

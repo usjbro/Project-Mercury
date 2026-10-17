@@ -319,9 +319,9 @@ The target hardening is user namespaces (`hostUsers: false`, beta and on by defa
 |---|---|---|
 | **Base (this doc)** | Generic pod hardening: host namespaces, hostPath / `docker.sock`, privileged, hostPort, added capabilities, `procMount`, sysctls, ephemeral containers (`devplat-pod-hardening`); image digest and prefix pinning (`devplat-image-pinning`); platform placement; platform Secret pinning; Job invariants; per-run object rules; controller Job update; namespacer scope; generic project pod identity and runtime placement computed from namespace labels | `platform/deploy/base/admission-policies.yaml` |
 | `devplat-project` chart | **Project-specific** values only: the builder image allowlist per project, and a project's `runtime_class` if it differs from the generic gVisor/Kata rule | `charts/devplat-project/templates/admission-policies.yaml` |
-| `devplat` chart | Controller scope (`devplat-controller-scope`) | `charts/devplat/templates/controller-scope-policy.yaml` |
+| `devplat` chart | None. Controller scope is enforced by the base policies on per-run objects (I-1) | — |
 
-The charts' current `devplat-<P>-exec-pods` / `-build-pods` policies duplicate base checks (ServiceAccount, token, RuntimeClass). They should keep only project-specific checks (inconsistency I-6). The chart's `devplat-controller-scope` and the base's per-namespace RBAC plus `devplat-namespacer-scope` solve the same problem in two ways. One must be chosen (I-1).
+The `devplat-project` chart keeps only project-specific checks: a builder allowlist and an optional RuntimeClass pin. I-6 is resolved. The chart's `devplat-controller-scope` and the base's per-namespace RBAC plus `devplat-namespacer-scope` solve the same problem in two ways. One must be chosen (I-1).
 
 | Policy | Matches | Key rules |
 |---|---|---|
@@ -400,7 +400,7 @@ Scripts and results are in the session scratchpad (not committed); adding them a
 | gVisor / Kata on the exec pool | Unverified assumption |
 | BuildKit rootless exceptions | Documented only (BuildKit under gVisor: unverified assumption) |
 | devplat-dns (no forward) | Documented only |
-| gitbroker-fetch as a keyless separate service | Documented only (conflicts with the current chart, I-3) |
+| gitbroker-fetch as a keyless separate service | Configured (chart template; I-3 resolved); not run on a cluster |
 | Secrets encryption at rest / External Secrets / workload identity | Documented only (profile-dependent) |
 | Image signature verification | Documented only (optional) |
 | Ruleset DOD-02, dev-bot App DOD-13 | Awaiting operator approval |
@@ -417,22 +417,22 @@ Scripts and results are in the session scratchpad (not committed); adding them a
 - **Q-18-4:** Per-project LLM keys (provider support) versus one gateway key with internal budgets.
 - **Q-18-5:** TLS between project pods and the gateway and fetch services (today plain HTTP on 8080/8081 inside the cluster; the tokens are per-Job and short-lived). mTLS is needed for Option C anyway.
 
-**Inconsistencies found (for the lead to reconcile)**
+**Inconsistencies found during drafting: all reconciled on 2026-10-17**
 
-- **I-1** `charts/devplat/templates/controller-rbac.yaml` grants the controller **cluster-wide** jobs/pods(delete)/configmaps(update)/networkpolicies plus a scope VAP, and the controller creates test namespaces itself. The base uses per-namespace RoleBindings plus the impersonated `devplat-namespacer`. The chart grants **no Secrets**, yet doc 16 needs the `<job>-io` Secret.
-- **I-2** Doc 16's example Job uses default DNS (kube-dns), while the base allows project pods DNS only to `devplat-dns`. Doc 16 needs `dnsPolicy: None` + `dnsConfig` (or the base must accept kube-dns as a residual).
-- **I-3** Doc 16 uses `devplat-gitbroker-fetch…:8081`, the chart serves fetch from the gitbroker pod on 8080, and the base requires a separate keyless `devplat-gitbroker-fetch` (8081).
-- **I-4** The charts must use the Secret names in §8.1 for VAP pinning to apply.
-- **I-5** The chart's project quota sets `secrets: "0"` in exec and build, which blocks the per-run Secret of doc 16. The base allows 100.
-- **I-6** The `devplat-project` chart VAPs duplicate base checks (SA, token, RuntimeClass); they should keep only the project-specific builder allowlist and runtime-class value.
-- **I-7** ServiceAccount name: doc 15 and doc 16 use `proj-<P>-agent`; doc 26 and the chart use `<P>-agent`. The base follows the chart (`mercury-agent`). Doc 16's example fails `devplat-proj-pod-identity` until this is aligned.
-- **I-8** Doc 16's example sets `priorityClassName: devplat-agent`. The base defines exactly `devplat-platform` and `devplat-agent` (doc 17), so that is aligned; the charts set no `priorityClassName` on platform Deployments yet.
-- **I-9** PSA `enforce-version`: the chart uses `latest`, the base pins `v1.33`. Pinning is recommended, so upgrades do not silently change the rules.
-- **I-10** The `devplat-project` chart's `agent-egress` gives **every** exec pod (podSelector `{}`) the model-gateway. The base gives it only to `network-class` model-only/deps, so class `none` Jobs (e.g. fetch-only verifiers) cannot spend LLM budget. Test namespaces never reach the gateway in either.
+| ID | Resolution | Evidence |
+|---|---|---|
+| I-1 | The controller's cluster-wide RBAC was removed from the `devplat` chart. The controller now has per-namespace RoleBindings (`devplat-job-runner`), and test namespaces are created through the impersonated `devplat-namespacer` | Chart renders match base field by field (`24-…` §10) |
+| I-2 | Doc 16 and `jobspec.py` use `dnsPolicy: None` with the ClusterIP of `devplat-dns` | `test_jobspec.py` (doc example == generator) |
+| I-3 | `devplat-gitbroker-fetch` is a separate Deployment and Service on 8081, without the App key | `charts/devplat/templates/gitbroker-fetch.yaml` |
+| I-4 | Secret names are fixed to §8.1 and cannot be overridden through values (the values schema refuses it) | `values.schema.json`, negative render |
+| I-5 | Quotas allow 1–200 per-run Secrets and ConfigMaps; `services*` is always 0 | `charts/devplat-project/templates/quotas.yaml` |
+| I-6 | The project chart keeps only project-specific policies (builder allowlist, optional RuntimeClass pin); generic hardening stays in base | §17 split |
+| I-7 | The ServiceAccount is `<project>-agent` everywhere | Admission case `doc16-example-pod-as-written` allowed by all policies (`platform/tools/admission/run.sh`) |
+| I-8 | Aligned: every platform pod sets `priorityClassName: devplat-platform` | Chart render |
+| I-9 | PSA labels are pinned to `v1.33` | Chart render |
+| I-10 | Model-gateway egress only for network classes `model-only` and `deps` | Chart NetworkPolicies match base |
 
-**Changes needed in files outside this assignment**
+**Still open:**
+- Q-18-1…5 are recorded in `12-amendments.md` as DOD-17…DOD-21.
+- Base mixes cluster prerequisites with a static namespace layer that the `devplat-project` chart can also install. The install rule is one install path per namespace (`24-…` §1). Splitting base into `base/cluster` and `base/static-projects` is proposed for DP1.
 
-1. Doc 16 §4.1: `serviceAccountName`, `dnsPolicy`/`dnsConfig`; confirm the gitbroker-fetch service.
-2. Charts: I-1, I-3, I-4, I-5, I-6, I-9; a workstation overlay that relaxes only `devplat-proj-runtime-placement` and replaces the placeholders (§9.1 rule 5).
-3. `platform/tools/`: commit the deploy-base validator and the CEL checker from the scratchpad.
-4. `12-amendments.md`: record Q-18-1…5 as operator decisions where they need one.

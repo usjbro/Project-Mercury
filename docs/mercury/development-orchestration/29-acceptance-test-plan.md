@@ -45,17 +45,32 @@ Levels:
 | AT-29 | Evidence survives failure | After AT-18…AT-20 every attempt's logs, result and bundle are in the artifact store with matching sha256 | K1 | Not run |
 | AT-30 | Human approval preserved end to end | AT-11 plus the ruleset check (`integrations/github.md` ruleset JSON) on the platform and Mercury repositories | GH | Not run (DOD-02) |
 
-## 2. Executed in the authoring environment
+## 2. Executed in the authoring environment (2026-10-17, commit 8b17bf2 and later)
 
-Environment: Linux x86_64 container; Python 3.13, jsonschema 4.26.0, PyYAML 6.0.1; PostgreSQL 16.15 started locally in a scratch directory; no Kubernetes, no Helm. Commands and results are filled in at the end of the amendment round (README status table, `reviews/R6-*`).
+**Environment.** Linux x86_64 container. Python 3.13, jsonschema 4.26.0, PyYAML 6.0.1. PostgreSQL 16.15 server binaries were preinstalled; tests start a private instance as `nobody`. Go 1.24.7 was preinstalled. Two tools were built from source into the scratchpad only, never installed on a host: Helm v3.17.3 and kubeconform v0.6.7, both via proxy.golang.org with checksums verified against sum.golang.org. **No Kubernetes cluster was used.**
 
-| Command | Covers | Result |
+**One command runs everything:**
+
+`GO=… HELM=… KUBECONFORM=… platform/tools/validate_all.sh` → **ALL CHECKS PASSED**
+
+| Check | Covers | Result |
 |---|---|---|
-| `python3 platform/controller/test_jobspec.py -v` | AT-09, AT-04 (naming) | See README status |
-| `python3 platform/tools/validate_k8s.py platform/deploy/base` | AT-02 | See README status |
-| `python3 platform/db/test_schema.py` | AT-03…AT-06 (DB) | See README status |
-| `python3 platform/tools/validate_projects.py` | AT-25 (schema) | See README status |
-| `python3 tools/devorch/test_devorch.py` | v1 regression (AT-07 baseline) | See README status |
+| `tools/devorch/test_devorch.py` | v1 regression, the specification for AT-07 | 30/30 |
+| `tools/devorch/gen_examples.py --check` | v1 examples unchanged | OK |
+| `platform/controller/test_jobspec.py` | AT-09, AT-04 naming. Output **equals** the doc 16 §4.1 example; strict v1.33 valid for all 13 profiles; negative strictness; hardening; digest pinning; per-dispatch names | 11/11 |
+| `platform/tools/validate_projects.py` (+ `--self-test`) | AT-25 at schema level. Mercury valid (`onboarding`, 0 unresolved security-core fields); Jupiter valid (`draft`, 53 unresolved); 24/24 mutation cases rejected | pass |
+| Execution profiles and task contract v2 schemas | 13 profiles; converted v1 example | valid |
+| `platform/tools/validate_k8s.py platform/deploy/base` | AT-02 | 121/121 strict-valid |
+| `platform/tools/admission/run.sh` | AT-16 offline. 93 CEL expressions compile in the Kubernetes v0.33 CEL environment; 61 admission cases match expectations, including doc 16's example Job and pod | 0 mismatches |
+| `platform/db/test_schema.py` | AT-03, AT-04 (DB), AT-05, AT-06 (DB). Real PostgreSQL 16 | 21/21, stable over 6 consecutive runs after the dispatch race fix (R6-local) |
+| `helm lint` + `helm template \| kubeconform -strict` | Chart validity | devplat 33/33 valid; devplat-project 21/21 valid; rendering without digests refused |
+
+**What these results do not show:**
+- runtime behaviour on a cluster (NetworkPolicy enforcement, gVisor, admission with typed objects and defaulting, Job lifecycle, recovery);
+- GitHub behaviour (ruleset, App permissions);
+- any cross-architecture image.
+
+Those are AT-08…AT-30 at levels K1, K2 and GH. All of them are **not run**.
 
 ## 3. Rules
 
