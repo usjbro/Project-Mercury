@@ -31,7 +31,7 @@ The amendment requires Kubernetes-based build and test workflows without a Docke
    - egress only through the registry proxy;
    - output is an OCI layout plus attestations into the project's bucket.
 
-   PSA level `baseline` with node-installed Localhost seccomp/AppArmor profiles is the target. `Unconfined` profiles (PSA `privileged` namespace label plus the VAP shape allowlist) are allowed only as an explicitly accepted **reduced-assurance** option.
+   As in the canonical security model (doc 18 §10.1, `platform/deploy/base`), build namespaces carry PSA `enforce: privileged` (audit/warn `restricted`). The real controls are VAPs: `devplat-build-exceptions` permits the BuildKit exceptions (Unconfined or Localhost seccomp/AppArmor, `allowPrivilegeEscalation` for `newuidmap`) **only** for the container `buildkitd` with the pinned image, and `devplat-pod-hardening` forbids every privileged feature. The project chart adds a per-project builder allowlist. Hardening targets: user namespaces (`hostUsers: false`), then Localhost profiles, which would allow PSA `baseline`.
 4. **Phase 1 runs no in-cluster builds.** Build namespaces exist with an empty builder allowlist.
 5. **Multi-arch.** An architecture is claimed for an image digest only after a smoke test on a native node of that architecture (`verified_platforms`). QEMU binfmt registration is never done in the shared cluster.
 6. **Kaniko** is an alternative only (a maintained fork, built from source, pinned). Buildah/Podman rootless is the second choice if BuildKit proves infeasible on the chosen node OS.

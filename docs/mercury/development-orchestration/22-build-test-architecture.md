@@ -55,14 +55,15 @@ Builds are optional (§9). Most Mercury suites run in a **pinned toolchain image
 ### 4.1 Lifecycle (controller-owned)
 
 1. **Admit.** Fewer than `test.maxConcurrentNamespaces` live namespaces for the project, and global admission allows it (`17-…`).
-2. **Name.** `runid` = the first 8 hex characters of `sha256(project, task, attempt, suite, head_sha)`. It is deterministic, so a retried create returns `AlreadyExists` and the controller adopts the namespace. The project id is ≤ 24 characters (chart schema), so `proj-<P>-t-<8>` stays ≤ 39 characters.
-3. **Create** the namespace with labels `devplat.io/project`, `devplat.io/ns-role=test`, `devplat.io/managed-by=devplat-controller` and `pod-security.kubernetes.io/enforce=restricted`. The `devplat-controller-scope` ValidatingAdmissionPolicy refuses any namespace the controller creates without these labels or outside the name pattern (`platform/deploy/charts/devplat/templates/controller-scope-policy.yaml`).
-4. **Profile.** Apply the project's test profile (`devplat-test-profile-<P>` ConfigMap from the `devplat-project` chart):
-   - a ResourceQuota (pods, CPU, memory, ephemeral storage; `persistentvolumeclaims`, `services.loadbalancers` and `secrets` = 0);
+2. **Name.** `runid` = the first 8 lowercase hex characters of `sha256(project, task, attempt, suite, head_sha)`. It is deterministic, so a retried create returns `AlreadyExists` and the controller adopts the namespace. The project id is ≤ 24 characters (chart schema), so `proj-<P>-t-<8>` stays ≤ 39 characters.
+3. **Create.** The controller has no cluster-wide rights, so it creates the namespace by **impersonating `devplat-namespacer`** (doc 18 §7). The namespace gets the labels `devplat.io/project`, `devplat.io/ns-role=test`, `devplat.io/managed-by=devplat-controller` and PSA `restricted` pinned to `v1.33`. Base VAP `devplat-namespacer-scope` refuses any namespace outside `^proj-<P>-t-[0-9a-f]{8}$` or without these labels, any delete of another namespace, and any RoleBinding other than controller → `devplat-test-runner`.
+4. **Profile.** Still as the namespacer, apply the project's test profile (`devplat-test-profile-<P>` ConfigMap from the `devplat-project` chart):
+   - a ResourceQuota (pods, CPU, memory, ephemeral storage; `services`, `services.loadbalancers` and `services.nodeports` = 0; per-run ConfigMaps and Secrets bounded, not 0, because each Job needs its `<job>-contract` and `<job>-io`);
    - a LimitRange;
-   - NetworkPolicies: default-deny ingress and egress, then allow intra-namespace traffic, DNS, gitbroker (fetch) and the artifact store.
-   - Model-gateway is **never** reachable from test namespaces, so tests cannot spend LLM budget.
-5. **Run** the test Jobs (`backoffLimit: 0`, `activeDeadlineSeconds`, `ttlSecondsAfterFinished`), with the same pod hardening as agent Jobs. Shards are separate Jobs with deterministic names.
+   - NetworkPolicies (doc 18 §9.3): `default-deny-all`, `allow-intra-namespace`, `allow-devplat-dns`, `allow-fetch-and-artifacts` (keyless `devplat-gitbroker-fetch` :8081 and the artifact store), and `allow-deps` (registry proxy, class `deps` only);
+   - a RoleBinding controller → `devplat-test-runner`.
+   - Model-gateway, gitbroker, PostgreSQL, the Kubernetes API and kube-dns are **never** reachable from test namespaces. Tests cannot spend LLM budget, and DNS cannot tunnel out: pods use `dnsPolicy: None` with the `devplat-dns` ClusterIP (CoreDNS without `forward`).
+5. **Run** the test Jobs (`backoffLimit: 0`, `activeDeadlineSeconds`, `ttlSecondsAfterFinished`), with the same pod hardening as agent Jobs: ServiceAccount `default` with no token, gVisor/Kata, only `dp-*` Secrets. Shards are separate Jobs with deterministic names `dp-<project>-<task>-a<attempt>-d<dispatch>` (`16-…`).
 6. **Collect.** Each Job uploads its results through presigned PUT URLs to `runs/<job-uid>/`. The controller copies them into content-addressed evidence (`sha256/<hex>`) and records `test_run` evidence (`19-…`).
 7. **Delete** after `ttlSecondsAfterSuccess` (default 0) or `ttlSecondsAfterFailure` (default 1 h, kept for inspection). A namespace older than `maxLifetimeSeconds` is deleted whatever its state, and the run is recorded as an environmental failure (`env_retry`).
 
@@ -116,15 +117,18 @@ These run in every profile before the first dispatch (bootstrap step 7, `24-…`
 |---|---|---|---|
 | N1 | Pod in `proj-<P>-exec` | TCP to `devplat-pg-rw.devplat-system:5432` | Timeout or refused (NetworkPolicy) |
 | N2 | Same | HTTPS to the Kubernetes API with no token; and `ls /var/run/secrets/kubernetes.io` | Connection denied; directory absent |
+| N2b | Same | DNS query to kube-dns (`kube-system`); resolve `example.com` through `devplat-dns` | kube-dns unreachable; external name NXDOMAIN or refused (no `forward`) |
+| N2c | Same | gitbroker `:8080` (the key holder) | Denied. Only the keyless `devplat-gitbroker-fetch :8081` is reachable |
+| N2d | Pod with `devplat.io/network-class: none` in `proj-<P>-exec` | Model-gateway `:8080` | Denied (`model-egress` selects only classes model-only and deps) |
 | N3 | Same | HTTPS to a public host (e.g. `example.com:443`) | Denied |
 | N4 | Same | Model-gateway with an unknown upstream host / over budget | 403 from the gateway |
 | N5 | Pod in `proj-<P>-t-<runid>` | Model-gateway `:8080` | Denied (NetworkPolicy) |
 | N6 | Pod in project A | Project B's bucket through a presigned URL scoped to A, and a direct unsigned GET | 403 |
-| N7 | Admission | Create a privileged pod, a hostPath pod, a pod without the required RuntimeClass, or a pod with another ServiceAccount in `proj-<P>-exec` | Rejected (PSA restricted + `devplat-<P>-exec-pods`) |
-| N8 | Admission | Controller ServiceAccount creates namespace `kube-foo` or writes into `devplat-system` | Rejected (`devplat-controller-scope`) |
+| N7 | Admission | Create a privileged pod, a hostPath pod, a pod without gVisor/Kata, a pod with another ServiceAccount, or a pod mounting a non-`dp-*` Secret in `proj-<P>-exec` | Rejected (PSA restricted + base VAPs `devplat-pod-hardening`, `devplat-proj-runtime-placement`, `devplat-proj-pod-identity`) |
+| N8 | RBAC + admission | Controller creates a Job in `devplat-system` or `kube-system`; namespacer (impersonated) creates namespace `kube-foo` or deletes `proj-<P>-exec` | Forbidden (no RBAC grant) / rejected (`devplat-namespacer-scope`) |
 | N9 | gitbroker | Bundle that touches restricted paths, renames out of scope, or a push to `main` | Refused; push never attempted |
 | N10 | gitbroker | Any merge, approve or ruleset call | No such endpoint; the App lacks the permission (verified by the GitHub API's 403 on the sandbox repository) |
-| N11 | Build pod | Image not on the builder allowlist; `capabilities.add` | Rejected (`devplat-<P>-build-pods`) |
+| N11 | Build pod | Image not on the project's builder allowlist; `capabilities.add`; `Unconfined` seccomp on a container other than `buildkitd` | Rejected (`devplat-<P>-builder-allowlist`; base `devplat-pod-hardening`, `devplat-build-exceptions`) |
 | N12 | NetworkPolicy enforcement | N1/N3 run on a CNI known not to enforce | The suite must **fail**. "Objects accepted" is never "policy enforced" |
 
 ## 8. Per-project artifact isolation
@@ -150,7 +154,7 @@ These run in every profile before the first dispatch (bootstrap step 7, `24-…`
 
 | Option | Status / facts | Security fit | Verdict |
 |---|---|---|---|
-| **BuildKit rootless** (`moby/buildkit:*-rootless`, daemonless per Job) | Maintained (moby). The upstream Kubernetes example runs as uid 1000 with seccomp **and** AppArmor `Unconfined` and `--oci-worker-no-process-sandbox`, because Kubernetes lacks `systempaths=unconfined`. Needs `user.max_user_namespaces` > 0 on nodes; overlayfs needs kernel ≥ 5.11. `procMount: Unmasked` with `hostUsers: false` is the documented alternative [S1][S2] | Not PSA `restricted` (needs a user namespace and `newuidmap`, i.e. privilege escalation). PSA `baseline` is reachable with node-installed **Localhost** seccomp and AppArmor profiles instead of `Unconfined`; this is unverified. Never privileged | **Recommended**, on a dedicated tainted `build` pool or `exec` nodes without gVisor |
+| **BuildKit rootless** (`moby/buildkit:*-rootless`, daemonless per Job) | Maintained (moby). The upstream Kubernetes example runs as uid 1000 with seccomp **and** AppArmor `Unconfined` and `--oci-worker-no-process-sandbox`, because Kubernetes lacks `systempaths=unconfined`. Needs `user.max_user_namespaces` > 0 on nodes; overlayfs needs kernel ≥ 5.11. `procMount: Unmasked` with `hostUsers: false` is the documented alternative [S1][S2] | Not PSA `restricted` (needs a user namespace and `newuidmap`, i.e. privilege escalation). Base therefore labels build namespaces PSA `enforce: privileged` (audit/warn restricted), and the VAPs do the real work: `devplat-build-exceptions` allows the exceptions only for the container `buildkitd` with the pinned image, and everything else stays forbidden (doc 18 §10.1). Localhost profiles (unverified) would allow PSA baseline later. Never a privileged container | **Recommended**, on a dedicated tainted `build` pool or `exec` nodes without gVisor |
 | BuildKit rootless + Kubernetes user namespaces (`hostUsers: false`) | User namespaces for pods are beta and on by default since Kubernetes 1.33; they need kernel ≥ 6.3 (idmap mounts) and containerd ≥ 2.0 or CRI-O ≥ 1.25 [S3] | Better: container root ≠ host root | **Target hardening**, after a spike on the chosen node OS |
 | BuildKit inside gVisor (`runtimeClassName: gvisor`) | No BuildKit-specific documentation found. The gVisor docs show Docker running inside gVisor with `--net-raw` and broad capabilities inside the sandbox [S4] | Strongest isolation if it works; capabilities are confined to the sandbox kernel | **Unverified assumption.** Spike before relying on it. GKE Sandbox does not support privileged containers [S5] |
 | BuildKit rootful / privileged, DinD | — | Privileged pod = node compromise | **Rejected** |
@@ -161,7 +165,7 @@ These run in every profile before the first dispatch (bootstrap step 7, `24-…`
 
 ### 9.3 Build rules (when enabled)
 
-1. One build = one Job in `proj-<P>-build`, ServiceAccount `<P>-build`, with no API token and no Secrets. The builder image must be on the chart's digest allowlist (VAP `devplat-<P>-build-pods`).
+1. One build = one Job in `proj-<P>-build`, ServiceAccount `<P>-build`, with no API token and only its per-run `dp-*` Secret. The builder image must be on the project's digest allowlist (chart VAP `devplat-<P>-builder-allowlist`) and on base's `buildkitImagePrefix` for the `buildkitd` container.
 2. Inputs: the source bundle from gitbroker at the head SHA. Base images and packages come only through the registry proxy (digest-pinned bases enforced by a Dockerfile lint step).
 3. Output: an OCI image layout (`--output type=oci`) uploaded through a presigned URL, plus an SBOM and provenance attestation (BuildKit `--attest`). The controller records the digest.
 4. Builds run agent-written `RUN` steps, so they are **untrusted execution** under the same egress rules as agent Jobs.
@@ -222,11 +226,12 @@ The gate rules are v1's (`08-…` §1), ported into the controller (`19-…`). "
 | Capability | Status |
 |---|---|
 | Test-namespace profile (labels, quota, limits, default-deny) rendered by `devplat-project` | **Implemented (untested)**: rendered with `helm template` (helm v3.17.3 built from source via the Go module proxy) and validated strict against Kubernetes v1.33 schemas (kubeconform); never applied to a cluster |
-| Controller admission scope policy for test namespaces | **Implemented (untested)**: rendered and schema-valid. CEL expressions not compiled against an API server |
+| Test-namespace creation via impersonated `devplat-namespacer` (base RBAC + `devplat-namespacer-scope`) | **Documented only** in the controller; RBAC and VAP are base manifests (**Implemented (untested)**, doc 18) |
+| Project-specific VAPs (builder allowlist, RuntimeClass pin) | **Implemented (untested)**: CEL compiled and evaluated offline (k8s 1.33 CEL environment); not run on an API server |
 | Test-namespace lifecycle and GC loop in the controller | **Documented only** |
 | Mandatory isolation probes N1–N12 | **Documented only** |
 | Deterministic seeds and flake rule | **Documented only** |
-| In-cluster BuildKit rootless builds | **Documented only.** Localhost-profile route (PSA baseline) is an **unverified assumption** |
+| In-cluster BuildKit rootless builds | **Documented only.** Build namespace PSA `privileged` + base VAPs (doc 18 §10.1); the Localhost-profile route (PSA baseline) is an **unverified assumption** |
 | BuildKit under gVisor | **Unverified assumption** (spike S-B1) |
 | vCluster test class | **Unverified assumption** |
 | Multi-arch verification rule | **Documented only** |

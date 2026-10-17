@@ -1,14 +1,15 @@
 apiVersion: v2
 name: devplat-project
 description: >-
-  Per-project bundle for devplat: project namespaces (exec, build), ResourceQuotas, LimitRanges, default-deny
-  NetworkPolicies, zero-RBAC ServiceAccounts, admission policies for project pods, and the test-namespace profile
-  that devplat-controller applies to ephemeral proj-<P>-t-<runid> namespaces. Values are generated from the
-  project configuration (26-..., platform/schemas/project-config.schema.json). Proposed; never installed.
+  Per-project namespace layer for devplat (same objects as platform/deploy/base renders statically for
+  proj-mercury-* / proj-jupiter-*): namespaces (PSA pinned v1.33), ResourceQuotas, LimitRanges, zero-RBAC
+  ServiceAccounts, the controller's RoleBindings to devplat-job-runner, NetworkPolicies, project-specific
+  admission (builder allowlist, optional RuntimeClass pin) and the test-namespace profile applied by
+  devplat-namespacer. Values are generated from the project configuration (26-...). Proposed; never installed.
 type: application
 version: 0.1.0-alpha.0
 appVersion: "0.1.0-alpha.0"
 kubeVersion: ">=1.30.0-0"
 annotations:
-  devplat.io/status: "Documented only - rendered and schema-validated offline, never installed"
+  devplat.io/status: "Implemented (untested) - rendered, validated and compared with platform/deploy/base offline, never installed"
   devplat.io/requires: "devplat chart installed (platformNamespace) with a matching version"

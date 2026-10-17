@@ -14,18 +14,30 @@ The platform must be declarative, installable on profiles from a workstation to 
 
 ## Decision
 
-1. **Two Helm charts (apiVersion v2, Kubernetes ≥ 1.30):**
-   - `devplat`: control plane in `devplat-system` (controller ×2 with Lease, api with OIDC, gitbroker, model-gateway, optional CloudNativePG `Cluster`, NetworkPolicies, controller-scope admission policy);
-   - `devplat-project`: one release per project per execution target. Namespaces, quotas, default-deny NetworkPolicies, zero-RBAC ServiceAccounts, per-project admission policies and the test-namespace profile. Its values are generated from the project configuration.
+1. **Two Helm charts (apiVersion v2, Kubernetes ≥ 1.30), on top of the canonical `platform/deploy/base`:**
+   - **Base cluster prerequisites** (operator, always from base): ClusterRoles `devplat-job-runner`, `devplat-test-runner`, `devplat-namespacer`, `devplat-dns`; all ValidatingAdmissionPolicies and their params; RuntimeClasses; PriorityClasses; platform namespaces and their NetworkPolicies. The charts never render these.
+   - `devplat`: control plane in `devplat-system` (render refused elsewhere):
+     - controller ×2 with Lease;
+     - api with OIDC;
+     - gitbroker (the only GitHub App key holder, ingress from the controller only);
+     - keyless gitbroker-fetch on :8081;
+     - model-gateway;
+     - devplat-dns (CoreDNS without `forward`);
+     - optional CloudNativePG `Cluster`;
+     - the controller's namespaced Roles.
+     
+     There is no cluster-wide controller grant: test namespaces are created by impersonating `devplat-namespacer`.
+   - `devplat-project`: one release per project per execution target. It renders the per-project namespace layer that base shows statically: namespaces with PSA pinned to v1.33, quotas (bounded per-run Secrets), LimitRanges, zero-RBAC ServiceAccounts `<P>-agent`/`<P>-build`, the controller's RoleBindings to `devplat-job-runner`, NetworkPolicies (model-gateway only for classes model-only/deps), the test-namespace profile, and project-specific admission only (builder allowlist, optional RuntimeClass pin). Its values are generated from the project configuration. Rendered for `mercury`, it is spec-identical to base.
 2. **Strict values contract.**
    - `values.schema.json` rejects unknown keys.
    - Images by digest only; rendering fails while no image exists.
+   - Secret names are fixed to doc 18 §8.1, so base Secret pinning applies; no name can be overridden.
    - Safety properties are constants: gitbroker `pushRefPrefix: dev/`, `draftPullRequestsOnly: true`, single replica. There is no merge/approve setting.
-   - NetworkPolicy off renders only in `reduced` assurance mode. Ingress is refused without OIDC.
+   - Ingress is refused without OIDC.
 3. **No subchart dependencies.** CloudNativePG, the object store, the ingress controller and gVisor are cluster prerequisites, installed and upgraded separately by the operator.
 4. **Separation of duties.**
    - The operator installs and configures: cluster-scoped objects, secrets, App, ruleset, OIDC.
-   - The controller only operates: Jobs and test namespaces, constrained by RBAC and the `devplat-controller-scope` policy. It cannot change its own RBAC, policies or secrets.
+   - The controller only operates: Jobs, per-run objects and (as the impersonated namespacer) test namespaces, constrained by per-namespace RBAC and base VAPs. It cannot change its own RBAC, policies or platform secrets.
    - `platform/**` is a restricted path for agent tasks.
 5. **GitOps is optional.**
    - Workstation and single node: plain Helm by the operator.
@@ -50,8 +62,9 @@ The platform must be declarative, installable on profiles from a workstation to 
 - **Negative:**
   - prerequisites are manual operator steps;
   - CloudNativePG backups are not templated yet (the chart refuses `backup.enabled`);
-  - CEL policies are not validated until a cluster exists.
-- **Status:** charts Implemented (untested). Rendered with helm v3.17.3 (built from source) and strict-validated with kubeconform against Kubernetes 1.33 schemas: devplat 28/28, devplat-project 17/17; negative cases fail as designed. Never installed. Images Blocked (none exist).
+  - CEL is compiled and evaluated offline only; admission is not exercised until a cluster exists;
+  - base and charts overlap in the namespace layer, so each namespace is owned by exactly one install path (Helm or kubectl), never both.
+- **Status:** charts Implemented (untested). Rendered with helm v3.17.3 (built from source) and strict-validated with kubeconform against Kubernetes 1.33 schemas: devplat 33/33, devplat-project 21/21. Parity with base was checked field by field. Base VAPs were evaluated offline against the rendered pods. Negative cases fail as designed. Never installed. Images Blocked (none exist).
 
 ## Verification required before acceptance
 

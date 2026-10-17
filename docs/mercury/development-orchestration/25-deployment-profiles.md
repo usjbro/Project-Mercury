@@ -46,7 +46,7 @@ Rule: a control counts only if the probe for it passes on that installation. Pro
 | Component | Requests (est.) | Notes |
 |---|---|---|
 | Kubernetes system (kind/k3s, CNI, DNS) | 0.5–1 CPU, 1–1.5 GiB | Depends on the distribution |
-| devplat-controller ×2, api, gitbroker, model-gateway ×2 | 0.6 CPU, ≈ 0.8 GiB (chart defaults: 100m / 128Mi each) | Limits up to 1 CPU / 512Mi each |
+| devplat-controller ×2, api, gitbroker, model-gateway ×2, gitbroker-fetch ×2, devplat-dns ×2 | ≈ 0.8 CPU, ≈ 1.1 GiB (chart defaults: 50–100m / 64–128Mi each) | Limits up to 1 CPU / 512Mi each |
 | PostgreSQL (CNPG, 1 instance) | 0.25–0.5 CPU, 0.5–1 GiB, 10 GiB disk | 3 instances in P5/P6 |
 | CNPG operator, S3-compatible store | 0.2 CPU, 0.5 GiB | In-cluster store optional |
 | **One agent Job** (Claude Code headless, workspace emptyDir) | 1 CPU, 2 GiB request; 2 CPU, 4 GiB limit (`devplat-project` LimitRange defaults) | **Unmeasured**; refit after 10 Jobs (as in v1 `09-…` §4) |
@@ -78,7 +78,7 @@ This is **not** a recommendation to run the platform on that machine and **not**
 | Topic | GKE | EKS | AKS |
 |---|---|---|---|
 | Node pools | `control` (standard COS) + `exec` (GKE Sandbox, taint `devplat.io/exec=true:NoSchedule`) | Managed node groups: `control` + `exec` (custom launch template with `runsc`, taint) | System and user node pools; `exec` with Pod Sandboxing |
-| Sandbox | gVisor via `runtimeClassName: gvisor`. Autopilot runs sandboxed Pods when requested [S3] | gVisor self-installed (unsupported by AWS); Kata alternative | Kata-based Pod Sandboxing; set `exec.requiredRuntimeClassName` to the AKS runtime class |
+| Sandbox | gVisor via `runtimeClassName: gvisor`. Autopilot runs sandboxed Pods when requested [S3] | gVisor self-installed (unsupported by AWS); Kata alternative | Kata-based Pod Sandboxing: map base RuntimeClass `kata` to the AKS handler in the overlay; optionally pin it per project with `exec.requiredRuntimeClassName: kata` |
 | Workload identity | Workload Identity Federation: only `devplat-controller` (bucket, backups) and `devplat-api` (secret store) bind cloud identities | EKS Pod Identity or IRSA, same scope | AKS Workload Identity, same scope |
 | PostgreSQL | Cloud SQL (`postgres.mode=external`) or CNPG | RDS / Aurora PostgreSQL or CNPG | Azure Database for PostgreSQL or CNPG |
 | Artifacts | GCS through the S3 interoperability API, or S3-compatible proxy | S3 | Blob storage through an S3-compatible gateway |
@@ -105,7 +105,7 @@ This is **not** a recommendation to run the platform on that machine and **not**
 | gVisor on Linux hosts / GKE Sandbox | **Documented only** (vendor documentation; not exercised) |
 | NetworkPolicy enforcement per CNI | **Unverified** until probe N12 runs on the installation |
 | Sizing figures | **Unverified assumption** (estimates) |
-| `assuranceMode` value and its template guard | **Implemented (untested)**: chart guard rendered offline (`24-…` §10) |
+| `assuranceMode` value | **Implemented (untested)**: chart value, passed to the controller. Reduced mode itself is the workstation overlay of base, which relaxes only the binding of `devplat-proj-runtime-placement` to `[Warn, Audit]` (doc 18 §16) |
 
 ## 9. Open questions
 

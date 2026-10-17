@@ -92,7 +92,7 @@ Status: **Documented only (rejected for now).**
 | DB | Migrations up/down on PostgreSQL 16 (service container); `record_event` sole-writer grants; hash-chain verification; idempotency and lease tests | pytest + PostgreSQL 16 | Required |
 | Schemas | `platform/schemas/*.json` meta-validate; every `platform/projects/*.yaml` validates against `project-config.schema.json`; contract/result examples validate | jsonschema 4.26.0 | Required |
 | Manifests | `platform/deploy/base/**` strict-validated against Kubernetes v1.33 JSON schemas; CRDs (CloudNativePG `Cluster`) against their CRD schemas | kubeconform `-strict`, `platform/tools/validate_k8s.py` | Required |
-| Charts | `helm lint`; `helm template` for a values matrix (cnpg/external, ingress on/off, reduced mode, project with/without build) piped into kubeconform; negative cases must fail (empty digest, `draftPullRequestsOnly: false`, unknown key, NetworkPolicy off in standard mode); chart-testing `ct lint` | helm 3, kubeconform, ct | Required |
+| Charts | `helm lint`; `helm template` for a values matrix (cnpg/external, ingress on/off, reduced mode, project with/without build) piped into kubeconform; negative cases must fail (empty digest, wrong namespace, `draftPullRequestsOnly: false`, unknown key or Secret-name override, `secrets` quota 0); field-by-field parity of `devplat-project` (id `mercury`) with `platform/deploy/base`; base VAPs evaluated against the rendered pods with the CEL evaluator; chart-testing `ct lint` | helm 3, kubeconform, ct | Required |
 | Policy | Admission policies applied in a **kind** cluster on the runner; the isolation probes N1–N12 (`22-…` §7) run against a real install with a NetworkPolicy-enforcing CNI | kind + Calico or Cilium | Required before release; nightly |
 | E2E | `ct install` of both charts in kind; fake-agent multi-project scenario; controller leader-kill and agent-pod-eviction recovery | kind, fake agent image | Required before release; nightly |
 | Images | Build `devplat-controller`, `-api`, `-gitbroker`, `-model-gateway`, `-fake-agent` and toolchain images with BuildKit (buildx) on hosted runners, native per arch where available (`22-…` §9.4) | docker buildx | Required |
@@ -111,9 +111,10 @@ Status: **Documented only (rejected for now).**
 | Check | Result (2026-10-17) |
 |---|---|
 | `helm lint` both charts | Pass. helm v3.17.3 was built from source through the Go module proxy (checksums verified against `sum.golang.org`), because no helm binary was installed |
-| `helm template` + kubeconform v0.6.7 `-strict`, Kubernetes 1.33.0 | devplat: 28/28 valid (CloudNativePG `Cluster` validated against the datreeio CRDs-catalog schema); devplat-project: 17/17 valid; variant matrix valid; 6 negative cases fail as intended |
+| `helm template` + kubeconform v0.6.7 `-strict`, Kubernetes 1.33.0 | After reconciliation with doc 18/base: devplat 33/33 valid (CloudNativePG `Cluster` validated against the datreeio CRDs-catalog schema); devplat-project 21/21 valid; variant matrix valid; 12 negative cases fail as intended (`24-…` §10) |
+| Parity and policy checks | `devplat-project` rendered for `mercury` is spec-identical to base for all 18 shared objects; controller Roles identical to base; base VAPs (pod hardening, platform placement, Secret pinning, image pinning) allow all 6 platform Deployments and deny a mis-pinned Secret; chart CEL compiles and 5 evaluation cases pass |
 | `values.yaml` against `values.schema.json` (jsonschema 4.26.0) | 0 errors both charts; negative mutations rejected |
-| CEL in admission policies | **Not compiled** (needs an API server) |
+| CEL in admission policies | Compiled and evaluated offline with the Kubernetes 1.33 CEL environment (`k8s.io/apiserver` library; DynType inputs, so no OpenAPI field typing). Not run on an API server |
 
 ### 5.3 Independence from Mercury and Jupiter
 
