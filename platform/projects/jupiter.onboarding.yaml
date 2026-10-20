@@ -7,11 +7,11 @@
 # Questions are numbered Q-J01… and listed with their purpose in
 # docs/mercury/development-orchestration/26-project-configuration.md §3.1.
 schema: devplat.project.v1
-schema_minor: 0
+schema_minor: 1
 project_id: jupiter                 # the name the operator used; confirm (Q-J01)
 display_name: Project JUPITER (unconfirmed)
 status: draft                       # nothing may be scheduled for this project
-config_version: 1
+config_version: 2                   # R6 fix round (schema minor 1)
 verified:
   date: "2026-10-17"
   by: devplat drafting agent (Amendment 001)
@@ -117,6 +117,7 @@ review_gates:
     security_sensitive: [mdev-code-reviewer, mdev-security-engineer]
   human_approvers: {unresolved: "Q-J18: GitHub login(s) of the Jupiter repository owner who alone approves and merges.", owner: operator}
   human_approver_rule: repository_owner                            # platform invariant
+  hard_preconditions: [DOD-02, DOD-13]   # platform minimum (R6 D1); facts must be recorded for project jupiter itself
   external_gates: []                # Q-J19: project-specific gates (e.g. hardware or compliance sign-off)?
 
 github_policy:
@@ -131,7 +132,7 @@ github_policy:
   required_ci_contexts: {unresolved: "Q-J10: Which CI checks are required?", owner: operator}
 
 artifacts:
-  bucket: devplat-proj-jupiter      # platform naming convention; bucket not created
+  bucket: devplat-jupiter           # devplat-<project_id> (R6 D11); bucket not created
   retention_days:
     evidence: {unresolved: "Q-J21: Evidence retention."}
     logs: {unresolved: "Q-J21: Log retention."}

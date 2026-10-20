@@ -9,6 +9,18 @@
 #
 # This chart renders the per-project namespace layer that platform/deploy/base shows statically for
 # proj-mercury-* / proj-jupiter-* (namespaces, quotas, limit ranges, ServiceAccounts, the controller's
+# RoleBindings to devplat-job-runner, NetworkPolicies), plus per-project parts that only exist per project:
+# the per-namespace admission params (image prefixes, D15), the read-only registry proxy (D14), the
+# builder policy (D20) and the test profile used by devplat-namespacer (D19). Generic hardening (VAPs),
+# ClusterRoles, RuntimeClasses and PriorityClasses are cluster prerequisites from base and are NOT rendered here.
+
+project:
+# - Mercury: quotas are `unresolved` in platform/projects/mercury.yaml (namespace_quota); its release is rendered
+#   only after the operator sizes them (cluster size per DOD-15, first measured tasks per 09-... section 4).
+# - Jupiter: every value is unresolved (no repository or specification exists); nothing is rendered for it.
+#
+# This chart renders the per-project namespace layer that platform/deploy/base shows statically for
+# proj-mercury-* / proj-jupiter-* (namespaces, quotas, limit ranges, ServiceAccounts, the controller's
 # RoleBindings to devplat-job-runner, NetworkPolicies). Generic hardening (VAPs), ClusterRoles, RuntimeClasses
 # and PriorityClasses are cluster prerequisites from base and are NOT rendered here.
 
@@ -21,11 +33,34 @@ project:
 
 platformNamespace: devplat-system
 
-# Artifact store reachable from project pods (presigned URLs only).
-artifacts:
-  inCluster:
-    enabled: true                 # devplat-artifacts Service in namespace devplat-artifacts, port 9000
-  externalCidrs: []               # external S3 endpoint CIDRs on 443 (base placeholder 198.51.100.10/32)
+# Registry (mirror) project images are pulled from. Project namespaces admit only
+# <imageRegistry>/devplat/ (platform runner and fetch images), <imageRegistry>/projects/<id>/ and
+# <imageRegistry>/mirror/ (D15). Rendered as the per-namespace params ConfigMap devplat-admission-params.
+imageRegistry: registry.devplat.internal
+
+# Assurance (D16). reduced requires the per-project operator fact REDUCED-ASSURANCE (with a reason) recorded through
+# devplat-api; the controller checks the DB fact, this value only declares intent. In reduced mode builds must be
+# disabled, the dev-bot App may be installed on a sandbox repository only, and the gateway uses the separate
+# spend-limited key <provider>-api-key-reduced.
+assurance:
+  mode: standard
+  reducedAssuranceFact: ""        # e.g. "REDUCED-ASSURANCE"; required when mode=reduced
+
+# Agent, build and test pods reach artifacts ONLY through devplat-artifact-gateway :8082 (D10). There is no
+# object-store egress from project namespaces, so there is nothing to configure here.
+
+# Read-only package-registry proxy for this project (D14): devplat-registry-proxy-<id> in devplat-system, publish
+# and adduser disabled, upstreams = the project's registries_allowlist. Only npm is templated (Verdaccio); other
+# ecosystems are unresolved. Disabled = network class deps has no registry to reach.
+registryProxy:
+  enabled: false
+  image:
+    name: mirror/verdaccio/verdaccio
+    digest: ""
+  npmUplinks: []                  # e.g. ["https://registry.npmjs.org/"]; must be non-empty when enabled
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 512Mi}
 
 exec:
   # Base VAP devplat-proj-runtime-placement already requires RuntimeClass gvisor or kata for every exec/test pod.
@@ -52,10 +87,15 @@ exec:
     pvcMaxStorage: 20Gi
 
 build:
-  enabled: true
-  # Project-specific builder allowlist (digest-pinned). Empty = no build pod admitted for this project.
-  # The BuildKit exceptions themselves (container buildkitd, image prefix) are the base VAP devplat-build-exceptions.
-  allowedBuilderImages: []
+  # Builds are OFF by default (D20) and remain blocked on spike S-B1 (22-... section 9). When enabled, buildkitd
+  # must run with hostUsers: false, the Localhost seccomp profile below and exactly the pinned args; the builder
+  # image must be on the allowlist (digest-pinned). Not allowed in reduced-assurance mode (D16).
+  enabled: false
+  allowedBuilderImages: []        # e.g. ["registry.devplat.internal/mirror/moby/buildkit@sha256:..."]
+  buildkit:
+    seccompLocalhostProfile: ""   # node-installed profile, e.g. "profiles/devplat-buildkitd.json"
+    args:                         # pinned buildkitd/buildctl-daemonless args (no --oci-worker-no-process-sandbox)
+      - "--oci-worker-snapshotter=overlayfs"
   quota:
     requests.cpu: "8"
     limits.cpu: "16"

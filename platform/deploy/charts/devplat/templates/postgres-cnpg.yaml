@@ -4,9 +4,13 @@
 {{- end }}
 {{- /*
 CloudNativePG Cluster (custom resource; requires the CloudNativePG operator, installed beforehand by the operator).
-No superuser access from applications. Component roles are managed roles whose passwords come from basic-auth
-Secrets the operator creates: devplat-db-controller, devplat-db-api, devplat-db-model-gateway. Table grants (controller = sole writer of
-task state) are applied by the platform's migrations (19-..., platform/db), not here.
+Name devplat-pg: base NetworkPolicies select cnpg.io/cluster=devplat-pg (S-22). The operand image is required and
+digest-pinned (S-22). No superuser access from applications.
+D9: the database owner (initdb.owner) is the migration login devplat_migrator (password from Secret
+devplat-db-migrator); devplat_owner is a NOLOGIN group role that owns the schema objects after migration.
+Runtime roles are managed roles whose passwords come from basic-auth Secrets the operator creates:
+devplat-db-controller, devplat-db-api, devplat-db-model-gateway. Their grants (controller = sole writer of task
+state; none of them has DDL rights) are applied by the migrator Job (19-..., platform/db), not here.
 */}}
 apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
@@ -17,17 +21,20 @@ metadata:
     {{- include "devplat.labels" (dict "root" . "name" "devplat-pg") | nindent 4 }}
 spec:
   instances: {{ .Values.postgres.cnpg.instances }}
-  {{- with .Values.postgres.cnpg.imageName }}
-  imageName: {{ . }}
-  {{- end }}
+  imageName: {{ include "devplat.image" (dict "root" . "image" .Values.postgres.cnpg.image "key" "postgres.cnpg") }}
   enableSuperuserAccess: false
   primaryUpdateStrategy: unsupervised
   bootstrap:
     initdb:
       database: devplat
-      owner: devplat_owner
+      owner: devplat_migrator
+      secret:
+        name: devplat-db-migrator
   managed:
     roles:
+      - name: devplat_owner
+        ensure: present
+        login: false
       # Passwords from the fixed basic-auth Secrets of doc 18 section 8.1 (created by the operator).
       - name: devplat_controller
         ensure: present

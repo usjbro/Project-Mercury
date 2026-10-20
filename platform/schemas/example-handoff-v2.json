@@ -1,0 +1,32 @@
+{
+  "schema": "devplat.handoff.v2",
+  "project_id": "mercury",
+  "task_id": "DT-0001",
+  "seq": 4,
+  "at": "2026-10-17T09:30:00Z",
+  "event": "dispatched",
+  "from_state": "RUNNING",
+  "to_state": "RUNNING",
+  "actor": "devplat-controller",
+  "controller_id": "devplat-controller-7c9d5-0",
+  "on_behalf_of": null,
+  "contract_version": 1,
+  "contract_core_sha256": "4b1e0c3a9d7f25e86c1b0a4f3e9d2c7b6a5f4e3d2c1b0a9f8e7d6c5b4a392817",
+  "attempt": 2,
+  "dispatch_no": 1,
+  "job_uid": "3f2c1b0a-9d8e-4f7a-8b6c-5d4e3f2a1b0c",
+  "lease_token": 7,
+  "config_version": 1,
+  "assurance_mode": "standard",
+  "idempotency_key": "236b93d0c657f40e8603a992840ceb18a8ec0978",
+  "evidence": [
+    {
+      "kind": "contract",
+      "ref": "sha256/9999999999999999999999999999999999999999999999999999999999999999",
+      "sha256": "9999999999999999999999999999999999999999999999999999999999999999"
+    }
+  ],
+  "payload": {},
+  "prev_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+}

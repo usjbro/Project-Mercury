@@ -4,13 +4,13 @@
 # Nothing here is a secret value. Unknown values are {unresolved: <question>}; designed-but-absent commands are {planned, ref}.
 # Mercury PRODUCTION architecture is not described here: this file only tells devplat how to BUILD Mercury.
 schema: devplat.project.v1
-schema_minor: 0
+schema_minor: 1
 project_id: mercury
 display_name: Project MERCURY
 # onboarding, not active: the TDD is not approved (DOD-01), no package.json/source exists, the ruleset (DOD-02)
-# and dev bot (DOD-03/DOD-13) are not in place. Only planning/design/discovery tasks may run (26-… §1.4).
+# and dev bot (DOD-13) are not in place. Only planning/design/discovery tasks may run (26-… §1.4).
 status: onboarding
-config_version: 1
+config_version: 2                 # R6 fix round: hard_preconditions, bucket name, catalogue task kinds
 verified:
   date: "2026-10-17"
   by: devplat drafting agent (Amendment 001), checked by platform/tools/validate_projects.py
@@ -268,9 +268,9 @@ identities:
     name: devplat-github-app-mercury
     purpose: development bot (dev/* pushes, draft PRs) — NOT mercury-bot
     holder: devplat-gitbroker
-    scope: "contents:write limited to dev/*, pull_requests:write (draft), no administration/workflows, not a CODEOWNER, no bypass"
+    scope: "contents:write limited to dev/*, pull_requests:write (draft), no administration/workflows, not a CODEOWNER, no bypass. NOTE: with contents:write + pull_requests:write the App CAN merge and approve through the API; the DOD-02 ruleset (code-owner review, no bypass) is the preventive control (R6 D13)"
     provisioning: awaiting_operator
-    ref: 12-amendments.md DOD-03 (a) / DOD-13; 01-… S1–S2
+    ref: 12-amendments.md DOD-13 (replaces DOD-03 (a) in Kubernetes mode); 01-… S1–S2
   secrets:
     - {name: devplat-anthropic-key-mercury, purpose: model API key for Mercury agent Jobs, holder: devplat-model-gateway, scope: "dedicated key with spend limit; injected by the gateway", provisioning: awaiting_operator, ref: "DOD-08; ADR-008 pattern (dedicated key)"}
     - {name: mercury-sandbox-bot-key, purpose: sandbox mercury-bot App private key for T3, holder: test-namespace, scope: "sandbox repo only; separate installation id", provisioning: not_created, ref: "verification-plan §2.3; OD-13"}
@@ -280,6 +280,7 @@ identities:
 security:
   # Development-time restrictions for agent tasks on this repository (devorch contracts, guard hook, CLAUDE.md).
   restricted_paths:
+    # docs/** and .github/** below are a RECOMMENDED default pending operator decision DOD-23 (not decided).
     - "docs/**"                      # design changes only by operator-approved amendment (CLAUDE.md; 08-… §2 D7–D8 note)
     - ".github/**"                   # CI, workflows, CODEOWNERS: restricted until the operator decides otherwise (open question Q-M3, 26-… §2.3)
     - ".claude/**"                   # Claude Code config (guard hook PATH_DENY; SEC-310)
@@ -306,13 +307,13 @@ security:
     - "package-lock.json"
   escalate_paths:
     - "src/ports/**"                 # frozen interfaces (06-… §4; RA-D3): Lead Architect only, interface_frozen record
-  runtime_class: gvisor              # topology B (DOD-11); repository-derived code is untrusted
+  runtime_class: gvisor              # recommended (ADR-023, proposed; awaits DOD-11); repository-derived code is untrusted
   pod_security: restricted
   untrusted_inputs: [agent outputs, repository content, Linear text, PR comments and reviews, CI logs, dependency source, fixtures]   # 08-… §6
 
 agent_permissions:
   roles:
-    planner: {enabled: true, writes: false, path_scopes: [], task_kinds: [planning], ref: "brief: Principal Orchestrator reasoning as planner Jobs; proposals only"}
+    planner: {enabled: true, writes: false, path_scopes: [], task_kinds: [plan_proposal], ref: "Principal Orchestrator reasoning as planner Jobs; proposals need operator approval (R6 D18)"}
     mdev-lead-architect: {enabled: true, writes: true, path_scopes: ["src/ports/**"], task_kinds: [design, design_review], ref: "gen_agents.py 01 (ADR proposals under docs/** stay outside agent scope: restricted; see 26-… §2.3 Q-M3)"}
     mdev-tpm: {enabled: true, writes: false, path_scopes: [], task_kinds: [planning], ref: "gen_agents.py 02 (reports go to evidence only)"}
     mdev-backend-engineer: {enabled: true, writes: true, path_scopes: ["src/core/**", "src/app/**", "src/bin/**", "src/adapters/clock/**", "src/adapters/control/**", "src/adapters/notify/**", "src/adapters/fs/**", "test/**"], task_kinds: [implementation], ref: gen_agents.py 03}
@@ -320,9 +321,9 @@ agent_permissions:
     mdev-ai-integration-engineer: {enabled: true, writes: true, path_scopes: ["src/adapters/claude/**", "src/adapters/codex/**", "src/schemas/**", "scripts/gen-wire-schemas.ts", "test/fakes/agents/**", "test/**"], task_kinds: [implementation], ref: gen_agents.py 05}
     mdev-platform-integration-engineer: {enabled: true, writes: true, path_scopes: ["src/adapters/github/**", "src/adapters/linear/**", "src/app/inbox-processor.ts", "src/app/outbox-worker.ts", "test/mocks/**", "test/**"], task_kinds: [implementation], ref: gen_agents.py 06}
     mdev-security-engineer: {enabled: true, writes: true, path_scopes: ["src/adapters/process/**", "src/adapters/git/**", "src/adapters/keychain/**", "src/adapters/presence/**", "packaging/agent/**", "src/core/policies/redaction*", "test/**"], task_kinds: [implementation, security_review], ref: gen_agents.py 07}
-    mdev-devops-engineer: {enabled: true, writes: true, path_scopes: ["packaging/**", "package.json", "package-lock.json", "scripts/**"], task_kinds: [implementation, build], ref: "gen_agents.py 08 (excl. packaging/agent/**, scripts/gen-wire-schemas.ts — enforced by contracts). .github/workflows/** is in the v1 scope but restricted here until Q-M3 is answered"}
+    mdev-devops-engineer: {enabled: true, writes: true, path_scopes: ["packaging/**", "package.json", "package-lock.json", "scripts/**"], task_kinds: [implementation, release], ref: "gen_agents.py 08 (image builds are BuildKit Jobs, not an agent kind; builds disabled by default, R6 D20) (excl. packaging/agent/**, scripts/gen-wire-schemas.ts — enforced by contracts). .github/workflows/** is in the v1 scope but restricted here until Q-M3 is answered"}
     mdev-test-automation-engineer: {enabled: true, writes: true, path_scopes: ["test/**"], task_kinds: [test], ref: gen_agents.py 09}
-    mdev-reliability-engineer: {enabled: true, writes: true, path_scopes: ["test/recovery/**", "test/fault/**"], task_kinds: [reliability, reliability_review, mac_validation], ref: gen_agents.py 10}
+    mdev-reliability-engineer: {enabled: true, writes: true, path_scopes: ["test/recovery/**", "test/fault/**"], task_kinds: [reliability, reliability_review], ref: "gen_agents.py 10 (Mac procedures are mac_validation tasks of the operator lane, not of this role)"}
     mdev-code-reviewer: {enabled: true, writes: false, path_scopes: [], task_kinds: [code_review], ref: gen_agents.py 11}
     mdev-integration-release-engineer: {enabled: true, writes: true, path_scopes: ["CHANGELOG.md"], task_kinds: [integration, release], ref: "gen_agents.py 12 (integration branches are controller-created, never pushed)"}
 
@@ -348,8 +349,9 @@ review_gates:
     - {id: G-S3, satisfied_by: operator_fact, ref: "threat-model §8.10"}
     - {id: G-S4, satisfied_by: operator_fact, ref: "threat-model §8.10"}
     - {id: G-S5, satisfied_by: operator_fact, ref: "threat-model §8.10 (includes G-ORG)"}
-    - {id: DOD-01, satisfied_by: operator_fact, ref: "12-amendments.md (TDD approved as design baseline)"}
-    - {id: DOD-02, satisfied_by: operator_fact, ref: "12-amendments.md (main ruleset)"}
+    - {id: DOD-01, satisfied_by: operator_fact, ref: "12-amendments.md (TDD approved as design baseline; Mercury project fact, not a platform gate)"}
+  # Project-scoped hard preconditions for FULL-lifecycle dispatch and pushes (R6 D1): facts recorded for project mercury only.
+  hard_preconditions: [DOD-02, DOD-13]   # DOD-02: ruleset + CI hardening on usjbro/Project-Mercury (D13); DOD-13: dev-bot App installed
 
 github_policy:
   pr_mode: draft
@@ -369,7 +371,7 @@ github_policy:
   commit_trailers: [Devorch-Task, Devorch-Contract, Merc-Issue, Devorch-Agent]   # 06-… §3
 
 artifacts:
-  bucket: devplat-proj-mercury
+  bucket: devplat-mercury           # devplat-<project_id> (20-… artifact layout, R6 D11)
   retention_days:
     evidence: {unresolved: "v1 keeps evidence permanently on devorch/state. Keep evidence for the project's life, or a number of days (>= 365 recommended)?", owner: operator}
     logs: {unresolved: "Retention for Job logs (no development requirement exists; production values in macos-service §2.7 do not apply)."}
@@ -396,5 +398,5 @@ execution_target:
   namespace_prefix: proj-mercury
 
 notes:
-  - "status stays onboarding until DOD-01, DOD-02, DOD-13 (dev bot), DOD-08 (budget) are recorded and the toolchain image digest exists; then every unresolved above must be answered before active."
+  - "status stays onboarding until DOD-01 and the hard preconditions DOD-02, DOD-13 (project-scoped facts), and DOD-08 (budget) are recorded and the toolchain image digest exists; then every unresolved above must be answered before active."
   - "Self-hosting (11-…) and production MERCURY are out of scope of this file: production runs on the operator's Mac per the TDD."

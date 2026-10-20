@@ -1,8 +1,9 @@
 {{- /*
 devplat-controller: deterministic task state machine, multi-project admission, Job creation/reconciliation,
 gate verification. Sole writer of task state (DB role in Secret devplat-db-controller). 2 replicas, one active
-leader (Lease devplat-controller); the standby does no writes. Test namespaces are created by impersonating
-devplat-namespacer (VAP devplat-namespacer-scope). Per-run objects: Job dp-<project>-<task>-a<attempt>-d<dispatch>,
+leader (Lease devplat-controller); the standby does no writes. Test namespaces are requested from the
+devplat-namespacer Deployment (D19). The controller NEVER runs schema migrations (D9): its DB role has no DDL
+rights, and it refuses to start while the schema version differs from the one it was built for. Per-run objects: Job dp-<project>-<task>-a<attempt>-d<dispatch>,
 ConfigMap <job>-contract, Secret <job>-io (doc 16, doc 18 section 8.2).
 */}}
 {{- $ns := .Release.Namespace -}}
@@ -22,8 +23,12 @@ ConfigMap <job>-contract, Secret <job>-io (doc 16, doc 18 section 8.2).
   value: %q
 - name: DEVPLAT_MAX_TEST_NS_PER_PROJECT
   value: %q
-- name: DEVPLAT_NAMESPACER_IMPERSONATE
-  value: "system:serviceaccount:%s:devplat-namespacer"
+- name: DEVPLAT_NAMESPACER_URL
+  value: "http://devplat-namespacer.%s.svc:8083"
+- name: DEVPLAT_ARTIFACT_GATEWAY_URL
+  value: "http://devplat-artifact-gateway.%s.svc:8082"
+- name: DEVPLAT_RUN_MIGRATIONS
+  value: "never"
 - name: DEVPLAT_GITBROKER_URL
   value: "http://devplat-gitbroker.%s.svc:8080"
 - name: DEVPLAT_FETCH_URL
@@ -39,7 +44,7 @@ ConfigMap <job>-contract, Secret <job>-io (doc 16, doc 18 section 8.2).
   (toString .Values.controller.admission.defaultPerProjectMaxConcurrentJobs)
   (toString .Values.controller.admission.testNamespaceTtlSeconds)
   (toString .Values.controller.admission.maxTestNamespacesPerProject)
-  $ns $ns $ns $ns -}}
+  $ns $ns $ns $ns $ns -}}
 {{- $env = printf "%s\n%s\n%s" $env (include "devplat.dbEnv" (dict "root" . "role" "controller")) (include "devplat.artifactsEnv" (dict "root" . "component" "controller")) -}}
 {{ include "devplat.workload" (dict "root" . "name" "devplat-controller" "key" "controller" "comp" .Values.controller "replicas" .Values.controller.replicas
     "ports" (list (dict "name" "metrics" "containerPort" 9090 "servicePort" 9090))

@@ -1,9 +1,11 @@
 {{- /*
 devplat-gitbroker: sole holder of the development-bot GitHub App key (Secret devplat-gitbroker-github-app, DOD-13).
-Mints scoped installation tokens, builds source bundles into the artifact store (bundles/), validates agent output
+Mints scoped installation tokens, builds source bundles into the artifact store (src/<project>/<sha>.bundle), validates agent output
 bundles (port of devorch result_errors), pushes dev/* only and opens DRAFT pull requests. Ingress only from the
-controller (base NetworkPolicy); agent pods never reach it. No code path for merge, approve, review, ruleset or
-settings calls, and the App's permissions must not allow them either (the real control). One replica.
+controller (base NetworkPolicy); agent pods never reach it. gitbroker has no code path for merge, approve, review,
+ruleset or settings calls - but the App's contents:write + pull_requests:write COULD merge/approve through the API
+(D13). The preventive control is each repository's ruleset (required code-owner review, no bypass; DOD-02), not
+this component. One replica.
 */}}
 {{- $env := printf `- name: DEVPLAT_GITHUB_APP_ID
   valueFrom:

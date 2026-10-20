@@ -1,0 +1,12 @@
+{{- /*
+devplat-namespacer (D19): creates and deletes test namespaces proj-<P>-t-<8 hex> from a FIXED template (built into
+the image) parameterized only by the project's test profile ConfigMap devplat-test-profile-<P>. The controller
+calls POST /v1/test-namespaces {project, runid} and DELETE; it cannot pass NetworkPolicy, quota or RoleBinding
+content. Cluster-scoped rights: ClusterRole devplat-namespacer (base), confined by VAP devplat-namespacer-scope,
+which also validates NetworkPolicy peers/ports and caps quotas from params. Ingress only from the controller.
+No DB, no S3, no Secrets.
+*/}}
+{{ include "devplat.workload" (dict "root" . "name" "devplat-namespacer" "key" "namespacer" "comp" .Values.namespacer "replicas" 1
+    "ports" (list (dict "name" "http" "containerPort" 8083 "servicePort" 8083) (dict "name" "metrics" "containerPort" 9090 "servicePort" 9090))
+    "probe" (dict "readyPath" "/readyz" "livePath" "/healthz" "port" "http")
+    "env" "- name: DEVPLAT_TEST_PROFILE_LABEL\n  value: \"devplat.io/config=test-profile\"" "automount" true "volumes" "" "volumeMounts" "" "args" "") }}

@@ -42,12 +42,6 @@ spec:
       securityContext:
         {{- include "devplat.podSecurityContext" $root | nindent 8 }}
       {{- include "devplat.placement" $root | nindent 6 }}
-      {{- with $root.Values.image.pullSecrets }}
-      imagePullSecrets:
-        {{- range . }}
-        - name: {{ . }}
-        {{- end }}
-      {{- end }}
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: kubernetes.io/hostname
@@ -57,7 +51,7 @@ spec:
               {{- include "devplat.selectorLabels" (dict "root" $root "name" .name) | nindent 14 }}
       containers:
         - name: {{ .name }}
-          image: {{ include "devplat.image" (dict "image" .comp.image "key" .key "name" (trimPrefix "devplat-" .name)) }}
+          image: {{ include "devplat.image" (dict "root" $root "image" .comp.image "key" .key) }}
           imagePullPolicy: {{ $root.Values.image.pullPolicy }}
           {{- with .args }}
           args:

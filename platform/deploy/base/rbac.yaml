@@ -2,18 +2,22 @@
 # Design and justification of every rule: docs/mercury/development-orchestration/18-kubernetes-security-model.md §4.
 #
 # Principles
-#  - Only devplat-controller holds a Kubernetes API identity that writes. api, gitbroker, model-gateway,
-#    pkg-proxy, artifact store and every project ServiceAccount (agent, planner, build, test) have ZERO RBAC.
+#  - Kubernetes API identities that write: devplat-controller (Jobs and per-run objects in project namespaces) and
+#    devplat-namespacer (test namespaces, own Deployment, D19). api, gitbroker, gitbroker-fetch, model-gateway,
+#    artifact-gateway, registry proxies, migrator and every project ServiceAccount have ZERO RBAC.
 #  - The controller can create Jobs (never bare Pods), patch them only to unsuspend (admission-checked), and
 #    create/get/delete per-run ConfigMaps/Secrets by name (owner-referenced to the Job). It cannot list, watch,
 #    update or patch any Secret, and holds no Secret rights at all outside project namespaces.
 #  - No pods/exec, pods/attach, pods/portforward, pods/ephemeralcontainers, no update on Jobs, no pod writes.
 #  - ClusterRole objects devplat-job-runner and devplat-test-runner are granted ONLY through namespaced RoleBindings.
 #  - Cluster-wide grants: devplat-namespacer (the only cluster-scoped WRITE) and devplat-dns (read-only discovery).
-#    devplat-namespacer (namespaces + bootstrap objects of test namespaces),
-#    constrained by ValidatingAdmissionPolicy devplat-namespacer-scope to names proj-<P>-t-<runid>.
+#    devplat-namespacer (namespaces + fixed bootstrap objects of test namespaces), constrained by
+#    ValidatingAdmissionPolicy devplat-namespacer-scope (names, labels, NetworkPolicy peers/ports, quota caps).
+#  - The controller no longer impersonates the namespacer (R6 D19): it calls the namespacer's API (:8083) with
+#    (project, runid, profile ref) only. A compromised controller therefore cannot choose test-namespace content.
 #  - Operator access (cluster-admin break-glass, OIDC) is outside this base and bound by the operator.
-#  - Third-party operators (CloudNativePG, MinIO operator if used) bring their own RBAC: review before install.
+#  - Third-party operators (CloudNativePG; an S3-compatible store operator if one is run in-cluster) bring their own
+#    RBAC: review before install (doc 18 §7 note 3).
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -92,8 +96,10 @@ rules:
 # ephemeral test namespaces cannot be expressed with a Role. Bootstrap objects (default-deny NetworkPolicy,
 # ResourceQuota, LimitRange, RoleBinding for the controller) must exist in a namespace that does not exist yet.
 # Every request by this identity is checked by ValidatingAdmissionPolicy devplat-namespacer-scope:
-# namespace name ^proj-<P>-t-<runid>$, mandatory labels incl. PSA restricted, delete only of ephemeral namespaces,
-# RoleBindings only to ClusterRole devplat-test-runner for the controller SA.
+# namespace name exactly proj-<project label>-t-<8 hex>, mandatory labels incl. PSA restricted, delete only of
+# managed test namespaces, RoleBindings only to ClusterRole devplat-test-runner for the controller SA, NetworkPolicies
+# only from the fixed peer/port set, quotas and limit ranges within the caps of ConfigMap devplat-cluster-params,
+# the per-namespace image params ConfigMap only with the computed content.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -108,7 +114,7 @@ rules:
     resources: ["networkpolicies"]
     verbs: ["create"]
   - apiGroups: [""]
-    resources: ["resourcequotas", "limitranges"]
+    resources: ["resourcequotas", "limitranges", "configmaps"]
     verbs: ["create"]
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["rolebindings"]
@@ -187,20 +193,6 @@ rules:
     resources: ["events"]
     verbs: ["create", "patch"]
 ---
-# Impersonation of exactly one ServiceAccount. This separates the namespacer's cluster-scoped rights in the
-# audit log and lets admission policy target them; it is NOT a privilege boundary against a compromised
-# controller (doc 18 §4.3).
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: devplat-controller-impersonate-namespacer
-  namespace: devplat-system
-rules:
-  - apiGroups: [""]
-    resources: ["serviceaccounts"]
-    verbs: ["impersonate"]
-    resourceNames: ["devplat-namespacer"]
----
 # ClusterIP lookup of the services agent pods reach (dnsConfig nameserver = devplat-dns ClusterIP; optional hostAliases).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -211,18 +203,7 @@ rules:
   - apiGroups: [""]
     resources: ["services"]
     verbs: ["get"]
-    resourceNames: ["devplat-model-gateway", "devplat-registry-proxy", "devplat-gitbroker-fetch", "devplat-dns"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: devplat-controller-service-lookup
-  namespace: devplat-artifacts
-rules:
-  - apiGroups: [""]
-    resources: ["services"]
-    verbs: ["get"]
-    resourceNames: ["devplat-artifacts"]
+    resourceNames: ["devplat-model-gateway", "devplat-registry-proxy-mercury", "devplat-registry-proxy-jupiter", "devplat-gitbroker-fetch", "devplat-artifact-gateway", "devplat-dns"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -241,36 +222,8 @@ subjects:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: devplat-controller-impersonate-namespacer
-  namespace: devplat-system
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: devplat-controller-impersonate-namespacer
-subjects:
-  - kind: ServiceAccount
-    name: devplat-controller
-    namespace: devplat-system
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
   name: devplat-controller-service-lookup
   namespace: devplat-system
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: devplat-controller-service-lookup
-subjects:
-  - kind: ServiceAccount
-    name: devplat-controller
-    namespace: devplat-system
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: devplat-controller-service-lookup
-  namespace: devplat-artifacts
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role

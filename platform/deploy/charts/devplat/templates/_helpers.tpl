@@ -1,5 +1,6 @@
 {{/*
-devplat control-plane helpers. Proposed (Amendment 001); not rendered with helm in the authoring environment.
+devplat control-plane helpers. Proposed (Amendment 001, R6 fix round). Rendered and validated offline only
+(platform/tools/charts/run.sh); never installed.
 */}}
 
 {{- define "devplat.chart" -}}
@@ -21,10 +22,10 @@ app.kubernetes.io/instance: {{ .root.Release.Name }}
 app.kubernetes.io/name: {{ .name }}
 {{- end -}}
 
-{{/* Image by digest only. Fails while no image exists (placeholder digests are empty). */}}
+{{/* Image by digest only: <imageRegistry>/<devplat|mirror>/...@sha256:... (D15). Fails while no image exists. */}}
 {{- define "devplat.image" -}}
-{{- $d := required (printf "%s.image.digest is empty: no devplat-%s image has been published yet; supply sha256:<64 hex>" .key .name) .image.digest -}}
-{{ .image.repository }}@{{ $d }}
+{{- $d := required (printf "%s.image.digest is empty: no image %s has been published/mirrored yet; supply sha256:<64 hex>" .key .image.name) .image.digest -}}
+{{ .root.Values.imageRegistry }}/{{ .image.name }}@{{ $d }}
 {{- end -}}
 
 {{- define "devplat.podSecurityContext" -}}
@@ -125,4 +126,26 @@ devplat-pg-rw.{{ .Release.Namespace }}.svc
 {{- if ne .Release.Namespace "devplat-system" -}}
 {{- fail "install into namespace devplat-system: base RBAC, NetworkPolicies and Secret pinning are bound to it" -}}
 {{- end -}}
+{{- if eq (len .Values.api.oidc.allowedSubjects) 0 -}}
+{{- fail "api.oidc.allowedSubjects is empty: at least one operator identity {issuer, subject, project} is required (D2)" -}}
+{{- end -}}
+{{- /* S-24: no two components may share the same (non-empty) ServiceAccount annotations, e.g. one cloud identity. */ -}}
+{{- $seen := dict -}}
+{{- range $k := list "controller" "migrator" "api" "gitbroker" "gitbrokerFetch" "artifactGateway" "modelGateway" -}}
+{{- $a := (index $.Values $k).serviceAccountAnnotations -}}
+{{- if $a -}}
+{{- $j := toJson $a -}}
+{{- if hasKey $seen $j -}}
+{{- fail (printf "serviceAccountAnnotations of %s and %s are identical: every component needs its own workload identity (S-24)" (get $seen $j) $k) -}}
+{{- end -}}
+{{- $_ := set $seen $j $k -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "devplat.saAnnotations" -}}
+{{- with .annotations }}
+annotations:
+  {{- toYaml . | nindent 2 }}
+{{- end }}
 {{- end -}}

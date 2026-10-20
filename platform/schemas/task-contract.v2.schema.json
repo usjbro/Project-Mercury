@@ -85,8 +85,8 @@
     },
     "assigned_agent": {
       "type": "string",
-      "pattern": "^(mdev-[a-z-]+|planner|operator|mac-validation-queue)$",
-      "description": "role id from platform/agents/execution-profiles.yaml (or operator / mac-validation-queue); the project config must enable the role"
+      "pattern": "^[a-z][a-z0-9-]{1,40}$",
+      "description": "Role id from the platform role catalogue (platform/agents/execution-profiles.yaml) or a non-Job actor (operator, mac-validation-queue); must be an executor of `kind` in the catalogue and enabled in the project config (checked at register_contract, R6 D6/D7)."
     },
     "objective": {
       "type": "string",
@@ -97,8 +97,9 @@
       "type": "array",
       "items": {
         "type": "string",
-        "pattern": "^(CON|FR|NFR|OPS|SEC)-[0-9]+"
-      }
+        "pattern": "^[A-Z][A-Z0-9]{1,9}-[0-9A-Za-z.-]{1,20}$"
+      },
+      "description": "Requirement ids of the project (e.g. Mercury CON-/FR-/NFR-/SEC-); vocabulary from the project's documentation."
     },
     "dependencies": {
       "type": "array",
@@ -112,7 +113,7 @@
         "properties": {
           "task_id": {
             "type": "string",
-            "pattern": "^DT-[0-9]{4}(-[a-z0-9]+)?$"
+            "pattern": "^[A-Z][A-Z0-9]{1,7}-[0-9]{4,6}(-[a-z][0-9]{1,3})?$"
           },
           "required_state": {
             "enum": [
@@ -120,6 +121,11 @@
               "AWAITING_HUMAN",
               "INTERFACE_FROZEN"
             ]
+          },
+          "project_id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{1,22}[a-z0-9]$",
+            "description": "Only for a declared cross-project dependency; default = this contract's project."
           }
         }
       }
@@ -129,7 +135,7 @@
       "minItems": 1,
       "items": {
         "type": "string",
-        "description": "path\u00a7section@commit, e.g. docs/mercury/architecture/components.md\u00a76.3@<sha>"
+        "description": "path§section@commit, e.g. docs/mercury/architecture/components.md§6.3@<sha>"
       }
     },
     "allowed_paths": {
@@ -214,15 +220,12 @@
     },
     "required_reviewers": {
       "type": "array",
+      "uniqueItems": true,
       "items": {
-        "enum": [
-          "mdev-code-reviewer",
-          "mdev-security-engineer",
-          "mdev-lead-architect",
-          "mdev-reliability-engineer",
-          "operator"
-        ]
-      }
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9-]{1,40}$"
+      },
+      "description": "Role ids from the platform role catalogue whose catalogue kind has a gate (G3/G4), or 'operator'. Checked by the controller against the catalogue and the project config (R6 D6)."
     },
     "required_gates": {
       "type": "array",
@@ -244,7 +247,7 @@
         "type": "string",
         "pattern": "^(G-S[1-5]|P0-[0-9]+|SAC-[0-9]+)$"
       },
-      "description": "TDD security gates / Phase 0 checks that must be satisfied before READY"
+      "description": "DEPRECATED alias of required_facts (v1 compatibility); the controller merges both."
     },
     "security_sensitive": {
       "type": "boolean"
@@ -323,7 +326,7 @@
       "properties": {
         "implementation_task_id": {
           "type": "string",
-          "pattern": "^DT-[0-9]{4}(-[a-z0-9]+)?$"
+          "pattern": "^[A-Z][A-Z0-9]{1,7}-[0-9]{4,6}(-[a-z][0-9]{1,3})?$"
         },
         "base_commit": {
           "type": "string",
@@ -370,8 +373,8 @@
     },
     "project_id": {
       "type": "string",
-      "pattern": "^[a-z][a-z0-9-]{1,30}$",
-      "description": "devplat.project.v1 project id"
+      "pattern": "^[a-z][a-z0-9-]{1,22}[a-z0-9]$",
+      "description": "devplat.project.v1 project id (<= 24 characters, R6 D24). Task identity is (project_id, task_id) (R6 D3)."
     },
     "upstream_issue": {
       "type": [
@@ -380,6 +383,58 @@
       ],
       "maxLength": 64,
       "description": "the project's own issue id (e.g. MERC-101); null for subtasks"
+    },
+    "required_facts": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Z][A-Z0-9]*(-[A-Za-z0-9]+)+$"
+      },
+      "description": "Per-task operator facts that must be recorded for THIS project before G1 (DB task_required_facts, R6 D7), e.g. Mercury G-S1, P0-12. Hard preconditions (DOD-02, DOD-13) come from the project config and are not listed here."
+    },
+    "origin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source"
+      ],
+      "properties": {
+        "source": {
+          "enum": [
+            "controller",
+            "planner",
+            "operator"
+          ]
+        },
+        "planner_task_id": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9]{1,7}-[0-9]{4,6}(-[a-z][0-9]{1,3})?$",
+          "description": "plan_proposal subtask that proposed this contract"
+        },
+        "approval_ref": {
+          "type": "string",
+          "minLength": 1,
+          "description": "devplat-api operator approval record; required before READY for planner-originated contracts and for every contract_revised (R6 D18)."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "source": {
+                "const": "planner"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "planner_task_id",
+              "approval_ref"
+            ]
+          }
+        }
+      ]
     }
   }
 }

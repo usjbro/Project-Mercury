@@ -1,0 +1,414 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://devplat.invalid/schemas/task-result.v2.schema.json",
+  "title": "devplat task result v2 (devplat.task_result.v2)",
+  "description": "Written by an agent Job to /out/result.json and repeated as its final JSON block (R6 D23). Generalizes devorch.task_result.v1 for multi-project use: project_id; project-neutral task ids; catalogue role ids (incl. planner); planner proposals. Everything the pod writes is a CLAIM: the controller and gitbroker re-check it (16-agent-execution-and-job-lifecycle.md §7); nothing here advances state by itself. A v1 result converts by adding project_id and changing schema; no other field changes meaning.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "project_id",
+    "task_id",
+    "contract_version",
+    "attempt",
+    "agent",
+    "status",
+    "summary",
+    "modified_files",
+    "commits",
+    "tests",
+    "defects",
+    "findings",
+    "outstanding_dependencies",
+    "blocking_conditions",
+    "recommended_next_action",
+    "evidence_refs"
+  ],
+  "properties": {
+    "schema": {
+      "const": "devplat.task_result.v2"
+    },
+    "project_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{1,22}[a-z0-9]$",
+      "description": "devplat.project.v1 project id (<= 24 characters, R6 D24)."
+    },
+    "task_id": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9]{1,7}-[0-9]{4,6}(-[a-z][0-9]{1,3})?$",
+      "description": "<PREFIX>-nnnn (prefix from the project config); subtasks -rN/-sN/-iN/-pN. Unique per project: identity is (project_id, task_id) (R6 D3)."
+    },
+    "contract_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "attempt": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 50
+    },
+    "agent": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{1,40}$",
+      "description": "Role id from the platform role catalogue (platform/agents/execution-profiles.yaml), or a non-Job actor (operator, mac-validation-queue). Checked against the catalogue by the controller, not by this schema (R6 D6)."
+    },
+    "status": {
+      "enum": [
+        "completed",
+        "partial",
+        "failed",
+        "escalated"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 10,
+      "maxLength": 3000
+    },
+    "branch": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{0,15}/[a-z0-9][a-z0-9-]{1,60}$"
+    },
+    "head_commit": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "modified_files": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "commits": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{40}$"
+      }
+    },
+    "tests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "command",
+          "exit_code",
+          "outcome"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "command": {
+            "type": "string"
+          },
+          "exit_code": {
+            "type": "integer"
+          },
+          "outcome": {
+            "enum": [
+              "passed",
+              "failed",
+              "skipped",
+              "flaky",
+              "not_run"
+            ]
+          },
+          "log_ref": {
+            "type": "string"
+          },
+          "runs": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      }
+    },
+    "defects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "title",
+          "severity",
+          "location"
+        ],
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "critical",
+              "high",
+              "medium",
+              "low"
+            ]
+          },
+          "location": {
+            "type": "string"
+          },
+          "owner_hint": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "severity",
+          "blocking",
+          "location",
+          "description",
+          "required_correction"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "critical",
+              "high",
+              "medium",
+              "low"
+            ]
+          },
+          "blocking": {
+            "type": "boolean"
+          },
+          "location": {
+            "type": "string"
+          },
+          "design_ref": {
+            "type": "string"
+          },
+          "sec_ref": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "required_correction": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "recommendation": {
+      "enum": [
+        "accept",
+        "accept_with_conditions",
+        "changes_required",
+        "reject",
+        "escalate"
+      ]
+    },
+    "gate_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "gate",
+        "result"
+      ],
+      "properties": {
+        "gate": {
+          "enum": [
+            "G1",
+            "G3",
+            "G4",
+            "G5",
+            "G6"
+          ]
+        },
+        "result": {
+          "enum": [
+            "pass",
+            "fail"
+          ]
+        }
+      }
+    },
+    "outstanding_dependencies": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "blocking_conditions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "escalation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "question",
+        "options"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "design_change",
+            "security",
+            "operator_decision",
+            "credentials_or_permissions",
+            "mac_validation",
+            "cannot_continue"
+          ]
+        },
+        "question": {
+          "type": "string"
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "recommended_option": {
+          "type": "string"
+        }
+      }
+    },
+    "recommended_next_action": {
+      "type": "string"
+    },
+    "evidence_refs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^/out/[^\\0]+$"
+      },
+      "description": "Files under /out (the contract's evidence_dir) that the runner uploads with the result."
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "turns": {
+          "type": "integer"
+        },
+        "wall_minutes": {
+          "type": "number"
+        },
+        "tokens": {
+          "type": "integer"
+        },
+        "cost_usd": {
+          "type": "number"
+        }
+      }
+    },
+    "reviewed_head_commit": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "review kinds: the exact head reviewed (must equal review_target.head_commit)"
+    },
+    "integrated_heads": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Z][A-Z0-9]{1,7}-[0-9]{4,6}(-[a-z][0-9]{1,3})?@[0-9a-f]{40}$"
+      },
+      "description": "integration: <task>@<tested head> for each covered task"
+    },
+    "proposals": {
+      "type": "array",
+      "description": "plan_proposal results only: proposal files under /out/proposals/. The controller validates each one; a planner-originated contract needs an operator approval before READY (R6 D18).",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "ref"
+        ],
+        "properties": {
+          "kind": {
+            "enum": [
+              "contract",
+              "contract_revision",
+              "triage",
+              "escalation_draft"
+            ]
+          },
+          "ref": {
+            "type": "string",
+            "pattern": "^/out/proposals/[A-Za-z0-9._-]+$"
+          },
+          "for_task_id": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9]{1,7}-[0-9]{4,6}(-[a-z][0-9]{1,3})?$",
+            "description": "<PREFIX>-nnnn (prefix from the project config); subtasks -rN/-sN/-iN/-pN. Unique per project: identity is (project_id, task_id) (R6 D3)."
+          }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "escalated"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "required": [
+          "escalation"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "agent": {
+            "const": "planner"
+          }
+        },
+        "required": [
+          "agent"
+        ]
+      },
+      "then": {
+        "properties": {
+          "commits": {
+            "maxItems": 0
+          },
+          "modified_files": {
+            "maxItems": 0
+          }
+        }
+      }
+    }
+  ]
+}

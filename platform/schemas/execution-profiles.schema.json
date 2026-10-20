@@ -1,101 +1,288 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/usjbro/Project-Mercury/platform/schemas/execution-profiles.schema.json",
-  "title": "devplat agent execution profiles (devplat.execution_profiles.v1)",
-  "description": "One execution profile per agent role: how the devplat controller turns a task attempt for that role into a Kubernetes Job. Development platform only; NOT a production MERCURY artefact. Spec: docs/mercury/development-orchestration/16-agent-execution-and-job-lifecycle.md, 17-multi-project-scheduling.md.",
+  "title": "devplat role catalogue and agent execution profiles (devplat.execution_profiles.v1)",
+  "description": "Platform role catalogue (R6 D6): the kind -> executor map (data form of devorch KIND_AGENT) and one execution profile per role, i.e. how the devplat controller turns a task attempt for that role into a Kubernetes Job. Loaded into the DB roles table at registration; no role literal lives in platform code. Development platform only; NOT a production MERCURY artefact. Spec: development-orchestration 16-agent-execution-and-job-lifecycle.md, 17-multi-project-scheduling.md. Cross-file rules (every profile kind is in the catalogue, every catalogue executor with job=true has a profile) are checked by platform/tools/validate_projects.py.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema", "status", "defaults", "profiles"],
+  "required": [
+    "schema",
+    "status",
+    "defaults",
+    "kind_catalogue",
+    "profiles"
+  ],
   "properties": {
-    "schema": {"const": "devplat.execution_profiles.v1"},
+    "schema": {
+      "const": "devplat.execution_profiles.v1"
+    },
     "status": {
       "description": "Capability status of this file (status vocabulary of the amendment brief).",
-      "enum": ["Implemented+tested", "Implemented (untested)", "Configured", "Documented only", "Unverified assumption", "Blocked", "Awaiting operator approval"]
+      "enum": [
+        "Implemented+tested",
+        "Implemented (untested)",
+        "Configured",
+        "Documented only",
+        "Unverified assumption",
+        "Blocked",
+        "Awaiting operator approval"
+      ]
     },
-    "description": {"type": "string"},
+    "description": {
+      "type": "string"
+    },
     "defaults": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["setup_grace_seconds", "ttl_seconds_after_finished", "termination_grace_seconds", "priority_class"],
+      "required": [
+        "setup_grace_seconds",
+        "ttl_seconds_after_finished",
+        "termination_grace_seconds",
+        "priority_class"
+      ],
       "properties": {
-        "setup_grace_seconds": {"type": "integer", "minimum": 60, "maximum": 1800, "description": "Added to the wall budget for activeDeadlineSeconds: workspace fetch plus result upload."},
-        "ttl_seconds_after_finished": {"type": "integer", "minimum": 600, "maximum": 604800, "description": "Backstop only; the controller deletes a Job after it has collected and persisted the results."},
-        "termination_grace_seconds": {"type": "integer", "minimum": 10, "maximum": 300},
-        "priority_class": {"type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"}
+        "setup_grace_seconds": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 1800,
+          "description": "Added to the wall budget for activeDeadlineSeconds: workspace fetch plus result upload."
+        },
+        "ttl_seconds_after_finished": {
+          "type": "integer",
+          "minimum": 600,
+          "maximum": 604800,
+          "description": "Backstop only; the controller deletes a Job after it has collected and persisted the results."
+        },
+        "termination_grace_seconds": {
+          "type": "integer",
+          "minimum": 10,
+          "maximum": 300
+        },
+        "priority_class": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        }
       }
+    },
+    "kind_catalogue": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/kind_entry"
+      },
+      "description": "One entry per task kind. Kinds are the vocabulary of the ported devorch state machine; executors are role ids of this file or the non-Job actors 'operator' and 'mac-validation-queue'."
     },
     "profiles": {
       "type": "array",
       "minItems": 1,
-      "items": {"$ref": "#/$defs/profile"}
+      "items": {
+        "$ref": "#/$defs/profile"
+      }
     }
   },
   "$defs": {
-    "quantity_cpu": {"type": "string", "pattern": "^([0-9]+m|[0-9]+(\\.[0-9]+)?)$"},
-    "quantity_bytes": {"type": "string", "pattern": "^[0-9]+(Ki|Mi|Gi|Ti)$"},
+    "quantity_cpu": {
+      "type": "string",
+      "pattern": "^([0-9]+m|[0-9]+(\\.[0-9]+)?)$"
+    },
+    "quantity_bytes": {
+      "type": "string",
+      "pattern": "^[0-9]+(Ki|Mi|Gi|Ti)$"
+    },
     "resource_set": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["cpu", "memory", "ephemeral-storage"],
+      "required": [
+        "cpu",
+        "memory",
+        "ephemeral-storage"
+      ],
       "properties": {
-        "cpu": {"$ref": "#/$defs/quantity_cpu"},
-        "memory": {"$ref": "#/$defs/quantity_bytes"},
-        "ephemeral-storage": {"$ref": "#/$defs/quantity_bytes"}
+        "cpu": {
+          "$ref": "#/$defs/quantity_cpu"
+        },
+        "memory": {
+          "$ref": "#/$defs/quantity_bytes"
+        },
+        "ephemeral-storage": {
+          "$ref": "#/$defs/quantity_bytes"
+        }
       }
     },
     "profile": {
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "role", "agent_definition", "kinds", "llm", "resources", "max_wall_minutes",
-        "network_class", "runtime_class", "workspace_size", "writes_allowed", "max_concurrent_per_project"
+        "role",
+        "agent_definition",
+        "kinds",
+        "llm",
+        "resources",
+        "max_wall_minutes",
+        "network_class",
+        "runtime_class",
+        "workspace_size",
+        "writes_allowed",
+        "max_concurrent_per_project"
       ],
       "properties": {
         "role": {
-          "description": "Role id. For the 12 specialists it equals the Claude Code agent name and the task contract's assigned_agent; 'planner' is the Job form of the Principal Orchestrator's reasoning.",
-          "type": "string",
-          "pattern": "^(mdev-[a-z0-9-]+|planner)$"
+          "$ref": "#/$defs/role_id"
         },
         "agent_definition": {
-          "description": "Repository path of the Claude Code subagent definition the role ConfigMap is generated from.",
           "type": "string",
-          "pattern": "^\\.claude/agents/mdev-[a-z0-9-]+\\.md$"
+          "pattern": "^[A-Za-z0-9_.-][A-Za-z0-9_./-]*\\.md$",
+          "description": "Path of the Claude Code subagent definition, relative to the definition source repository (read at a pinned commit by gen_role_configmap.py)."
         },
         "kinds": {
-          "description": "Task contract kinds this role may execute (mirrors devorch KIND_AGENT and 03-agents.md).",
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,
-          "items": {"enum": ["design", "planning", "implementation", "test", "security_review", "code_review", "design_review", "reliability_review", "reliability", "integration", "release", "plan_proposal"]}
+          "items": {
+            "$ref": "#/$defs/kind"
+          },
+          "description": "Kinds this role may execute; must equal the catalogue entries that list the role as executor."
         },
-        "llm": {"type": "boolean", "description": "true: the main container runs Claude Code headless (claude -p) with this role definition."},
+        "llm": {
+          "type": "boolean",
+          "description": "true: the main container runs Claude Code headless (claude -p) with this role definition."
+        },
         "extra_disallowed_tools": {
           "description": "Tools removed on the claude command line in addition to the definition's own disallowedTools (never fewer).",
           "type": "array",
           "uniqueItems": true,
-          "items": {"type": "string", "minLength": 1}
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
         },
         "resources": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["requests", "limits"],
+          "required": [
+            "requests",
+            "limits"
+          ],
           "properties": {
-            "requests": {"$ref": "#/$defs/resource_set"},
-            "limits": {"$ref": "#/$defs/resource_set"}
+            "requests": {
+              "$ref": "#/$defs/resource_set"
+            },
+            "limits": {
+              "$ref": "#/$defs/resource_set"
+            }
           }
         },
-        "max_wall_minutes": {"type": "integer", "minimum": 5, "maximum": 240, "description": "Upper bound; the Job deadline uses min(contract budget.max_wall_minutes, this) plus setup_grace_seconds."},
-        "max_turns": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Upper bound for claude --max-turns; min(contract budget.max_turns, this)."},
+        "max_wall_minutes": {
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 240,
+          "description": "Upper bound; the Job deadline uses min(contract budget.max_wall_minutes, this) plus setup_grace_seconds."
+        },
+        "max_turns": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200,
+          "description": "Upper bound for claude --max-turns; min(contract budget.max_turns, this)."
+        },
         "network_class": {
           "description": "none: no egress at all. model-only: model-gateway and artifact store. deps: model-only plus the package-registry proxy.",
-          "enum": ["none", "model-only", "deps"]
+          "enum": [
+            "none",
+            "model-only",
+            "deps"
+          ]
         },
-        "runtime_class": {"enum": ["gvisor", "default"], "description": "RuntimeClass of the pod. 'default' is accepted only in the reduced-assurance workstation mode (15-platform-architecture.md §7)."},
-        "workspace_size": {"$ref": "#/$defs/quantity_bytes"},
-        "writes_allowed": {"type": "boolean", "description": "false: gitbroker refuses any result bundle with commits beyond the reviewed head and the controller never pushes from this role."},
-        "max_concurrent_per_project": {"type": "integer", "minimum": 1, "maximum": 16},
-        "est_cost_usd_p80": {"type": "number", "minimum": 0, "description": "Planning estimate used for budget reservation at admission (17-multi-project-scheduling.md §6). Not a measurement."},
-        "notes": {"type": "string"}
+        "runtime_class": {
+          "enum": [
+            "gvisor",
+            "default"
+          ],
+          "description": "RuntimeClass of the pod. 'default' is accepted only in the reduced-assurance workstation mode (15-platform-architecture.md §7)."
+        },
+        "workspace_size": {
+          "$ref": "#/$defs/quantity_bytes"
+        },
+        "writes_allowed": {
+          "type": "boolean",
+          "description": "false: gitbroker refuses any result bundle with commits beyond the reviewed head and the controller never pushes from this role."
+        },
+        "max_concurrent_per_project": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16
+        },
+        "est_cost_usd_p80": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Planning estimate used for budget reservation at admission (17-multi-project-scheduling.md §6). Not a measurement."
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
+    },
+    "role_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{1,40}$",
+      "description": "Platform role id. The 'mdev-' prefix of the 12 specialist roles is historical."
+    },
+    "kind": {
+      "type": "string",
+      "pattern": "^[a-z][a-z_]{2,30}$"
+    },
+    "kind_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "lifecycle",
+        "executors",
+        "job",
+        "read_only"
+      ],
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/kind"
+        },
+        "lifecycle": {
+          "enum": [
+            "full",
+            "short"
+          ],
+          "description": "full = G1..G7 (T_FULL); short = result_accepted (T_SHORT)."
+        },
+        "executors": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/role_id"
+          }
+        },
+        "job": {
+          "type": "boolean",
+          "description": "false: completed only by authenticated operator evidence (no Kubernetes Job)."
+        },
+        "read_only": {
+          "type": "boolean",
+          "description": "true: contracts of this kind must have allowed_paths [] and gitbroker refuses any commit."
+        },
+        "gate": {
+          "enum": [
+            "G3",
+            "G4"
+          ],
+          "description": "Review kinds: the parent gate a COMPLETED subtask of this kind satisfies."
+        },
+        "subtask_suffix": {
+          "enum": [
+            "r",
+            "s",
+            "i",
+            "p"
+          ],
+          "description": "Subtask id convention <parent>-<suffix>N."
+        }
       }
     }
   }
