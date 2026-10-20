@@ -1,23 +1,26 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "devplat chart values",
-  "description": "Values contract for the devplat control-plane chart (proposed, Amendment 001). Unknown keys are rejected so that typos cannot silently disable a control.",
+  "description": "Values contract for the devplat control-plane chart (proposed, Amendment 001, R6 fix round). Unknown keys are rejected so that typos cannot silently disable a control.",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "platform",
+    "imageRegistry",
     "placement",
     "image",
     "controller",
+    "migrator",
     "api",
     "gitbroker",
     "gitbrokerFetch",
+    "artifactGateway",
+    "namespacer",
     "modelGateway",
     "dns",
     "postgres",
     "artifacts",
-    "ingress",
-    "serviceAccount"
+    "ingress"
   ],
   "definitions": {
     "digest": {
@@ -29,13 +32,14 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "repository",
+        "name",
         "digest"
       ],
       "properties": {
-        "repository": {
+        "name": {
           "type": "string",
-          "pattern": "^[a-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._-]+)+$"
+          "pattern": "^(devplat|mirror)/[a-z0-9]([a-z0-9._/-]*[a-z0-9])?$",
+          "description": "Path under imageRegistry. Platform namespaces admit only devplat/ and mirror/ (D15)."
         },
         "digest": {
           "$ref": "#/definitions/digest"
@@ -95,6 +99,20 @@
       "type": "integer",
       "minimum": 1,
       "maximum": 5
+    },
+    "saAnnotations": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "propertyNames": {
+        "pattern": "^[a-z0-9.-]+/[A-Za-z0-9._-]+$"
+      },
+      "description": "Per-component ServiceAccount annotations (S-24). Identical non-empty maps on two components fail the render."
+    },
+    "projectId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{1,22}[a-z0-9]$"
     }
   },
   "properties": {
@@ -117,6 +135,10 @@
           ]
         }
       }
+    },
+    "imageRegistry": {
+      "type": "string",
+      "pattern": "^[a-z0-9.-]+(:[0-9]+)?(/[a-z0-9._-]+)*$"
     },
     "placement": {
       "type": "object",
@@ -153,8 +175,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "pullPolicy",
-        "pullSecrets"
+        "pullPolicy"
       ],
       "properties": {
         "pullPolicy": {
@@ -162,14 +183,9 @@
             "IfNotPresent",
             "Always"
           ]
-        },
-        "pullSecrets": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
         }
-      }
+      },
+      "description": "No imagePullSecrets: nodes pull from the authenticated mirror."
     },
     "controller": {
       "type": "object",
@@ -177,6 +193,7 @@
       "required": [
         "replicas",
         "image",
+        "serviceAccountAnnotations",
         "leaderElection",
         "admission",
         "resources"
@@ -187,6 +204,9 @@
         },
         "image": {
           "$ref": "#/definitions/image"
+        },
+        "serviceAccountAnnotations": {
+          "$ref": "#/definitions/saAnnotations"
         },
         "leaderElection": {
           "type": "object",
@@ -213,7 +233,7 @@
               "maximum": 30
             }
           },
-          "description": "The Lease name is fixed (devplat-controller): base RBAC grants get/update on exactly that name."
+          "description": "The Lease name is fixed (devplat-controller)."
         },
         "admission": {
           "type": "object",
@@ -252,12 +272,39 @@
         }
       }
     },
+    "migrator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "image",
+        "serviceAccountAnnotations",
+        "activeDeadlineSeconds",
+        "resources"
+      ],
+      "properties": {
+        "image": {
+          "$ref": "#/definitions/image"
+        },
+        "serviceAccountAnnotations": {
+          "$ref": "#/definitions/saAnnotations"
+        },
+        "activeDeadlineSeconds": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 7200
+        },
+        "resources": {
+          "$ref": "#/definitions/resources"
+        }
+      }
+    },
     "api": {
       "type": "object",
       "additionalProperties": false,
       "required": [
         "replicas",
         "image",
+        "serviceAccountAnnotations",
         "oidc",
         "resources"
       ],
@@ -267,6 +314,9 @@
         },
         "image": {
           "$ref": "#/definitions/image"
+        },
+        "serviceAccountAnnotations": {
+          "$ref": "#/definitions/saAnnotations"
         },
         "oidc": {
           "type": "object",
@@ -286,11 +336,39 @@
             },
             "allowedSubjects": {
               "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "description": "D2: at least one operator identity; synced into operator_identities.",
               "items": {
-                "type": "string",
-                "minLength": 1
-              },
-              "uniqueItems": true
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "issuer",
+                  "subject",
+                  "project"
+                ],
+                "properties": {
+                  "issuer": {
+                    "type": "string",
+                    "pattern": "^https://.+"
+                  },
+                  "subject": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "project": {
+                    "anyOf": [
+                      {
+                        "const": ""
+                      },
+                      {
+                        "$ref": "#/definitions/projectId"
+                      }
+                    ],
+                    "description": "\"\" = all projects"
+                  }
+                }
+              }
             }
           }
         },
@@ -304,6 +382,7 @@
       "additionalProperties": false,
       "required": [
         "image",
+        "serviceAccountAnnotations",
         "pushRefPrefix",
         "draftPullRequestsOnly",
         "resources"
@@ -312,27 +391,28 @@
         "image": {
           "$ref": "#/definitions/image"
         },
+        "serviceAccountAnnotations": {
+          "$ref": "#/definitions/saAnnotations"
+        },
         "pushRefPrefix": {
-          "const": "dev/",
-          "description": "gitbroker never pushes outside dev/*."
+          "const": "dev/"
         },
         "draftPullRequestsOnly": {
-          "const": true,
-          "description": "The platform opens draft PRs only; there is deliberately no merge or approve setting."
+          "const": true
         },
         "resources": {
           "$ref": "#/definitions/resources"
         }
       },
-      "description": "Exactly one replica (no concurrent pushes); the GitHub App id and key are in the fixed Secret devplat-gitbroker-github-app."
+      "description": "Exactly one replica (no concurrent pushes)."
     },
-    "modelGateway": {
+    "gitbrokerFetch": {
       "type": "object",
       "additionalProperties": false,
       "required": [
         "replicas",
         "image",
-        "providers",
+        "serviceAccountAnnotations",
         "resources"
       ],
       "properties": {
@@ -341,6 +421,113 @@
         },
         "image": {
           "$ref": "#/definitions/image"
+        },
+        "serviceAccountAnnotations": {
+          "$ref": "#/definitions/saAnnotations"
+        },
+        "resources": {
+          "$ref": "#/definitions/resources"
+        }
+      }
+    },
+    "artifactGateway": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "replicas",
+        "image",
+        "serviceAccountAnnotations",
+        "limits",
+        "resources"
+      ],
+      "properties": {
+        "replicas": {
+          "$ref": "#/definitions/replicas"
+        },
+        "image": {
+          "$ref": "#/definitions/image"
+        },
+        "serviceAccountAnnotations": {
+          "$ref": "#/definitions/saAnnotations"
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "resultJsonBytes",
+            "resultBundleBytes",
+            "logsBytes",
+            "totalPerRunBytes"
+          ],
+          "properties": {
+            "resultJsonBytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1048576
+            },
+            "resultBundleBytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 268435456
+            },
+            "logsBytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 67108864
+            },
+            "totalPerRunBytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 536870912
+            }
+          },
+          "description": "D11 caps; values may only be lowered."
+        },
+        "resources": {
+          "$ref": "#/definitions/resources"
+        }
+      }
+    },
+    "namespacer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "replicas",
+        "image",
+        "resources"
+      ],
+      "properties": {
+        "replicas": {
+          "const": 1
+        },
+        "image": {
+          "$ref": "#/definitions/image"
+        },
+        "resources": {
+          "$ref": "#/definitions/resources"
+        }
+      }
+    },
+    "modelGateway": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "replicas",
+        "image",
+        "serviceAccountAnnotations",
+        "providers",
+        "policy",
+        "resources"
+      ],
+      "properties": {
+        "replicas": {
+          "$ref": "#/definitions/replicas"
+        },
+        "image": {
+          "$ref": "#/definitions/image"
+        },
+        "serviceAccountAnnotations": {
+          "$ref": "#/definitions/saAnnotations"
         },
         "providers": {
           "type": "array",
@@ -365,6 +552,81 @@
               }
             }
           }
+        },
+        "policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "allowedEndpoints",
+            "rejectServerTools",
+            "rejectMcpServers",
+            "rejectContainer",
+            "rejectFilesAndBatches",
+            "allowedBetaHeaders",
+            "projectFrom"
+          ],
+          "properties": {
+            "allowedEndpoints": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "enum": [
+                  "POST /v1/messages",
+                  "POST /v1/messages/count_tokens"
+                ]
+              },
+              "description": "D12: only these two endpoints can ever be allowed."
+            },
+            "rejectServerTools": {
+              "const": true
+            },
+            "rejectMcpServers": {
+              "const": true
+            },
+            "rejectContainer": {
+              "const": true
+            },
+            "rejectFilesAndBatches": {
+              "const": true
+            },
+            "allowedBetaHeaders": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+-[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+              }
+            },
+            "projectFrom": {
+              "const": "token"
+            }
+          }
+        },
+        "resources": {
+          "$ref": "#/definitions/resources"
+        }
+      }
+    },
+    "dns": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "replicas",
+        "image",
+        "clusterDomain",
+        "resources"
+      ],
+      "properties": {
+        "replicas": {
+          "$ref": "#/definitions/replicas"
+        },
+        "image": {
+          "$ref": "#/definitions/image"
+        },
+        "clusterDomain": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"
         },
         "resources": {
           "$ref": "#/definitions/resources"
@@ -391,7 +653,7 @@
           "additionalProperties": false,
           "required": [
             "instances",
-            "imageName",
+            "image",
             "storage",
             "backup"
           ],
@@ -401,8 +663,8 @@
               "minimum": 1,
               "maximum": 5
             },
-            "imageName": {
-              "type": "string"
+            "image": {
+              "$ref": "#/definitions/image"
             },
             "storage": {
               "type": "object",
@@ -484,6 +746,21 @@
             }
           }
         }
+      },
+      "else": {
+        "properties": {
+          "cnpg": {
+            "properties": {
+              "image": {
+                "properties": {
+                  "digest": {
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     "artifacts": {
@@ -503,8 +780,8 @@
           "type": "string"
         },
         "bucketPrefix": {
-          "type": "string",
-          "pattern": "^[a-z0-9][a-z0-9-]{0,30}$"
+          "const": "devplat-",
+          "description": "D11: buckets are devplat-<project> and devplat-platform."
         }
       }
     },
@@ -546,67 +823,6 @@
           "tlsSecretName": {
             "minLength": 1
           }
-        }
-      }
-    },
-    "serviceAccount": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "annotations"
-      ],
-      "properties": {
-        "annotations": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          }
-        }
-      }
-    },
-    "gitbrokerFetch": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "replicas",
-        "image",
-        "resources"
-      ],
-      "description": "Keyless bundle server on port 8081 (doc 18 section 8.2).",
-      "properties": {
-        "replicas": {
-          "$ref": "#/definitions/replicas"
-        },
-        "image": {
-          "$ref": "#/definitions/image"
-        },
-        "resources": {
-          "$ref": "#/definitions/resources"
-        }
-      }
-    },
-    "dns": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "replicas",
-        "image",
-        "clusterDomain",
-        "resources"
-      ],
-      "properties": {
-        "replicas": {
-          "$ref": "#/definitions/replicas"
-        },
-        "image": {
-          "$ref": "#/definitions/image"
-        },
-        "clusterDomain": {
-          "type": "string",
-          "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"
-        },
-        "resources": {
-          "$ref": "#/definitions/resources"
         }
       }
     }
