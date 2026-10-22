@@ -129,19 +129,22 @@ test:
   ttlSecondsAfterSuccess: 0
   ttlSecondsAfterFailure: 3600
   maxLifetimeSeconds: 14400
+  # Exactly the keys of doc 18 section 9.3, each within base devplat-cluster-params (defaults shown in comments).
+  # persistentvolumeclaims, services.loadbalancers and services.nodeports are always 0 and not configurable.
   quota:
-    requests.cpu: "4"
-    limits.cpu: "8"
-    requests.memory: 8Gi
-    limits.memory: 16Gi
-    requests.ephemeral-storage: 20Gi
-    limits.ephemeral-storage: 40Gi
-    pods: "20"
-    count/jobs.batch: "40"
-    persistentvolumeclaims: "4"
-    requests.storage: 40Gi
-    configmaps: "100"
-    secrets: "100"
+    pods: "20"                        # <= maxPods 20
+    requests.cpu: "4"                 # <= maxRequestsCpu 8
+    limits.cpu: "8"                   # <= maxLimitsCpu 16
+    requests.memory: 8Gi              # <= maxRequestsMemory 16Gi
+    limits.memory: 16Gi               # <= maxLimitsMemory 32Gi
+    requests.ephemeral-storage: 20Gi  # <= maxRequestsEphemeralStorage 40Gi
+    limits.ephemeral-storage: 40Gi    # <= maxLimitsEphemeralStorage 80Gi
+    services: "20"                    # <= maxServices 20 (ClusterIP fixtures only; exec/build keep 0)
+    secrets: "50"                     # <= maxSecrets 50
+    configmaps: "50"                  # <= maxConfigMaps 50
+  limits:
+    maxCpu: "4"                       # <= maxContainerCpu 4
+    maxMemory: 8Gi                    # <= maxContainerMemory 8Gi
   # Sandbox-integration suites (e.g. Mercury T3: sandbox repo + sandbox Apps) need HTTPS egress from a dedicated
   # test class. Off by default; turning it on is an operator decision (22-... section 4.3). Sandbox credentials
   # are never part of these values.

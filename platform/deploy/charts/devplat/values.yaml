@@ -110,6 +110,11 @@ gitbroker:
   # control is the repository ruleset (DOD-02, D13), not this chart.
   pushRefPrefix: "dev/"
   draftPullRequestsOnly: true
+  # S-23: the controller is authenticated by a projected, audience-bound ServiceAccount token, verified by
+  # gitbroker against the cluster's ServiceAccount issuer keys. mTLS is the alternative (not templated yet).
+  callerAuth:
+    mode: projected-token
+    audience: devplat-gitbroker
   resources:
     requests: {cpu: 100m, memory: 128Mi}
     limits: {cpu: "1", memory: 512Mi}
@@ -126,7 +131,7 @@ gitbrokerFetch:
     limits: {cpu: 500m, memory: 256Mi}
 
 artifactGateway:
-  # D10: the ONLY artifact path for agent, build and test pods (:8082). Pods upload with a per-Job one-time token;
+  # D10: the ONLY artifact path for agent, build and test pods (:8082); admin :9444 for the controller. Pods upload with a per-Job one-time token;
   # the gateway writes runs/<job-uid>/... with its own S3 credentials. Agents never reach the object store.
   replicas: 2
   image:

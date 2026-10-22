@@ -21,17 +21,8 @@ run "role ConfigMap generator output"      bash -c 'python3 platform/tools/gen_r
 run "PostgreSQL state schema (real PG16)"  python3 platform/db/test_schema.py
 if [ -n "${GO:-}" ]; then run "admission policies (CEL compile + behavioural cases)" bash -c "GO=$GO platform/tools/admission/run.sh | tail -2 | grep -q '0 mismatches'"; else skip "admission CEL checks" "set GO"; fi
 if [ -n "${HELM:-}" ] && [ -n "${KUBECONFORM:-}" ]; then
-  D=$(printf 'sha256:%064d' 0)   # test-only digest: no real image exists yet
-  SET=controller.image.digest=$D,api.image.digest=$D,gitbroker.image.digest=$D,gitbrokerFetch.image.digest=$D,modelGateway.image.digest=$D,dns.image.digest=$D
-  KC="'$KUBECONFORM' -strict -summary -kubernetes-version 1.33.0 -schema-location default -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'"
-  # a check passes only if helm rendered something AND kubeconform reports no invalid/error AND >0 valid
-  chk() { out=$(bash -o pipefail -c "$1 | $KC" 2>&1) || { echo "$out" | tail -3; return 1; }
-          echo "$out" | tail -1; echo "$out" | grep -Eq 'Valid: [1-9][0-9]*, Invalid: 0, Errors: 0'; }
-  run "helm lint devplat"            "$HELM" lint platform/deploy/charts/devplat -n devplat-system --kube-version 1.33.0 --set "$SET"
-  run "helm lint devplat-project"    "$HELM" lint platform/deploy/charts/devplat-project --kube-version 1.33.0
-  run "devplat render | kubeconform strict"         chk "'$HELM' template t platform/deploy/charts/devplat -n devplat-system --kube-version 1.33.0 --set $SET"
-  run "devplat-project render | kubeconform strict" chk "'$HELM' template m platform/deploy/charts/devplat-project --kube-version 1.33.0"
-  run "devplat refuses to render without image digests" bash -c "! '$HELM' template t platform/deploy/charts/devplat -n devplat-system --kube-version 1.33.0 >/dev/null 2>&1"
+  # lint, strict renders, negative renders, values schemas, chart/base parity, secret pinning, chart CEL (doc 24 §10)
+  run "charts (platform/tools/charts/run.sh)" env HELM="$HELM" KUBECONFORM="$KUBECONFORM" ${GO:+GO="$GO"} platform/tools/charts/run.sh
 else skip "chart lint/render" "set HELM and KUBECONFORM"; fi
 echo
 if [ $FAIL != 0 ]; then echo "SOME CHECKS FAILED"; exit 1; fi

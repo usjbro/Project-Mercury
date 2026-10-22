@@ -107,6 +107,8 @@ NEG = [
     ("model-gateway extra endpoint (D12)", DP + ["-f", V("devplat-test.yaml"), "--set", "modelGateway.policy.allowedEndpoints[2]=POST /v1/files"], "schema"),
     ("model-gateway server tools allowed (D12)", DP + ["-f", V("devplat-test.yaml"), "--set", "modelGateway.policy.rejectServerTools=false"], "schema"),
     ("model-gateway project from path (D12)", DP + ["-f", V("devplat-test.yaml"), "--set", "modelGateway.policy.projectFrom=path"], "schema"),
+    ("gitbroker caller auth other than projected token (S-23)", DP + ["-f", V("devplat-test.yaml"), "--set", "gitbroker.callerAuth.mode=none"], "schema"),
+    ("test-namespace quota over the base caps (D19)", PJ + ["--set-string", "test.quota.secrets=100"], "schema"),
     ("namespacer with 2 replicas", DP + ["-f", V("devplat-test.yaml"), "--set", "namespacer.replicas=2"], "schema"),
     ("project quota secrets=0", PJ + ["--set-string", "exec.quota.secrets=0"], "schema"),
     ("project services quota set", PJ + ["--set-string", "exec.quota.services=5"], "schema"),

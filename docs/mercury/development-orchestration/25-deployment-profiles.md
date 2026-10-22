@@ -1,16 +1,16 @@
 # 25 — Deployment Profiles: Local Development and Multi-Node Strategy
 
-Status: **Proposed** (Architecture Amendment 001, 2026-10-17). Documented only. No profile has been installed or measured. Every sizing figure is a **planning estimate**.
-Reuses / supersedes: extends v1 `09-…` §1 (where work runs) and §2 (concurrency limits). The v1 statement "MacBook Air M2 with 16 GB RAM" is kept as a **planning constraint, not a measurement**. Topology options A/B/C and the execution-target abstraction are defined in `15-…`. This document maps them to concrete environments.
+Status: **Proposed** (Architecture Amendment 001, 2026-10-17; R6 fix round 2026-10-22: D16, D25). Documented only. No profile has been installed or measured. Every sizing figure is a **planning estimate**.
+Reuses / supersedes: extends v1 `09-…` §1 (where work runs) and §2 (concurrency limits). The v1 statement "MacBook Air M2 with 16 GB RAM" is kept as a **planning constraint, not a measurement**. Topology options A/B/C and the execution-target abstraction are defined in `15-…`. This document maps them to concrete environments. **It owns the only installation-profile taxonomy, P1–P6, and the sizing figures** (R6 D25); `17-…` §12 and every other document refer to it.
 
 ## 1. Assurance modes
 
-The chart value `platform.assuranceMode` is `standard` or `reduced`. It is recorded in every evidence item, so a gate can require `standard`.
+Assurance is decided **per project** (D16). The chart values `platform.assuranceMode` (devplat) and `assurance.mode` (devplat-project) only declare intent. A project runs in reduced mode only when the operator has recorded its fact `REDUCED-ASSURANCE` with a reason, through `devplat-api`, and listed it in base `devplat-cluster-params.reducedProjects`. The mode is recorded on every task event (`assurance_mode`, D8), so a gate can require `standard`.
 
 | Mode | Required controls (all verified by the isolation probes, `22-…` §7) | Allowed work |
 |---|---|---|
 | **standard** | Enforced NetworkPolicy (default deny); PSA `restricted` for agent and test namespaces; admission policies active; agent pods under a sandboxing RuntimeClass (gVisor, or Kata where gVisor is unavailable); no agent credentials (gitbroker / model-gateway pattern); platform DB unreachable from agent pods | All task kinds, within v1 hard preconditions (DOD-02/03) |
-| **reduced** | Anything less. Always for Option A (one node, `15-…` §7). Otherwise: no sandboxing RuntimeClass (`runtime_class: default` admitted only in this mode), or a CNI that does not enforce NetworkPolicy | Same gates (`15-…` §7); every task event and PR body states `assurance: reduced`. Whether code tasks on non-sandbox repositories run here is open question O-1 |
+| **reduced** | Anything less. Always for Option A (one node, `15-…` §7). Otherwise: no sandboxing RuntimeClass (admitted only for projects in `reducedProjects`), or a CNI that does not enforce NetworkPolicy | Same gates (`15-…` §7), plus these D16 restrictions: the development App is installed on a **sandbox repository only**, so there are no pushes to the real project repository; the model gateway uses the **separate spend-limited key** `<provider>-api-key-reduced`; **builds are disabled**. Every task event and PR body states `assurance: reduced` |
 
 Topology decides the ceiling. Following `15-…` §7, **Option A** (control-plane services and agent pods on one node) is **always `reduced`**, even with gVisor: the gitbroker key and model-gateway key share a node with agent code. In reduced mode gates do not change, but isolation claims do (`15-…` §7). **Option B** (separate tainted `exec` pool, or two VMs on one host as in `17-…` §12) can be `standard`. **Option C** (separate cluster per project) is a configuration change of the execution target.
 
@@ -46,7 +46,8 @@ Rule: a control counts only if the probe for it passes on that installation. Pro
 | Component | Requests (est.) | Notes |
 |---|---|---|
 | Kubernetes system (kind/k3s, CNI, DNS) | 0.5–1 CPU, 1–1.5 GiB | Depends on the distribution |
-| devplat-controller ×2, api, gitbroker, model-gateway ×2, gitbroker-fetch ×2, devplat-dns ×2 | ≈ 0.8 CPU, ≈ 1.1 GiB (chart defaults: 50–100m / 64–128Mi each) | Limits up to 1 CPU / 512Mi each |
+| devplat-controller ×2, api, gitbroker, model-gateway ×2, gitbroker-fetch ×2, artifact-gateway ×2, namespacer, devplat-dns ×2 | ≈ 1.1 CPU, ≈ 1.5 GiB (chart defaults: 50–100m / 64–128Mi each) | Limits up to 1 CPU / 512Mi each; the migrator hook Job runs only during install/upgrade |
+| Registry proxy per project (when enabled) | 0.05 CPU, 128 MiB; up to 5 GiB cache (emptyDir) | One instance per project (D14) |
 | PostgreSQL (CNPG, 1 instance) | 0.25–0.5 CPU, 0.5–1 GiB, 10 GiB disk | 3 instances in P5/P6 |
 | CNPG operator, S3-compatible store | 0.2 CPU, 0.5 GiB | In-cluster store optional |
 | **One agent Job** (Claude Code headless, workspace emptyDir) | 1 CPU, 2 GiB request; 2 CPU, 4 GiB limit (`devplat-project` LimitRange defaults) | **Unmeasured**; refit after 10 Jobs (as in v1 `09-…` §4) |
@@ -57,7 +58,7 @@ Rule: a control counts only if the probe for it passes on that installation. Pro
 |---|---|---|
 | P1/P2 workstation (16 GB host) | VM 6–8 GiB, 4 vCPU | 1–2 agent Jobs + 1 test namespace |
 | P3 Linux workstation (32 GB) | Host, or two VMs for Option B | 2–3 agent Jobs + 1–2 test namespaces |
-| P4 single server (8–16 vCPU, 32–64 GB) | Host | 3–6 agent Jobs + 2 test namespaces |
+| P4 single server (8–16 vCPU, 32–64 GB) | Two VMs (control, exec) for Option B; host only as reduced Option A | 3–6 agent Jobs + 2 test namespaces |
 | P5 multi-node | `control` 2 × (2 vCPU, 8 GB); `exec` N × (8 vCPU, 32 GB) | 3 per project (v1 model: no gain beyond 3 for Mercury), global by capacity |
 | P6 cloud | As P5; autoscaled `exec` pool with a max node count = cost cap | Same, plus daily cost budget through model-gateway |
 
@@ -69,7 +70,7 @@ This is **not** a recommendation to run the platform on that machine and **not**
 |---|---|
 | Stack | OrbStack, Rancher Desktop or colima VM: 4 vCPU, 7 GiB. **k3d** single server (built-in NetworkPolicy controller) or kind with Calico. Images native **arm64** |
 | Budget | ≈ 1.5 GiB Kubernetes, ≈ 2 GiB platform + PostgreSQL, ≈ 3.5 GiB for **1–2 agent Jobs**, no in-cluster builds |
-| Mode | **reduced** (no gVisor in the VM unless proven). Planning, design and fake-agent work; code tasks per O-1 |
+| Mode | **reduced** (no gVisor in the VM unless proven), with the D16 restrictions: sandbox repository only, separate LLM key, no builds |
 | Conflict | The same Mac is Mercury's **T4 macOS lane**. T4 runs (launchd, Keychain, Seatbelt, sleep and wake) must not share the machine with a busy cluster. Stop the cluster VM during Mac-lane sessions; v1 `09-…` §3 memory-pressure thresholds apply |
 | Better fit | Run the cluster elsewhere (P4/P5/P6, or a cloud session for planning only) and keep the Mac for the macOS lane. This matches v1 DOD-04's recommendation |
 
@@ -105,11 +106,11 @@ This is **not** a recommendation to run the platform on that machine and **not**
 | gVisor on Linux hosts / GKE Sandbox | **Documented only** (vendor documentation; not exercised) |
 | NetworkPolicy enforcement per CNI | **Unverified** until probe N12 runs on the installation |
 | Sizing figures | **Unverified assumption** (estimates) |
-| `assuranceMode` value | **Implemented (untested)**: chart value, passed to the controller. Reduced mode itself is the workstation overlay of base, which relaxes only the binding of `devplat-proj-runtime-placement` to `[Warn, Audit]` (doc 18 §16) |
+| Per-project reduced-assurance declaration (D16) | **Implemented (untested)** in the charts: `assurance.mode` requires a fact id and forbids builds; the params switch `buildsEnabled` stays `"false"`. Enforcement is base `devplat-cluster-params.reducedProjects` plus the controller's DB fact check (**Designed, unverified**) |
 
 ## 9. Open questions
 
-1. **O-1:** `15-…` §7 keeps gates unchanged in reduced mode. Should the operator nevertheless restrict code tasks on a real repository to `standard` installations? Recommended: yes for non-sandbox repositories, because in Option A agent code shares a node with the GitHub App key.
+1. **O-1 (decided by R6 D16):** reduced-assurance projects push only to a sandbox repository. Code tasks on a real repository need a `standard` installation. Remaining question: which sandbox repository each reduced project uses.
 2. **O-2:** First target profile (DOD-15, `12-…`; its recommendation is a workstation kind/k3d for DP3, then a server or cloud for DP4): P4 as two VMs (Option B, recommended for Phase 1) or P6 GKE (fastest route to gVisor and node pools)?
 3. **O-3:** Is a second machine available, so that the M2 Mac stays dedicated to the macOS lane?
 

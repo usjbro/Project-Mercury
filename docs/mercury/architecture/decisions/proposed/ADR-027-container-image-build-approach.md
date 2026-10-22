@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | **Proposed** (requires operator approval; Architecture Amendment 001) |
+| Status | **Proposed** (requires operator approval; Architecture Amendment 001; revised in the R6 fix round, 2026-10-22: D10, D14, D16, D20) |
 | Date | 2026-10-17 |
 | Owner | Lead Architect (devplat, development platform) |
 | Related | ADR-021 (development orchestration), ADR-023 (topology), ADR-025 (security); `development-orchestration/22-build-test-architecture.md` §9, `23-ci-cd-integration.md` §5 |
@@ -28,11 +28,17 @@ The amendment requires Kubernetes-based build and test workflows without a Docke
    - **rootless BuildKit**, one Job per build in `proj-<P>-build`, on nodes without gVisor (dedicated `build` pool where available);
    - the builder image is allowlisted by digest;
    - no API token, no Secrets;
-   - egress only through the registry proxy;
-   - output is an OCI layout plus attestations into the project's bucket.
+   - egress only through the project's own read-only registry proxy (D14);
+   - output is an OCI layout plus attestations, uploaded through `devplat-artifact-gateway` (D10). Build pods never reach the object store.
 
-   As in the canonical security model (doc 18 §10.1, `platform/deploy/base`), build namespaces carry PSA `enforce: privileged` (audit/warn `restricted`). The real controls are VAPs: `devplat-build-exceptions` permits the BuildKit exceptions (Unconfined or Localhost seccomp/AppArmor, `allowPrivilegeEscalation` for `newuidmap`) **only** for the container `buildkitd` with the pinned image, and `devplat-pod-hardening` forbids every privileged feature. The project chart adds a per-project builder allowlist. Hardening targets: user namespaces (`hostUsers: false`), then Localhost profiles, which would allow PSA `baseline`.
-4. **Phase 1 runs no in-cluster builds.** Build namespaces exist with an empty builder allowlist.
+   As in the canonical security model (doc 18 §10.1, `platform/deploy/base`), build namespaces carry PSA `enforce: privileged` (audit/warn `restricted`). The real controls are VAPs. `devplat-build-exceptions`, driven by the namespace's params, requires all of the following for the container `buildkitd`:
+   - **`hostUsers: false`** (a user namespace; never the host user namespace, S-7);
+   - the pinned image prefix and **exactly the pinned args**;
+   - the node-installed **Localhost seccomp profile** (never Unconfined);
+   - `allowPrivilegeEscalation` only for `newuidmap`.
+
+   `devplat-pod-hardening` forbids every privileged feature. The project chart adds the project's builder image allowlist.
+4. **Builds are disabled by default (D20)** and stay blocked on spike S-B1. Build namespaces exist with the params switch `buildsEnabled: "false"`; only the operator enables builds for a project, after the spike. Builds are never enabled for a reduced-assurance project (D16).
 5. **Multi-arch.** An architecture is claimed for an image digest only after a smoke test on a native node of that architecture (`verified_platforms`). QEMU binfmt registration is never done in the shared cluster.
 6. **Kaniko** is an alternative only (a maintained fork, built from source, pinned). Buildah/Podman rootless is the second choice if BuildKit proves infeasible on the chosen node OS.
 

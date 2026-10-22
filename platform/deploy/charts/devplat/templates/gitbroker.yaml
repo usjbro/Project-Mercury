@@ -6,6 +6,9 @@ controller (base NetworkPolicy); agent pods never reach it. gitbroker has no cod
 ruleset or settings calls - but the App's contents:write + pull_requests:write COULD merge/approve through the API
 (D13). The preventive control is each repository's ruleset (required code-owner review, no bypass; DOD-02), not
 this component. One replica.
+Caller authentication (S-23): every request must carry the controller's projected ServiceAccount token for audience
+gitbroker.callerAuth.audience; gitbroker verifies signature, audience, expiry and subject against the cluster's
+ServiceAccount issuer keys (OIDC discovery, no RBAC grant needed). mTLS is the documented alternative (not templated).
 */}}
 {{- $env := printf `- name: DEVPLAT_GITHUB_APP_ID
   valueFrom:
@@ -17,8 +20,15 @@ this component. One replica.
 - name: DEVPLAT_PUSH_REF_PREFIX
   value: %q
 - name: DEVPLAT_DRAFT_PR_ONLY
-  value: %q`
-  .Values.gitbroker.pushRefPrefix (toString .Values.gitbroker.draftPullRequestsOnly) -}}
+  value: %q
+- name: DEVPLAT_CALLER_AUTH_MODE
+  value: %q
+- name: DEVPLAT_CALLER_AUDIENCE
+  value: %q
+- name: DEVPLAT_CALLER_ALLOWED_SUBJECT
+  value: "system:serviceaccount:%s:devplat-controller"`
+  .Values.gitbroker.pushRefPrefix (toString .Values.gitbroker.draftPullRequestsOnly)
+  .Values.gitbroker.callerAuth.mode .Values.gitbroker.callerAuth.audience .Release.Namespace -}}
 {{- $env = printf "%s\n%s" $env (include "devplat.artifactsEnv" (dict "root" . "component" "gitbroker")) -}}
 {{- $vols := `- name: github-app-key
   secret:

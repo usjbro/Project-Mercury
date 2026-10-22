@@ -143,6 +143,59 @@
     "digest": {
       "type": "string",
       "pattern": "^(sha256:[a-f0-9]{64})?$"
+    },
+    "testQuota": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pods",
+        "requests.cpu",
+        "limits.cpu",
+        "requests.memory",
+        "limits.memory",
+        "requests.ephemeral-storage",
+        "limits.ephemeral-storage",
+        "services",
+        "secrets",
+        "configmaps"
+      ],
+      "description": "Doc 18 section 9.3 key set. Caps are enforced by base VAP devplat-namespacer-scope from devplat-cluster-params; the bounds here mirror its defaults.",
+      "properties": {
+        "pods": {
+          "type": "string",
+          "pattern": "^([1-9]|1[0-9]|20)$"
+        },
+        "requests.cpu": {
+          "$ref": "#/definitions/quantity"
+        },
+        "limits.cpu": {
+          "$ref": "#/definitions/quantity"
+        },
+        "requests.memory": {
+          "$ref": "#/definitions/quantity"
+        },
+        "limits.memory": {
+          "$ref": "#/definitions/quantity"
+        },
+        "requests.ephemeral-storage": {
+          "$ref": "#/definitions/quantity"
+        },
+        "limits.ephemeral-storage": {
+          "$ref": "#/definitions/quantity"
+        },
+        "services": {
+          "type": "string",
+          "pattern": "^([0-9]|1[0-9]|20)$"
+        },
+        "secrets": {
+          "type": "string",
+          "pattern": "^([1-9]|[1-4][0-9]|50)$"
+        },
+        "configmaps": {
+          "type": "string",
+          "pattern": "^([1-9]|[1-4][0-9]|50)$"
+        }
+      }
     }
   },
   "properties": {
@@ -284,6 +337,7 @@
         "ttlSecondsAfterFailure",
         "maxLifetimeSeconds",
         "quota",
+        "limits",
         "sandboxEgress"
       ],
       "properties": {
@@ -308,7 +362,7 @@
           "maximum": 86400
         },
         "quota": {
-          "$ref": "#/definitions/quota"
+          "$ref": "#/definitions/testQuota"
         },
         "sandboxEgress": {
           "type": "object",
@@ -326,6 +380,22 @@
               "items": {
                 "$ref": "#/definitions/cidr"
               }
+            }
+          }
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "maxCpu",
+            "maxMemory"
+          ],
+          "properties": {
+            "maxCpu": {
+              "$ref": "#/definitions/quantity"
+            },
+            "maxMemory": {
+              "$ref": "#/definitions/quantity"
             }
           }
         }

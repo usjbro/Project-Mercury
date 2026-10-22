@@ -1,6 +1,6 @@
 # 23 — CI/CD Integration
 
-Status: **Proposed** (Architecture Amendment 001, 2026-10-17). Documented only. No workflow in this document exists yet; the Project-Mercury repository has no CI and no ruleset today (`14-…` §1).
+Status: **Proposed** (Architecture Amendment 001, 2026-10-17; R6 fix round 2026-10-22: D13, S-3, S-14, overclaim 7). Documented only. No workflow in this document exists yet; the Project-Mercury repository has no CI and no ruleset today (`14-…` §1).
 Reuses / supersedes: keeps v1 `08-…` §1 G6 ("required CI green on that head"), §5 (identity and merge authority), `10-…` §2 (PR template) and §3 (Mercury releases) unchanged. It adds head-SHA correlation for in-cluster evidence, an evaluation of in-cluster runners, and the platform's own CI and release process. RA-D2 (`12-…`: MERC-030 split, macOS runners in Mercury CI) is kept as is.
 
 ## 1. Rules
@@ -9,8 +9,9 @@ Reuses / supersedes: keeps v1 `08-…` §1 G6 ("required CI green on that head")
 2. **Platform evidence is additional, never a substitute.** G2/G5 in-cluster runs (`22-…`) feed the controller's gates. They are not required checks, they never satisfy a required check, and a green in-cluster run never outweighs a red CI run.
 3. **Both must be green.** The controller records G6 only when (a) its own G2–G5 evidence is bound to head `H`, and (b) the repository's required checks are successful **on the same `H`**.
 4. **The platform does not write required checks.** The development bot App never gets `checks: write` for a check name that is required. If the platform ever publishes an informational status, it uses a distinct context (`devplat/evidence`) that the ruleset must not list. Making it required would let the platform certify its own work (v1 "self-certification", `08-…` §1).
-5. **CI independence.** If devplat is compromised or down, every project's CI and merge protection keep working unchanged. Hence GitHub-hosted runners are the default (§4).
-6. **The platform's own CI does not depend on Mercury or Jupiter** (§5.3).
+5. **Agent-written code reaches CI before review** (R6 S-3). A `dev/*` push makes GitHub Actions run agent-written code with a `GITHUB_TOKEN` and internet access, before any human has reviewed it. Every project repository therefore needs the CI hardening of §2a, as part of its `DOD-02` fact (D13).
+6. **CI independence.** If devplat is compromised or down, every project's CI and merge protection keep working unchanged. Hence GitHub-hosted runners are the default (§4).
+7. **The platform's own CI does not depend on Mercury or Jupiter** (§5.3).
 
 ## 2. Flow and head-SHA correlation
 
@@ -45,6 +46,23 @@ sequenceDiagram
 | C4 | `ci_run` evidence records the run ids, attempt numbers, conclusions and the `head_sha` that GitHub reports for each run |
 | C5 | Disagreement: CI red and in-cluster green ⇒ G6 refused, and the failing CI log reaches the next correction attempt **as an evidence file path** (untrusted data, `08-…` §6). In-cluster red and CI green ⇒ G2/G5 not recorded, so G6 is never reached. Flaky either way ⇒ not green (`22-…` §6) |
 | C6 | Webhooks (if configured) only wake the reconcile loop. The state decision always comes from a fresh read of GitHub |
+
+## 2a. CI and ruleset hardening for every project repository (D13; part of the per-project `DOD-02` fact)
+
+The operator applies these settings to **each** project repository (Mercury, Jupiter, any later project), not only to devplat's own repository. The per-project fact `DOD-02` (D1) may be recorded only after all of them are verified. Agents never change repository settings.
+
+| # | Setting | Why |
+|---|---|---|
+| H1 | Repository/organization Actions setting: default `GITHUB_TOKEN` permissions **read-only** | An agent-written workflow step cannot write to the repository with the default token |
+| H2 | "Allow GitHub Actions to create and approve pull requests" **off** | A workflow cannot approve the platform's PR or open its own |
+| H3 | Workflows triggered by `dev/**` pushes or by `pull_request` from same-repository branches declare `permissions: contents: read` and use **no secrets** (no `secrets.*`, no environments with secrets, no OIDC `id-token: write`) | Code under review runs with a read-only token and nothing to steal |
+| H4 | No `pull_request_target` and no `workflow_run` chains that run PR code with secrets | Prevents the classic "trusted context runs untrusted code" pattern |
+| H5 | Secrets needed for release (signing, publishing) exist only in an **environment** with required reviewers (the operator), used only by tag-triggered workflows | Release credentials are never reachable from `dev/*` |
+| H6 | Ruleset on `main` (unchanged DOD-02 core): pull request required, **code-owner review (operator) required**, approval of the most recent push, required checks, no force-push or deletion, **no bypass actors**; the development App is not a code owner | This is the control that stops a merge |
+| H7 | **Tag and release protection** rulesets: only the operator creates `v*` tags and releases; the development App cannot create, move or delete tags | Release integrity |
+| H8 | `.github/**` is a restricted path in every task contract, and CODEOWNERS covers it | Workflow changes are always human-reviewed |
+
+**Correction (S-14).** Earlier drafts said the development App "cannot merge or approve". That is false: with `contents:write` and `pull_requests:write`, the App can approve reviews and merge through the API. What prevents it is the ruleset: H6 requires the code owner's (operator's) review, and an approval by the App does not satisfy it. H1/H2 keep workflows from doing the same with the Actions token. gitbroker simply has no code path for these calls. Probe N10 (`22-…` §7) attempts approve, merge, auto-merge, a push to `main` and a ruleset change on the sandbox repository. All of them must fail **because of the ruleset and the App's missing `administration` permission**, not because gitbroker lacks the endpoint.
 
 ## 3. What runs where (per project)
 
@@ -93,7 +111,7 @@ Status: **Documented only (rejected for now).**
 | Schemas | `platform/schemas/*.json` meta-validate; every `platform/projects/*.yaml` validates against `project-config.schema.json`; contract/result examples validate | jsonschema 4.26.0 | Required |
 | Manifests | `platform/deploy/base/**` strict-validated against Kubernetes v1.33 JSON schemas; CRDs (CloudNativePG `Cluster`) against their CRD schemas | kubeconform `-strict`, `platform/tools/validate_k8s.py` | Required |
 | Charts | `helm lint`; `helm template` for a values matrix (cnpg/external, ingress on/off, reduced mode, project with/without build) piped into kubeconform; negative cases must fail (empty digest, wrong namespace, `draftPullRequestsOnly: false`, unknown key or Secret-name override, `secrets` quota 0); field-by-field parity of `devplat-project` (id `mercury`) with `platform/deploy/base`; base VAPs evaluated against the rendered pods with the CEL evaluator; chart-testing `ct lint` | helm 3, kubeconform, ct | Required |
-| Policy | Admission policies applied in a **kind** cluster on the runner; the isolation probes N1–N12 (`22-…` §7) run against a real install with a NetworkPolicy-enforcing CNI | kind + Calico or Cilium | Required before release; nightly |
+| Policy | Admission policies applied in a **kind** cluster on the runner; the isolation probes N1–N13 (`22-…` §7) run against a real install with a NetworkPolicy-enforcing CNI | kind + Calico or Cilium | Required before release; nightly |
 | E2E | `ct install` of both charts in kind; fake-agent multi-project scenario; controller leader-kill and agent-pod-eviction recovery | kind, fake agent image | Required before release; nightly |
 | Images | Build `devplat-controller`, `-api`, `-gitbroker`, `-model-gateway`, `-fake-agent` and toolchain images with BuildKit (buildx) on hosted runners, native per arch where available (`22-…` §9.4) | docker buildx | Required |
 | Scan | Image and dependency scan; fail on fixable Critical/High; SBOM | Trivy or Grype, Syft | Required |
@@ -102,19 +120,13 @@ Status: **Documented only (rejected for now).**
 **Workflow hygiene:**
 - third-party actions pinned by commit SHA;
 - `permissions:` minimal per job;
-- no `pull_request_target`;
+- no `pull_request_target`; `dev/**` and PR workflows with `permissions: contents: read` and no secrets (§2a H3; devplat's repository follows the same H1–H8 settings);
 - no secrets in PR jobs;
 - dependency installs without lifecycle scripts where the package manager allows it (v1 `08-…` §6 rule 6).
 
-### 5.2 Validation already possible offline (this authoring environment)
+### 5.2 Validation already possible offline
 
-| Check | Result (2026-10-17) |
-|---|---|
-| `helm lint` both charts | Pass. helm v3.17.3 was built from source through the Go module proxy (checksums verified against `sum.golang.org`), because no helm binary was installed |
-| `helm template` + kubeconform v0.6.7 `-strict`, Kubernetes 1.33.0 | After reconciliation with doc 18/base: devplat 33/33 valid (CloudNativePG `Cluster` validated against the datreeio CRDs-catalog schema); devplat-project 21/21 valid; variant matrix valid; 12 negative cases fail as intended (`24-…` §10) |
-| Parity and policy checks | `devplat-project` rendered for `mercury` is spec-identical to base for all 18 shared objects; controller Roles identical to base; base VAPs (pod hardening, platform placement, Secret pinning, image pinning) allow all 6 platform Deployments and deny a mis-pinned Secret; chart CEL compiles and 5 evaluation cases pass |
-| `values.yaml` against `values.schema.json` (jsonschema 4.26.0) | 0 errors both charts; negative mutations rejected |
-| CEL in admission policies | Compiled and evaluated offline with the Kubernetes 1.33 CEL environment (`k8s.io/apiserver` library; DynType inputs, so no OpenAPI field typing). Not run on an API server |
+The chart checks are one reproducible runner: `platform/tools/charts/run.sh`. `24-…` §10 lists exactly what it checks and its last result. The runner needs `HELM` and `KUBECONFORM` binaries (built from source through the Go module proxy, checksums via `sum.golang.org`), and optionally `GO` for the CEL checks. Without `GO`, the CEL checks are reported as skipped. The base manifests have their own runner (`platform/tools/admission/run.sh`, doc 18). The devplat CI workflow of §5.1 should call both.
 
 ### 5.3 Independence from Mercury and Jupiter
 
@@ -143,7 +155,8 @@ Status: **Documented only (rejected for now).**
 | Repository CI of record (Mercury) | **Awaiting operator approval** (MERC-030 / RA-D2; DOD-02 ruleset) |
 | Head-SHA correlation and G6 rule | **Documented only** (the v1 equivalent is implemented in `devorch.py` `pr_prepared` requiring `ci_run` evidence) |
 | devplat CI workflow | **Documented only** |
-| Offline chart and manifest validation | **Implemented+tested** in the authoring environment (§5.2); not yet wired into CI |
+| Offline chart validation runner (`platform/tools/charts/run.sh`) | **Implemented+tested** in the authoring environment (`24-…` §10); not yet wired into CI |
+| Per-repository CI hardening H1–H8 (D13) | **Awaiting operator approval/action** (part of each project's `DOD-02` fact) |
 | Image build, scan, sign pipeline | **Documented only.** No images exist |
 | ARC in-cluster runners | **Documented only; not recommended** |
 | Separate devplat repository | **Awaiting operator approval** (ADR-030, DOD-12) |

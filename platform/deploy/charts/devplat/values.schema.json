@@ -385,7 +385,8 @@
         "serviceAccountAnnotations",
         "pushRefPrefix",
         "draftPullRequestsOnly",
-        "resources"
+        "resources",
+        "callerAuth"
       ],
       "properties": {
         "image": {
@@ -402,6 +403,24 @@
         },
         "resources": {
           "$ref": "#/definitions/resources"
+        },
+        "callerAuth": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "audience"
+          ],
+          "properties": {
+            "mode": {
+              "const": "projected-token",
+              "description": "S-23; mTLS not templated yet"
+            },
+            "audience": {
+              "type": "string",
+              "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"
+            }
+          }
         }
       },
       "description": "Exactly one replica (no concurrent pushes)."
