@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Tests for jobspec.build_job.
 
-1. The output equals the example Job in 16-agent-execution-and-job-lifecycle.md §4.1 (doc and code cannot drift).
+1. The output equals the vendored example Job platform/controller/testdata/job-example.yaml, and that fixture equals
+   the example in 16-agent-execution-and-job-lifecycle.md §4.1 when the doc is present (doc and code cannot drift;
+   platform tests never depend on files outside platform/, R6 A-04).
 2. The output is valid against the strict Kubernetes v1.33 Job schema, which rejects unknown fields.
 3. Every security rule a Job spec can carry holds.
 
@@ -20,7 +22,9 @@ sys.path.insert(0, os.path.join(ROOT, "platform", "tools"))
 import jobspec as J  # noqa: E402
 import validate_k8s as V  # noqa: E402
 
-DOC = os.path.join(ROOT, "docs/mercury/development-orchestration/16-agent-execution-and-job-lifecycle.md")
+FIXTURE = os.path.join(HERE, "testdata", "job-example.yaml")
+# Optional doc-sync check: the design doc lives outside platform/ (and after the ADR-030 split, in another repository).
+DOC = os.environ.get("DEVPLAT_DOC16", os.path.join(ROOT, "docs/mercury/development-orchestration/16-agent-execution-and-job-lifecycle.md"))
 PROFILES = yaml.safe_load(open(os.path.join(ROOT, "platform/agents/execution-profiles.yaml")))
 PROFILE = next(p for p in PROFILES["profiles"] if p["role"] == "mdev-backend-engineer")
 PROJECT = {"project_id": "mercury", "execution_target": {"cluster_ref": "default", "namespace_prefix": "proj-mercury"}}
@@ -38,10 +42,14 @@ def job(contract=None, profile=None, **run):
     return J.build_job(contract or CONTRACT, PROJECT, profile or PROFILE, PROFILES["defaults"], dict(RUN, **run))
 
 
-def doc_job():
+def fixture_text():
+    return open(FIXTURE).read().split("\n", 2)[2]          # drop the two-line vendoring header
+
+
+def doc_block():
     text = open(DOC).read()
     sec = text[text.index("### 4.1"):text.index("### 4.2")]
-    return yaml.safe_load(re.search(r"```yaml\n(.*?)```", sec, re.S).group(1))
+    return re.search(r"```yaml\n(.*?)```", sec, re.S).group(1)
 
 
 class T(unittest.TestCase):
@@ -52,8 +60,26 @@ class T(unittest.TestCase):
             raise unittest.SkipTest(f"Job schema unavailable: {err}")
         cls.validator = Draft7Validator(sch)
 
-    def test_equals_documented_example(self):
-        self.assertEqual(job(), doc_job())
+    def test_equals_vendored_example(self):
+        self.assertEqual(job(), yaml.safe_load(fixture_text()))
+
+    def test_vendored_example_equals_doc(self):
+        if not os.path.exists(DOC):
+            self.skipTest("design doc not present (split repository); fixture is authoritative for the test")
+        self.assertEqual(fixture_text(), doc_block())
+
+    def test_gateways_and_registry_proxy(self):
+        env = {e["name"]: e.get("value") for e in job()["spec"]["template"]["spec"]["containers"][0]["env"]}
+        # R6 D12: the project is bound to the per-Job token, never selected by the URL path
+        self.assertEqual(env["ANTHROPIC_BASE_URL"], "http://devplat-model-gateway.devplat-system.svc:8080")
+        # R6 D10: uploads only through the artifact gateway; no object-store endpoint or presigned URL in the pod spec
+        self.assertEqual(env["DEVPLAT_ARTIFACT_GATEWAY"], "http://devplat-artifact-gateway.devplat-system.svc:8082")
+        self.assertFalse([k for k in env if k.startswith(("AWS_", "S3_", "MINIO"))])
+        # R6 D14: one read-only registry proxy per project
+        self.assertEqual(env["NPM_CONFIG_REGISTRY"], "http://devplat-registry-proxy-mercury.devplat-system.svc:4873/")
+        ro = next(p for p in PROFILES["profiles"] if p["network_class"] == "model-only")
+        env2 = {e["name"] for e in job(profile=ro)["spec"]["template"]["spec"]["containers"][0]["env"]}
+        self.assertNotIn("NPM_CONFIG_REGISTRY", env2)
 
     def test_strict_schema_valid(self):
         errs = list(self.validator.iter_errors(job()))

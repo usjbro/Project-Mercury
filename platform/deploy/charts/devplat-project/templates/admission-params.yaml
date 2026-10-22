@@ -1,0 +1,31 @@
+{{- /*
+Per-namespace admission params (D15). Base binds devplat-image-pinning and devplat-build-exceptions with a namespace-local
+paramRef `devplat-admission-params` (same keys as the static ConfigMaps in platform/deploy/base), so each project namespace admits only
+<registry>/devplat/, <registry>/projects/<P>/ and <registry>/mirror/ - never another project's images. The
+controller cannot change these ConfigMaps (its ConfigMaps are dp-* only, base VAP devplat-controller-run-objects).
+Test namespaces get the same ConfigMap from devplat-namespacer (test-profile.yaml).
+*/}}
+{{- $roles := list "exec" "build" }}
+{{- range $role := $roles }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: devplat-admission-params
+  namespace: {{ include "proj.ns" (dict "Values" $.Values "role" $role) }}
+  labels:
+    app.kubernetes.io/part-of: devplat
+    app.kubernetes.io/managed-by: {{ $.Release.Service }}
+    app.kubernetes.io/instance: {{ $.Release.Name }}
+    devplat.io/project: {{ $.Values.project.id }}
+data:
+  allowedImagePrefixes: {{ include "proj.imagePrefixes" $ | quote }}
+  {{- if eq $role "build" }}
+  # D20 switches read by base VAP devplat-build-exceptions (namespace-local paramRef). The build namespace always
+  # exists (as in base); builds run only when buildsEnabled is "true" (never in reduced-assurance mode, D16).
+  buildsEnabled: {{ ternary "true" "false" (and $.Values.build.enabled (eq $.Values.assurance.mode "standard")) | quote }}
+  buildkitImagePrefix: {{ $.Values.build.buildkit.imagePrefix | quote }}
+  buildkitArgs: {{ join " " $.Values.build.buildkit.args | quote }}
+  buildkitSeccompProfile: {{ $.Values.build.buildkit.seccompLocalhostProfile | quote }}
+  {{- end }}
+{{- end }}

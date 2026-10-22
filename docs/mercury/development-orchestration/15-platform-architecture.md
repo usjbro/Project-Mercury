@@ -1,6 +1,6 @@
 # 15 — devplat Platform Architecture (Kubernetes-native, multi-project)
 
-Status: **Proposed — Documented only** (Architecture Amendment 001, 2026-10-17; awaits operator approval, `12-amendments.md` DOD-11…DOD-16). Nothing in this document is deployed or tested on Kubernetes. Capability status uses the amendment vocabulary (§11).
+Status: **Proposed — Documented only** (Architecture Amendment 001, 2026-10-17; R6 fix round 2026-10-20; awaits operator approval, `12-amendments.md` DOD-11…DOD-24). Nothing in this document is deployed or tested on Kubernetes. Statements of the form "recommended" are proposals awaiting an operator decision, not decisions (R6 A-29). Capability status uses the amendment vocabulary plus "Designed, unverified" for parts whose components are not built (R6 D26) (§11).
 Reuses / supersedes: **supersedes for the platform** `01-development-architecture.md` §2 (component view) and §3 (responsibilities); **keeps** `01-…` §1 (separation rules S1–S4, extended here as rules P1–P10), §4 (authoritative sources, re-targeted in §9), §5 (state machine and gates G1–G7, ported unchanged) and §6 (rationale, extended by ADR-022…024). v1 (docs 00–13) remains the **local mode** (`14-…` §3).
 
 ## 1. Scope and principles
@@ -11,8 +11,8 @@ Reuses / supersedes: **supersedes for the platform** `01-development-architectur
 |---|---|
 | P1 | **Authority is code, not an LLM.** Task state, gates, admission and dispatch are decided by `devplat-controller` (a deterministic port of devorch `check_transition` / `replay`). LLM roles (specialists and the `planner`) produce *results and proposals* only. |
 | P2 | **One writer of task state.** Only the controller's database role writes `tasks` and `task_events`. Agents have no DB route and no DB credentials. |
-| P3 | **Human authority is unchanged.** Draft PRs only; G7 is an observed human merge. No platform component can merge, approve, enable auto-merge or edit rulesets (DOD-02, DOD-03 still required). |
-| P4 | **Agents hold no credentials.** No GitHub token (gitbroker), no LLM API key (model-gateway), no Kubernetes token, no DB password. Presigned, per-Job, expiring URLs are the only capabilities a pod gets. |
+| P3 | **Human authority is unchanged.** Draft PRs only; G7 is an observed human merge. No platform component *calls* a merge, approval, auto-merge or ruleset API. That is a code property, not a permission boundary: a GitHub App with `contents:write` + `pull_requests:write` **can** merge and approve through the API, so the preventive control is each project repository's ruleset (code-owner review, no bypass) and CI hardening, verified as that project's `DOD-02` fact (R6 D13). |
+| P4 | **Agents hold no credentials.** No GitHub token (gitbroker), no LLM API key (model-gateway), no object-store credential or URL (artifact-gateway), no Kubernetes token, no DB password. A pod gets only per-Job, expiring capabilities: a one-time bundle URL (gitbroker-fetch), a one-time upload token (artifact-gateway) and a gateway token that binds it to its project and budget (R6 D10, D12). |
 | P5 | **Infrastructure enforces, prompts advise.** NetworkPolicy, RBAC, admission policy, RuntimeClass and broker validation are the controls; `disallowedTools`, deny rules and the guard hook are tripwires. |
 | P6 | **Evidence over claims.** Every gate needs evidence the controller produced or verified itself (re-run tests, gitbroker validation, GitHub facts). Port of `02-…` §2. |
 | P7 | **Projects are configuration.** Nothing project-specific is compiled into the controller. A project = a versioned project config (`26-…`) + an execution target. |
@@ -30,8 +30,10 @@ v1 put the whole loop into one Claude Code main session. v2 splits that session'
 | `devplat-controller` | Orchestrator's mechanical loop + `devorch.py` | Validate and record transitions and gates; admit and create Jobs; collect results; request validation and pushes from gitbroker; reconcile GitHub, Linear, Jobs | Decide content; merge; approve; change GitHub settings; accept a gate without evidence |
 | `planner` Jobs (role of the Principal Orchestrator) | Orchestrator's reasoning | Read the backlog, design and evidence; write **proposals** (contracts, triage, escalation drafts) to `/out` | Dispatch, record, push, call GitHub or Linear, spawn agents |
 | 12 specialist Jobs (`mdev-*`) | Specialist subagents | Work in their workspace within `allowed_paths`; commit locally; write `result.json` | Push, reach GitHub, the DB or the Kubernetes API; see another task's workspace |
-| `devplat-gitbroker` | `devorch.py push`, `check-result` git checks | Fetch source; validate result bundles; push `dev/*`; open **draft** PRs; read PR/merge facts | Merge, approve, edit rulesets, push outside `dev/*` |
+| `devplat-gitbroker` (exactly one replica) | `devorch.py push`, `check-result` git checks | Hold the dev-bot App key; write source bundles; validate result bundles; push `dev/*` fast-forward only; open **draft** PRs; read PR/merge facts | Call merge, approval or ruleset APIs (absent from its code; prevented by the DOD-02 ruleset, P3); push outside `dev/*`; force-push |
 | `devplat-model-gateway` | (none) | Proxy LLM calls; inject the key; meter tokens and cost per Job and project; enforce budgets | Forward to non-allowlisted hosts |
+| `devplat-gitbroker-fetch` (keyless) | — | Serve one-time source bundles to Job init containers | Hold any credential; write anything |
+| `devplat-artifact-gateway` | `$DEVORCH_EVIDENCE` | Accept per-Job uploads under `runs/<job-uid>/` with caps; write them to the project bucket with its own credentials | Serve downloads to pods; accept writes outside the token's scope |
 | Verifier Jobs (non-LLM) | Orchestrator's G2 re-run | Run `required_tests` at the validated head in a fresh workspace | Change code |
 | macOS lane (operator Mac or macOS CI runner) | Mac validation queue | Produce T4 evidence for `mac_validation` tasks | Anything in the cluster |
 
@@ -52,12 +54,14 @@ The task state machine, lifecycles (FULL/SHORT), gates G1–G7, subtask ids (`-r
 |---|---|
 | Kubernetes namespace | One set of namespaces per project; the controller only creates Jobs in namespaces of the task's project (admission policy checks `devplat.io/project` label = namespace's project label) |
 | Identity | Per-project ServiceAccount `<P>-agent` (in `proj-<P>-exec`) with **zero** RBAC and `automountServiceAccountToken: false` |
-| Network | Default-deny ingress and egress in every `proj-*` namespace; allow only DNS, model-gateway, artifact store and (class `deps`) the registry proxy; no route to another project's namespaces, to `devplat-system` PostgreSQL, or to the Kubernetes API |
+| Network | Default-deny ingress and egress in every `proj-*` namespace; allow only devplat-dns (no internet forwarding), model-gateway, artifact-gateway, gitbroker-fetch and (class `deps`) **this project's own** read-only registry proxy `devplat-registry-proxy-<P>` (R6 D14); no route to the object store, another project's namespaces or proxy, PostgreSQL, or the Kubernetes API. Classes: `none \| model-only \| deps` (R6 D5) |
 | Compute | `ResourceQuota` + `LimitRange` per project namespace (backstop to controller admission, `17-…` §7); exec pool taint; gVisor `RuntimeClass` |
 | Source | A GitHub App installation scoped to the project's repositories only; tokens minted by gitbroker per operation, never given to pods |
-| Model | Per-project gateway route `/p/<P>` with its own budget and per-Job tokens |
-| Artifacts | Per-project bucket; per-Job presigned URLs under `runs/<job-uid>/`; immutable evidence under `sha256/<hex>` |
-| Data | `project_id` on every row; the API enforces project scoping on operator queries (`19-…`) |
+| Model | The per-Job gateway token binds the call to its project and budget (not the URL path); only `POST /v1/messages` and `/v1/messages/count_tokens`; server-side tools, `mcp_servers`, files and batches APIs refused (R6 D12) |
+| Artifacts | Bucket `devplat-<P>`; uploads only through artifact-gateway with a one-time token scoped to `runs/<job-uid>/`; immutable evidence under `sha256/<hex>`; layout owned by `20-…` (R6 D10, D11) |
+| Data | Task identity is `(project_id, task_id)` everywhere (R6 D3); the API enforces project scoping on operator queries (`19-…`) |
+| Facts | Hard preconditions (`DOD-02`, `DOD-13` by default, from `review_gates.hard_preconditions`) and per-task required facts count only when recorded **for that project** by an allowlisted operator identity; a platform-wide fact never unlocks a project (R6 D1, D2) |
+| Images | Allowed image prefixes per project and per namespace role; platform namespaces admit only platform images (R6 D15) |
 | Secrets | Project test secrets (e.g. Mercury T3 sandbox App credentials) live only in that project's test namespace (`22-…`) |
 
 Cross-project dependencies are allowed only when declared in project config and are evaluated by the controller like contract `dependencies[]` (`17-…` §9). No Job ever sees two projects' code.
@@ -68,16 +72,21 @@ Cross-project dependencies are allowed only when declared in project config and 
 
 | Component | Namespace | Workload type | Why this type |
 |---|---|---|---|
-| `devplat-controller` | `devplat-system` | **Deployment**, 2 replicas, leader election (`coordination.k8s.io` Lease) | Stateless: all state is in PostgreSQL. Two replicas for fast failover; only the leader reconciles. No per-replica identity or storage, so not a StatefulSet |
-| `devplat-api` (REST + dashboard backend, OIDC) | `devplat-system` | **Deployment**, 2 replicas | Stateless request handling, scales horizontally |
-| `devplat-gitbroker` | `devplat-system` | **Deployment**, 1 replica (2 possible) | Mirror cache is an `emptyDir`, rebuildable from GitHub plus the validated bundles in the artifact store; no durable state of its own |
-| `devplat-model-gateway` | `devplat-system` | **Deployment**, 2 replicas | Stateless proxy; budget counters are in PostgreSQL (atomic reservations) |
-| `devplat-registry-proxy` (npm and other package caches) | `devplat-system` | **Deployment** + PVC cache | Cache is disposable; serves network class `deps` only |
-| PostgreSQL | `devplat-system` | **Operator-managed** (CloudNativePG `Cluster`), or managed PG in cloud | Failover, WAL archiving and backups are operator concerns; a hand-written StatefulSet would re-implement them |
-| Artifact store (MinIO) or external S3 | `devplat-artifacts` | **StatefulSet** (via the MinIO operator or chart), or external | Durable per-replica volumes |
-| Specialist and planner runs | `proj-<P>-exec` | **Job** per attempt (`backoffLimit: 0`) | Run-to-completion, deadline, TTL, failure policy; retries owned by the controller (`16-…`) |
+| `devplat-controller` | `devplat-system` | **Deployment**, 2 replicas, leader election (`coordination.k8s.io` Lease) | Stateless: all state is in PostgreSQL. Two replicas for fast failover; only the leader reconciles; a new leader may fence-transfer task leases (R6 D22). Never runs migrations (R6 D9) |
+| `devplat-api` (REST + dashboard backend, OIDC) | `devplat-system` | **Deployment**, 2 replicas | Stateless request handling; operator facts only from allowlisted identities (R6 D2) |
+| `devplat-gitbroker` | `devplat-system` | **Deployment, exactly 1 replica** | Sole holder of the dev-bot App key; one writer of pushes keeps ordering simple. Its mirror cache is an `emptyDir`, rebuildable from GitHub plus the bundles in the artifact store |
+| `devplat-gitbroker-fetch` | `devplat-system` | **Deployment**, 2 replicas, **keyless** | Serves one-time source bundles (`src/<project>/<sha>.bundle`) to init containers; holds no GitHub credential, so the only component agents talk to about source cannot push |
+| `devplat-artifact-gateway` | `devplat-system` | **Deployment** | The only artifact path for agent, build and test pods (port 8082, one-time per-Job upload token, caps); writes to the store with its own credentials (R6 D10) |
+| `devplat-model-gateway` | `devplat-system` | **Deployment**, 2 replicas | Stateless proxy; budget reservations and counters in PostgreSQL through its own DB role (R6 D8) |
+| `devplat-dns` | `devplat-system` | **Deployment**, 2 replicas | Cluster-internal DNS for project pods without internet forwarding (no DNS tunnelling) |
+| `devplat-namespacer` | `devplat-system` | **Deployment**, 1 replica | Creates and deletes ephemeral `proj-<P>-t-<runid>` namespaces from a **fixed template** only; the controller cannot submit free-form NetworkPolicy or quota content (R6 D19) |
+| `devplat-registry-proxy-<P>` (one per project) | `devplat-system` | **Deployment** + cache volume, installed by the project chart | Read-only package proxy (publish and adduser disabled), upstreams from the project's `registries_allowlist`; no cross-project cache (R6 D14) |
+| Migrations | `devplat-system` | **Helm pre-install/pre-upgrade Job** with the dedicated `devplat_migrator` login | Schema changes need owner rights that no long-running component holds (R6 D9) |
+| PostgreSQL | `devplat-system` | **Operator-managed** (CloudNativePG `Cluster`) or managed PostgreSQL (DOD-19) | Failover, WAL archiving and backups are operator concerns; a hand-written StatefulSet would re-implement them |
+| Object store | outside the cluster (default) | **External S3-compatible endpoint**; filesystem/PVC only for a reduced-assurance workstation. The chart installs no store; MinIO is not installed (DOD-22) | `20-…` §1. Only platform components reach it |
+| Specialist and planner runs | `proj-<P>-exec` | **Job** per dispatch (`backoffLimit: 0`) | Run-to-completion, deadline, TTL, failure policy; retries owned by the controller (`16-…`) |
 | Verifier runs (G2, review re-runs, integration tests) | `proj-<P>-exec` / `proj-<P>-t-<runid>` | **Job** | Same reasons; integration and e2e in disposable namespaces |
-| Image builds | `proj-<P>-build` | **Job** (BuildKit rootless) | No Docker socket (`22-…`) |
+| Image builds | `proj-<P>-build` | **Job** (BuildKit rootless); **disabled by default** (R6 D20) | No Docker socket; `hostUsers: false` and a Localhost seccomp profile when enabled (`22-…`) |
 | Log/metrics collection | `devplat-observability` | Deployment + DaemonSet | Node-level collection needs a DaemonSet |
 
 **Why not a Task CRD and operator.** Task state needs an append-only, hash-chained audit log with relational queries (READY computation, budgets, fair share). etcd is not an audit store, and a CRD would create a second source of truth next to PostgreSQL. The controller is still *operator-style* (level-triggered reconciliation), but over PostgreSQL state; the only Kubernetes objects it owns are Jobs, their per-Job ConfigMap/Secret, and ephemeral namespaces. **Why not CronJobs for the loop.** A tick loop inside the leader gives sub-minute reaction to Job events via watches; CronJobs would add latency and duplicate-tick races.
@@ -88,19 +97,21 @@ Cross-project dependencies are allowed only when declared in project config and 
 flowchart LR
     OP["Operator (browser / CLI, OIDC)"]
     GH["GitHub (repos, PRs, CI, ruleset)"]
-    LLM["LLM APIs (Anthropic)"]
+    LLM["LLM API (Anthropic)"]
     LN["Linear"]
+    S3[("External S3-compatible store: devplat-P buckets, runs/, sha256/, src/")]
     MAC["macOS lane (operator Mac / macOS runner)"]
     subgraph SYS["devplat-system (control pool)"]
         API["devplat-api + dashboard"]
         CTL["devplat-controller (leader-elected)"]
-        GB["devplat-gitbroker (GitHub App key)"]
+        GB["devplat-gitbroker (App key, 1 replica)"]
+        GF["devplat-gitbroker-fetch (keyless)"]
+        AG["devplat-artifact-gateway"]
         MG["devplat-model-gateway (API key, budgets)"]
-        RP["registry-proxy"]
-        PG[("PostgreSQL: tasks, task_events, evidence, budgets")]
-    end
-    subgraph ART["devplat-artifacts"]
-        S3[("S3 store: runs/JOB-UID/, sha256/HEX")]
+        NSR["devplat-namespacer (fixed template)"]
+        DNS["devplat-dns (no forwarding)"]
+        RP["devplat-registry-proxy-P (read-only, per project)"]
+        PG[("PostgreSQL: tasks, task_events, artifacts, budgets")]
     end
     subgraph EXEC["proj-P-exec (exec pool, gVisor)"]
         JOB["Agent / planner / verifier Jobs"]
@@ -108,20 +119,28 @@ flowchart LR
     OP --> API
     API --> PG
     CTL --> PG
+    MG --> PG
     CTL -->|"create/watch Jobs"| JOB
+    CTL --> NSR
     CTL --> GB
     CTL --> S3
     CTL -.->|"read-only until DOD-05"| LN
     GB --> GH
+    GB --> S3
+    GF --> S3
+    AG --> S3
     GH -->|"webhooks / polling"| CTL
-    JOB -->|"one-time bundle fetch"| GB
-    JOB -->|"LLM calls, per-Job token"| MG
-    MG --> LLM
-    JOB -->|"presigned PUT"| S3
+    JOB -->|"one-time bundle URL"| GF
+    JOB -->|"upload token"| AG
+    JOB -->|"per-Job token"| MG
     JOB -.->|"deps class only"| RP
+    JOB --> DNS
+    MG --> LLM
     CTL -->|"mac_validation tasks"| MAC
     MAC -->|"evidence via API"| API
 ```
+
+Agent pods have no edge to gitbroker (the key holder), the object store, PostgreSQL or the Kubernetes API.
 
 ### 4.3 Namespaces and node pools (Option B)
 
@@ -135,7 +154,7 @@ flowchart TB
         end
         subgraph EP["Node pool 'exec' (taint devplat.io/exec=true:NoSchedule, RuntimeClass gvisor)"]
             M1["proj-mercury-exec"]
-            M2["proj-mercury-build (BuildKit; gVisor feasibility unverified)"]
+            M2["proj-mercury-build (BuildKit; disabled by default)"]
             M3["proj-mercury-t-runid (ephemeral)"]
             J1["proj-jupiter-exec"]
             J2["proj-jupiter-build"]
@@ -170,21 +189,21 @@ sequenceDiagram
 1. **Project registry.** Each project is a versioned config (`platform/projects/<P>.yaml`, schema in `26-…`): repositories, role set, path scopes per role, toolchain image, test environments, budgets, fair-share weight, concurrency caps and the execution target. Changing it is an operator-approved change.
 2. **Execution target** `{cluster_ref, namespace_prefix}`. `cluster_ref` names a kubeconfig/credential entry held by the controller (`default` = the cluster the controller runs in, as in `26-…`); `namespace_prefix` defaults to `proj-<P>`. Every Job, quota and ephemeral namespace is addressed through it, so moving a project to another cluster (Option C) changes config, not code.
 3. **One scheduler for all projects.** READY computation, admission and fair share are global (`17-…`); per-project limits and budgets are enforced inside it.
-4. **Per-project role binding.** A role id (e.g. `mdev-backend-engineer`) is usable by a project only if its config lists it with path scopes. The 12 `mdev-*` definitions are Mercury-derived; whether Jupiter reuses them is **unresolved**.
+4. **Platform role catalogue, per-project enablement** (R6 D6). Roles and the kind→role map are data in `platform/agents/execution-profiles.yaml`, loaded into the DB `roles` table at registration; no role literal is seeded in platform code. A project config only **enables** catalogue roles and bounds their path scopes. The `mdev-` prefix is historical. The 12 definitions are Mercury-derived; whether Jupiter enables them is **unresolved**.
 5. **Project health is isolated.** A broken project (failing CI, revoked App installation, exhausted budget) is paused by the controller; other projects continue.
 
 ## 6. Five things that are easy to confuse
 
 | Concept | What it is | Where it lives | Lifetime | Who changes it | Example |
 |---|---|---|---|---|---|
-| **Claude Code subagent definition** (role) | Prompt, scope, `tools` / `disallowedTools`, hooks for one role | `.claude/agents/mdev-*.md` (generated by `tools/devorch/gen_agents.py`); in the cluster an immutable ConfigMap generated from it | Versioned with the repo | Operator-approved change to the generator | `mdev-backend-engineer.md` |
+| **Claude Code subagent definition** (role) | Prompt, scope, `tools` / `disallowedTools`, hooks for one role | Definition source repository (today `.claude/agents/mdev-*.md`); in the cluster an immutable ConfigMap generated from it at a pinned commit with the devplat runtime preamble (`16-…` §9) | Versioned with its repository | Operator-approved change | `mdev-backend-engineer.md` |
 | **Agent image** (OCI) | The runtime: devplat-runner, Claude Code CLI pinned, project toolchain (e.g. Node 24 for Mercury) | Registry, referenced **by digest** | Immutable per digest | DevOps build Job + operator approval of the digest | `devplat/agent-node24@sha256:…` |
-| **Kubernetes Job** | One execution of one attempt of one task by one role | `proj-<P>-exec` | Minutes to hours; deleted after collection | Only the controller | `dp-mercury-dt-0001-a2` |
-| **Task record** | Durable task state, contract, events, gates, evidence | PostgreSQL `tasks`, `task_events`, `evidence` (`19-…`) | Until the project is archived | Only the controller (state); operator via API (facts, approvals) | `DT-0001` in RUNNING, attempt 2 |
+| **Kubernetes Job** | One dispatch of one attempt of one task by one role | `proj-<P>-exec` | Minutes to hours; deleted after collection | Only the controller | `dp-mercury-dt-0001-a2-d1` (name from `jobspec.py`, normative) |
+| **Task record** | Durable task state, contract, events, gates, evidence | PostgreSQL `tasks`, `task_events`, `artifacts` (`19-…`), keyed by `(project_id, task_id)` | Until the project is archived | Only the controller (state); operator via API (facts, approvals) | `(mercury, DT-0001)` in RUNNING, attempt 2 |
 | **Project config** | What the project is and how it may be built | `platform/projects/<P>.yaml` (project registry) | Versioned | Operator-approved change | `mercury.yaml` with target `{default, proj-mercury}` |
-| *(and)* **Execution profile** | How a role becomes a Job: resources, deadline, network, runtime, writes | `platform/agents/execution-profiles.yaml` | Versioned | Operator-approved change | `mdev-code-reviewer`: `writes_allowed: false` |
+| *(and)* **Role catalogue + execution profile** | Which kinds a role executes; how it becomes a Job: resources, deadline, network, runtime, writes | `platform/agents/execution-profiles.yaml` | Versioned | Operator-approved change | `mdev-code-reviewer`: kind `code_review`, `writes_allowed: false` |
 
-One task has many attempts; one attempt has exactly one Job (plus verifier and review Jobs bound to its head). A role has one definition and one profile; many Jobs use them. An image serves many roles.
+One task has many attempts; one attempt has one or more dispatches (environmental retries), each exactly one Job (plus verifier and review Jobs bound to its head). A role has one definition and one profile; many Jobs use them. An image serves many roles.
 
 ## 7. Cluster topology options
 
@@ -200,9 +219,9 @@ One task has many attempts; one attempt has exactly one Job (plus verifier and r
 | Cloud | Possible | **Fits** (managed node pools, autoscaling exec pool) | Fits; recommended when projects have separate owners or compliance needs |
 
 **Recommendation.**
-1. **Option B** is the target topology for any server, multi-node or cloud installation (ADR-023).
-2. **Option A** is accepted only for a single workstation, as an explicit **reduced-assurance mode**: the controller records `assurance: reduced` on every task event of that installation; gVisor may be absent (`runtime_class: default` allowed by admission only in this mode); the dashboard and every PR body generated by gitbroker state the mode. Gates do not change; isolation claims do.
-3. **Option C** needs no redesign: every project already addresses execution through its **execution target**. Moving Jupiter to its own cluster = adding a `cluster_ref` credential to the controller, installing the exec-side chart (namespaces, quotas, NetworkPolicy, RuntimeClass, registry-proxy and the route to model-gateway/artifact store) in the new cluster, and changing `mercury.yaml` / `jupiter.yaml`. Cross-cluster egress from exec pods to model-gateway and the artifact store then needs an authenticated ingress (mTLS) instead of in-cluster Services — **Documented only**.
+1. **Option B** is the recommended target topology for any server, multi-node or cloud installation (ADR-023, proposed; operator decision DOD-11).
+2. **Option A** is recommended only for a single workstation, as an explicit **reduced-assurance mode**. It is per project and needs that project's operator fact `REDUCED-ASSURANCE` with a reason (R6 D16), declared in its config as `security.reduced_assurance`. In that mode: the dev-bot App is installed on a **sandbox repository only** (no pushes to the real project repository), the project uses a separate spend-limited LLM key, builds are disabled, gVisor may be absent (`runtime_class: default` is admitted only then), and every task event carries `assurance_mode: reduced`; the dashboard and every PR body state the mode. Gates do not change; isolation claims do.
+3. **Option C** needs no redesign: every project already addresses execution through its **execution target**. Moving Jupiter to its own cluster = adding a `cluster_ref` credential to the controller, installing the exec-side chart (namespaces, quotas, NetworkPolicy, RuntimeClass, the project's registry proxy and the route to model-gateway, artifact-gateway and gitbroker-fetch) in the new cluster, and changing `mercury.yaml` / `jupiter.yaml`. Cross-cluster egress from exec pods to model-gateway, artifact-gateway and gitbroker-fetch then needs an authenticated ingress (mTLS, DOD-21) instead of in-cluster Services — **Designed, unverified**.
 
 ## 8. Independence from Mercury and Jupiter
 
@@ -217,7 +236,7 @@ devplat contains no Mercury or Jupiter code, does not import their schemas (sepa
 | Jupiter not onboarded (today) | No Jupiter namespaces, no Jupiter tasks | Everything; Env-C exists only as config schema and onboarding steps |
 | Mercury production (once it exists) is down | **No effect.** devplat never calls Mercury | Everything |
 
-Rules: (1) devplat images are built from `platform/` only. (2) The controller's READY computation for project P reads only P's config and P's tasks (plus declared cross-project dependencies). (3) A project's failure is never escalated as a platform failure. (4) Mercury self-hosting (`11-…`) does not make devplat depend on Mercury: if Mercury later builds itself, it does so as a *project* on devplat or outside it, never as devplat's control plane.
+Rules: (1) devplat images, code and tests are built from `platform/` only: no platform code or test imports `tools/devorch` or reads `docs/mercury`; what the platform needs from v1 is vendored under `platform/` with provenance (the guard hook `platform/agents/hooks/`, the job example `platform/controller/testdata/`, the DB rule tables) (R6 A-04). (2) The controller's READY computation for project P reads only P's config and P's tasks (plus declared cross-project dependencies). (3) A project's failure is never escalated as a platform failure. (4) Mercury self-hosting (`11-…`) does not make devplat depend on Mercury: if Mercury later builds itself, it does so as a *project* on devplat or outside it, never as devplat's control plane.
 
 ## 9. What survives from v1 and what changes
 
@@ -225,16 +244,16 @@ Rules: (1) devplat images are built from `platform/` only. (2) The controller's 
 |---|---|---|
 | Separation rules S1–S4 | **Kept**, extended by P1–P10 | Documented only |
 | Task lifecycles, transition table, gates G1–G7, reset rule, budgets, subtask ids, bound reviews, contract-core hash | **Kept**, ported to PostgreSQL (`19-…`) | v1: Implemented+tested (30 tests); port: Documented only (schema work in `platform/db`, see `19-…`) |
-| Contracts `devorch.task_contract.v1` / `task_result.v1` / `handoff.v1` | **Kept** as the wire format between controller and Jobs; v1 schema constants that are Mercury- or session-specific need a v2 revision (§12) | Implemented+tested (v1) |
+| Contracts `devorch.task_contract.v1` / `task_result.v1` / `handoff.v1` | **Generalized** to `devplat.task_contract.v2`, `devplat.task_result.v2`, `devplat.handoff.v2` (`platform/schemas/`: project id, project-neutral ids, catalogue roles, planner); v1 stays readable for local mode | v1: Implemented+tested; v2: Configured (schemas + validated examples) |
 | `check-result` git checks (`result_errors`) | **Kept**, moved into gitbroker bundle validation | Documented only |
 | Path ownership (`active_primary_paths`, `overlap`) | **Kept**, per project, re-checked at admission (`17-…` §9) | Documented only |
-| 12 role definitions | **Kept byte-identical**; mounted from a generated ConfigMap (`16-…` §9) | Configured (v1) |
+| 12 role definitions | **Kept unchanged in the repository**; the generated ConfigMap adds the devplat runtime preamble and the vendored hook path (`16-…` §9, R6 D23) | Configured (v1); generator Implemented+tested offline |
 | Principal Orchestrator main session | **Changed**: loop → controller; reasoning → `planner` Jobs | Documented only |
 | Git ledger `devorch/state`, LOCK, single-session rule | **Changed**: `task_events` in PostgreSQL + Lease-based leader election + task leases | Documented only |
-| Operator facts via `devorch.py fact --actor operator` (self-asserted) | **Changed**: recorded only through `devplat-api` with an OIDC subject | Documented only; OIDC provider open (DOD-14) |
+| Operator facts via `devorch.py fact --actor operator` (self-asserted) | **Changed**: recorded only through `devplat-api` by an allowlisted OIDC subject, **per project** (R6 D1, D2) | Designed, unverified; OIDC provider open (DOD-14) |
 | Worktrees `../mercury-wt/<task>` | **Changed**: per-Job `emptyDir` workspace from a gitbroker bundle | Documented only |
 | Specialist guard hook and settings denies as the main in-session controls | **Changed**: tripwire only; controls are NetworkPolicy, no credentials, gitbroker validation | Hook: Configured, did not fire in v1 live dispatch (R5) |
-| Push via `devorch.py push`, PR via MCP | **Changed**: gitbroker with the dev-bot GitHub App | Awaiting operator approval (DOD-03) |
+| Push via `devorch.py push`, PR via MCP | **Changed**: gitbroker with the dev-bot GitHub App, fast-forward only; human commits on a PR branch become the next base (`16-…` §7.3) | Awaiting operator approval (DOD-13; DOD-02 per repository) |
 | Mac validation queue | **Kept** as the external macOS lane (`mac_validation` tasks) | Blocked on the operator |
 | WIP limits, cost cap (`09-…`) | **Extended** to multi-project admission and budgets (`17-…`) | Documented only |
 | Local mode (single Claude Code session) | **Kept** for use before a cluster exists | v1 status unchanged |
@@ -244,25 +263,28 @@ Rules: (1) devplat images are built from `platform/` only. (2) The controller's 
 1. No component other than `devplat-controller` creates, mutates or deletes Jobs in `proj-*` namespaces (RBAC + admission policy).
 2. No pod in `proj-*` namespaces mounts a ServiceAccount token, a GitHub credential, an LLM API key or a DB credential.
 3. Every project-addressed operation goes through the project's execution target.
-4. Every task event carries `project_id`, actor, evidence and the contract-core hash; installations in reduced-assurance mode also carry `assurance: reduced`.
+4. Every task event carries `project_id`, actor, evidence, the contract-core hash, `config_version` and `assurance_mode` (`devplat.handoff.v2`; R6 D8).
 5. A topology change (A→B, B→C) is a config and chart change recorded as an operator decision; it never changes task semantics.
+6. No project pod reaches the object store, PostgreSQL, gitbroker or another project's registry proxy.
 
 ## 11. Capability status
 
 | Capability | Status |
 |---|---|
 | Platform architecture, environments, topology evaluation (this document) | Documented only |
-| Controller, api, gitbroker, model-gateway | Documented only (no code in this document's scope) |
+| Controller, api, gitbroker, gitbroker-fetch, artifact-gateway, model-gateway, namespacer | Designed, unverified (not built; chart templates exist, `24-…`) |
+| Role catalogue, contract/result/handoff v2 schemas | Configured; validated offline (`validate_projects.py`, schema examples) |
 | Namespaces, quotas, NetworkPolicy, RuntimeClass manifests | See `platform/deploy/base` and `24-…` (other deliverables); none applied to any cluster |
 | gVisor on the exec pool | Unverified assumption (node OS, arm64 support on the workstation VM, BuildKit compatibility) |
-| Option C via execution targets | Documented only; cross-cluster mTLS ingress unverified |
-| Human merge authority | Awaiting operator approval (DOD-02, DOD-03) |
+| Option C via execution targets | Designed, unverified; cross-cluster mTLS ingress (DOD-21) |
+| Human merge authority | Awaiting operator approval (DOD-02 ruleset + CI hardening per repository, DOD-13) |
+| Reduced-assurance mode | Designed, unverified; needs the per-project `REDUCED-ASSURANCE` fact |
 | Jupiter environment | Blocked (Jupiter unresolved) |
 | macOS lane | Blocked on the operator |
 
 ## 12. Open questions
 
 1. OIDC provider for `devplat-api` (DOD-14 in `12-…`).
-2. Which CloudNativePG / MinIO versions are pinned, and whether a workstation uses in-cluster PG or the host's.
+2. Which CloudNativePG version is pinned (DOD-19) and which external S3-compatible store is used (DOD-22).
 3. Whether Jupiter reuses the `mdev-*` role set or brings its own (unresolved with Jupiter).
-4. Contract schema v2: `created_by` (`principal-orchestrator` const), `task_id` (`^DT-`), `branch` (`merc-`/`dt-`) and `assigned_agent` enum in `schemas/task-contract.schema.json` are Mercury/session-specific; a `devplat.task_contract.v2` (or a project-parameterised v1.1) is needed for multi-project use and for the `plan_proposal` kind (`16-…` §10).
+4. When the platform moves to its own repository (DOD-12), where the definition source repository for the 12 roles lives (today this repository's `.claude/agents/`).

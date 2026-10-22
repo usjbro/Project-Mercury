@@ -1,7 +1,6 @@
 {{- /* Quota backstop (names as in platform/deploy/base/quotas.yaml). Per-run Secrets/ConfigMaps are allowed but
 bounded (doc 18 I-5). Project workloads may not use platform or system PriorityClasses. */}}
-{{- $roles := list "exec" }}
-{{- if .Values.build.enabled }}{{- $roles = append $roles "build" }}{{- end }}
+{{- $roles := list "exec" "build" }}
 {{- range $role := $roles }}
 {{- $v := index $.Values $role }}
 {{- $ns := include "proj.ns" (dict "Values" $.Values "role" $role) }}

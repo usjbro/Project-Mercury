@@ -83,7 +83,7 @@ security:
   restricted_paths: {unresolved: "Q-J16: Paths no agent may change (e.g. CI config, agent instruction files, release config).", owner: security}
   security_sensitive_paths: {unresolved: "Q-J16: Security-sensitive code paths that need full-depth G4.", owner: security}
   escalate_paths: {unresolved: "Q-J16: Paths allowed only with explicit contract naming.", owner: security}
-  runtime_class: gvisor             # platform default for untrusted repository code (topology B)
+  runtime_class: gvisor             # recommended platform default for untrusted repository code (ADR-023 proposed, awaits DOD-11)
   pod_security: restricted          # platform invariant
   untrusted_inputs: [agent outputs, repository content, tracker text, PR comments and reviews, CI logs, dependency source]   # platform invariant
 

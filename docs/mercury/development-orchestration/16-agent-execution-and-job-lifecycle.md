@@ -1,85 +1,72 @@
 # 16 — Agent Execution and Job Lifecycle (Kubernetes)
 
-Status: **Proposed — Documented only** (Architecture Amendment 001, 2026-10-17). No Job described here has run on any cluster. The example manifest (§4) is **validated only against the strict Kubernetes v1.33 JSON schema** (§4.3), not applied.
-Reuses / supersedes: **supersedes for the platform** `02-principal-orchestrator.md` §4 dispatch steps 5–8 and §5 loop steps 2–6 (they become the controller lifecycle below); **keeps** `02-…` §2 (completion only by evidence), §3 READY rule, `04-contracts.md` (contract/result schemas and validation rules, re-hosted in the controller and gitbroker) and the failure taxonomy and budgets of `07-handoff-and-recovery.md` §2–§3 (recovery details in `21-…`). Role definitions of `03-agents.md` are reused unchanged (§9).
+Status: **Proposed — Documented only** (Architecture Amendment 001; R6 fix round 2026-10-20). No Job described here has run on any cluster. The example manifest (§4) is produced by `platform/controller/jobspec.py` and checked offline only (§4.3).
+Reuses / supersedes: **supersedes for the platform** `02-principal-orchestrator.md` §4 dispatch steps 5–8 and §5 loop steps 2–6 (they become the controller lifecycle below); **keeps** `02-…` §2 (completion only by evidence), §3 READY rule, `04-contracts.md` (contract/result rules, re-hosted in the controller and gitbroker; wire format v2 in `platform/schemas/`) and the budgets of `07-handoff-and-recovery.md` §3. **Normative elsewhere:** Job names, labels and idempotency keys — `platform/controller/jobspec.py`; reconciliation, adoption, orphans and failure classification — `21-handoff-and-recovery-k8s.md`; artifact names, caps and prefixes — `20-artifact-storage.md` (R6 D11). Role definitions of `03-agents.md` are reused unchanged, with a runtime preamble (§9).
 
 ## 1. Invariants
 
-1. **One attempt = one Job.** Each specialist or planner run of attempt N of task T is exactly one Kubernetes Job `dp-<project>-<task>-a<N>`. Verifier, review and integration runs are their own Jobs bound to a recorded head.
-2. **Kubernetes never retries.** `backoffLimit: 0`; every retry is a new attempt decided by the controller under the devorch budgets (`07-…` §3: `max_attempts`, review 3, security 2, integration 2, environmental 5).
+1. **One dispatch = one Job.** Each run of task T, attempt N, dispatch D by one role is exactly one Kubernetes Job. Its name, labels and idempotency key are computed by `job_name()` / `idempotency_key()` in `platform/controller/jobspec.py`, which is **normative** (R6 A-23); this document does not restate the formulas. Verifier, review and integration runs are their own Jobs bound to a recorded head.
+2. **Kubernetes never retries.** `backoffLimit: 0`; every retry is a new dispatch or attempt decided by the controller under the devorch budgets (`07-…` §3: `max_attempts`, review 3, security 2, integration 2, environmental 5). Environmental retries also consume the project's cost budget (R6 D17).
 3. **The controller is the only writer** of task state and the only creator of Jobs in `proj-*` namespaces.
-4. **The pod is untrusted.** Everything it uploads (result, bundle, logs, self-reported usage) is evidence to verify, never a fact. Authoritative facts: gitbroker's validation of the bundle, the verifier's re-run, model-gateway metering, GitHub.
-5. **No credentials in the pod**, only per-Job, expiring capabilities (one-time bundle URL, presigned upload targets, a gateway token valid for this Job).
-6. **Idempotent at every step.** Every step can be repeated after a controller crash without a duplicate Job, push, PR or event (§3).
+4. **The pod is untrusted.** Everything it uploads (result, bundle, logs, self-reported usage, its own exit code) is evidence to verify, never a fact. Authoritative facts: gitbroker's validation of the bundle, the verifier's re-run, model-gateway metering, Kubernetes node and pod events, GitHub.
+5. **No credentials in the pod**, only per-Job, expiring capabilities: a one-time bundle URL (gitbroker-fetch), a one-time upload token for `devplat-artifact-gateway`, and a gateway token that binds the Job to its project and budget. **Agents never reach the object store** (R6 D10).
+6. **Idempotent at every step.** Every step can be repeated after a controller crash without a duplicate Job, push, PR or event (`21-…` §1–§3).
 
 ## 2. The 15-step lifecycle
 
 | # | Step | Actor and mechanism | Recorded (`task_events`) | On failure |
 |---|---|---|---|---|
-| 1 | **Validate dependencies** | Controller: port of devorch `issue_blockers` — DAG deps COMPLETED; contract `dependencies[]` at `required_state` (`COMPLETED`, `INTERFACE_FROZEN` with matching hash, `AWAITING_HUMAN` stack ≤ 2); TDD gates, P0 checks and per-project hard preconditions (DOD-02/03 equivalents) as **authenticated operator facts**; declared cross-project dependencies | `unblocked` (G1, `design_ref` evidence on an approved commit) | Stays BLOCKED with the blocker list |
-| 2 | **Authorize** | Controller admission (`17-…` §2): project active; contract passes the port of `contract_errors` (kind→role map, read-only kinds `allowed_paths: []`, subtask ids, restricted paths); path ownership vs active tasks; operator approval present if the contract widens the role's scope; budgets and capacity | `assigned` (READY → RUNNING) + task lease | Hold with reason (`capacity`, `budget`, `ownership`, …); stays READY |
-| 3 | **Select role** | `assigned_agent` → execution profile (`platform/agents/execution-profiles.yaml`); profile `kinds` must contain the contract kind; project config must bind the role | (part of `assigned`) | Contract invalid → `escalated` |
-| 4 | **Prepare project environment** | Resolve the execution target `{cluster_ref, namespace_prefix}`; check namespace health, quota headroom, approved image digest for the project toolchain, role ConfigMap present for the pinned definition commit | — | `env_retry` (target unavailable) or hold (`image_unavailable`) |
-| 5 | **Prepare workspace** | Gitbroker builds a git bundle: `base_commit` for attempt 1, the last **validated** head of this task for a correction attempt; mints a one-time fetch URL (TTL ≤ 15 min after unsuspend). Workspace = `emptyDir` sized by the profile | — | `env_retry` |
-| 6 | **Create Job** | Create the Job **suspended** with deterministic name and idempotency key (§3); on `AlreadyExists` adopt | — | API error → retry next tick (no event) |
-| 7 | **Deliver contract** | Create ConfigMap `<job>-contract` (contract with `worktree=/workspace/repo`, `evidence_dir=/out`) and Secret `<job>-io` (fetch URL, presigned upload targets scoped to `runs/<job-uid>/`, gateway token), both with `ownerReferences` → the Job uid; then set `suspend: false` | `dispatched` (`session` = Job uid, attempt N) | Setup incomplete after 5 min → delete Job, `env_retry` |
-| 8 | **Monitor** | Watch Job and pod; renew the task lease; pending timeout (10 min unschedulable / image pull); `activeDeadlineSeconds`; stale detection after controller restart (§6) | `started` (FULL lifecycle, pod Running) | §6 mapping |
-| 9 | **Collect** | On a terminal Job condition: list `runs/<job-uid>/` (result.json, result.bundle, agent.stream.jsonl, runner.json, fetch.log); if the pod died before uploading, read container logs through the API (bounded) | — | Missing objects are evidence of failure, classified in §6 |
-| 10 | **Persist** | Size-check, hash, copy into immutable `sha256/<hex>`; insert `artifacts` rows (`19-…`; origin `runs/<job-uid>/` upload or API-read pod log recorded in the MANIFEST); write a MANIFEST evidence object; then delete the Job (`propagationPolicy: Background`) | `artifacts` rows (not a transition) | Store unavailable → keep the Job (TTL 24 h) and retry |
-| 11 | **Validate** | Gitbroker: quarantine fetch of the bundle and the port of devorch `result_errors` (§7.2). Controller: result schema, `task_id`/`contract_version`/`attempt`/`agent` match, review binding (`reviewed_head_commit`), integration binding (`integrated_heads`), required tests reported | `implementation_completed` (FULL) or `result_accepted` (SHORT) — or `attempt_failed` / `env_retry` / `escalated` | Budgets as in devorch; exhausted → `failed` |
-| 12 | **Test and review** | Verifier Job re-runs `required_tests` at the validated head in a fresh workspace (G2); review subtasks `<task>-rN` (code/design/reliability) and `<task>-sN` (security, fresh Job, never the author's workspace) bound to the tested head (G3/G4); integration subtask `<first covered>-iN` (G5) | `tests_passed` (head), `code_review_passed`, `security_review_passed`, `integration_verified` | `tests_failed`, `code_review_changes_required`, `security_review_blocked`, `integration_failed` → correction attempt N+1 |
-| 13 | **Pull request** | Gitbroker pushes `dev/*` only if tip = tested head and G1–G5 are recorded; finds or creates a **draft** PR; controller waits for CI on that head | `pr_prepared` (G6, `pr` + `ci_run` evidence) | CI red → correction |
-| 14 | **Human approval** | GitHub reconciliation: PR merged, `merged_by` = the project's operator, merged head = G6 head. The platform never merges | `human_merged` (G7), `closed` | `human_changes_requested` → correction; wrong `merged_by` → security escalation |
+| 1 | **Validate dependencies** | Controller (port of devorch `issue_blockers`, R6 D7): DAG deps COMPLETED; contract `dependencies[]` at `required_state` ∈ {`COMPLETED`, `INTERFACE_FROZEN` with `interface_contracts[].sha256` = the freezing task's frozen hash, `AWAITING_HUMAN` (stack ≤ 2)}; the task's **required facts** (`task_required_facts`, e.g. Mercury G-S1, P0-n); declared cross-project dependencies. Facts are OIDC-authenticated operator facts **recorded for this project** | `unblocked` (G1, `design_ref` evidence on an approved commit) | Stays BLOCKED with the blocker list |
+| 2 | **Authorize** | Controller admission (`17-…` §2). Project status (R6 D4): `onboarding` dispatches only SHORT read-only kinds (planning, `*_review`, `plan_proposal`, `operator_action`, `mac_validation`); FULL-lifecycle kinds and any push need status `active` **and** this project's hard-precondition facts (`review_gates.hard_preconditions`, default `DOD-02`, `DOD-13`; a platform-wide fact never counts, R6 D1). The contract passed `register_contract` (kind→role from the catalogue, allowed ∩ restricted containment, ownership); a planner-originated contract or any revision carries an operator approval (R6 D18); budgets and capacity | `assigned` (READY → RUNNING) + task lease | Hold with reason (`admission_decisions`); stays READY |
+| 3 | **Select role** | `assigned_agent` → catalogue role and execution profile (`platform/agents/execution-profiles.yaml`); the catalogue must list the role as executor of the kind; the project config must enable it | (part of `assigned`) | Contract invalid → `escalated` |
+| 4 | **Prepare project environment** | Resolve the execution target `{cluster_ref, namespace_prefix}`; check namespace health, quota headroom, approved image digest for the project (per-project image prefix, R6 D15), role ConfigMap present for the pinned definition commit | — | Hold (`image_unavailable`, `target_unavailable`); a confirmed target outage is environmental per `21-…` |
+| 5 | **Prepare workspace** | Gitbroker writes the source bundle `src/<project>/<sha>.bundle` (base for attempt 1, the last **validated** head of this task for a correction, the human-amended tip after §7.3) and registers a one-time fetch URL served by the keyless `devplat-gitbroker-fetch` (TTL ≤ 15 min after unsuspend). Workspace = `emptyDir` sized by the profile | — | Classified per `21-…` |
+| 6 | **Create Job** | Create the Job **suspended** (name and key from `jobspec.py`) | — | API error → retry next tick (no event); `AlreadyExists` → `21-…` §3 |
+| 7 | **Deliver contract** | Create ConfigMap `<job>-contract` (contract with `worktree=/workspace/repo`, `evidence_dir=/out`) and Secret `<job>-io` (fetch URL, one-time artifact-gateway **upload token** scoped to `runs/<job-uid>/`, TTL = Job deadline + 15 min, gateway token), both with `ownerReferences` → the Job uid; then set `suspend: false` | `dispatched` (Job uid, attempt N, dispatch D) | Setup incomplete after 5 min → delete Job; `21-…` |
+| 8 | **Monitor** | Watch Job and pod; renew the task lease; heartbeats (`21-…` §5); pending timeout (10 min); `activeDeadlineSeconds` | `started` (FULL lifecycle, pod Running) | `21-…` §6 |
+| 9 | **Collect** | On a terminal Job condition the controller reads `runs/<job-uid>/` (`result.json`, `result.bundle`, `agent.stream.jsonl`, `runner.json`, `fetch.log`) from the store with its own credentials; if the pod died before uploading, it reads container logs through the API (bounded) | — | Missing objects are evidence; classification `21-…` §6 |
+| 10 | **Persist** | Size-check, hash, copy into immutable `sha256/<hex>`; register `artifacts` rows (`19-…`); write the evidence manifest `manifests/<task>/<attempt>/<dispatch>.json`; only then delete the Job | `artifacts` rows (not a transition) | Store unavailable → keep the Job (TTL 24 h) and retry |
+| 11 | **Validate** | Gitbroker: quarantine fetch of the bundle and the port of devorch `result_errors` (§7.2). Controller (R6 D7): result schema; `project_id`/`task_id`/`contract_version`/`attempt`/`agent` match; `status = completed`; for `implementation_completed` the result `head_commit` = the validated tip; blocking findings **computed from the `findings` array**; review binding (`reviewed_head_commit`); integration binding (`integrated_heads`); required tests reported | `implementation_completed` (FULL) or `result_accepted` (SHORT) — or `attempt_failed` / `escalated` | Budgets as in devorch; exhausted → `failed` |
+| 12 | **Test and review** | Verifier Job re-runs `required_tests` at the validated head in a fresh workspace (G2; `test_runs`); review subtasks `<task>-rN` (code/design/reliability) and `<task>-sN` (security, fresh Job, never the author's workspace) bound to the tested head (G3/G4); integration subtask `<first covered>-iN` (G5) | `tests_passed` (head), `code_review_passed`, `security_review_passed`, `integration_verified` | `tests_failed`, `code_review_changes_required`, `security_review_blocked`, `integration_failed` → correction attempt N+1 |
+| 13 | **Pull request** | Gitbroker pushes `dev/*` only if the remote tip is an ancestor of (or equal to) the tested head and G1–G5 are recorded — **never force** (§7.3); finds or creates a **draft** PR; the controller waits for CI on that head | `pr_prepared` (G6, `pr` + `ci_run` evidence) | CI red → correction; non-fast-forward → §7.3 |
+| 14 | **Human approval** | GitHub reconciliation: PR merged, `merged_by` ∈ the project's `human_approvers`, merged head = G6 head. The platform never merges (the ruleset of DOD-02 is what prevents the App from merging or approving, R6 D13) | `human_merged` (G7), `closed` | `human_changes_requested` (review, or human commits §7.3) → correction; wrong `merged_by` → security escalation |
 | 15 | **Re-evaluate** | Controller recomputes READY for dependents in **all** projects (including cross-project dependencies), records `interface_frozen` where due, releases path ownership | `interface_frozen` where due | — |
 
-Short-lifecycle kinds (reviews, integration, planning, `plan_proposal`) stop at step 11 with `result_accepted`. `mac_validation` tasks skip steps 4–10: they are completed by authenticated operator evidence through `devplat-api` (macOS lane, `22-…`).
+Short-lifecycle kinds (reviews, integration, planning, `plan_proposal`) stop at step 11 with `result_accepted`. `mac_validation` and `operator_action` tasks (`job: false` in the catalogue) skip steps 4–10: they complete only with authenticated operator evidence through `devplat-api` (macOS lane, `22-…`).
 
 ```mermaid
 sequenceDiagram
     participant C as devplat-controller
-    participant G as gitbroker
+    participant G as gitbroker (+ keyless gitbroker-fetch)
     participant K as Kubernetes API
     participant P as Job pod (fetch + agent)
-    participant S as artifact store
+    participant A as artifact-gateway
+    participant S as object store
     participant M as model-gateway
-    C->>G: request bundle of base or last validated head, get one-time URL
-    C->>K: create Job (suspend=true, deterministic name)
+    C->>G: write source bundle, register one-time fetch URL
+    C->>K: create Job (suspend=true, name from jobspec.py)
     K-->>C: uid
-    C->>S: presign uploads runs/UID/*
+    C->>A: mint one-time upload token for runs/UID/
     C->>K: create ConfigMap contract + Secret io (ownerRef UID)
     C->>K: patch suspend=false   (event: dispatched)
-    P->>G: fetch bundle (one-time)
-    P->>M: LLM calls (per-Job token)
-    P->>S: upload result.json, bundle, logs
+    P->>G: fetch bundle via gitbroker-fetch (one-time URL)
+    P->>M: LLM calls (per-Job token binds project and budget)
+    P->>A: upload result.json, bundle, logs (upload token)
+    A->>S: write runs/UID/* with its own credentials
     K-->>C: Job Complete / Failed
-    C->>S: hash + copy to sha256/HEX (evidence)
+    C->>S: read, hash, copy to sha256/HEX (evidence)
     C->>G: validate bundle (result_errors port)
     C->>K: delete Job
 ```
 
-## 3. Naming, idempotency and adoption
+## 3. Naming, idempotency and adoption (pointer)
 
-**Name.** `dp-<project>-<task>-a<attempt>-d<dispatch>`, lower-case, DNS-1123 label, ≤ 63 characters (the Job name becomes the `job-name` pod label value). Project slugs are ≤ 20 characters (`26-…`); task ids are lower-cased (`DT-0001-s1` → `dt-0001-s1`). Verifier Jobs append `-t<k>`. If a name would exceed 63 characters, the controller uses `dp-<first 45 chars>-<8 hex of sha256(full name)>`; the full name stays in the labels and annotations.
-
-**Labels** (all Jobs): `devplat.io/project`, `devplat.io/task`, `devplat.io/attempt`, `devplat.io/role`, `devplat.io/kind`, `devplat.io/network-class`, `devplat.io/idempotency-key` = first 40 hex of `sha256(project | task | contract_core_sha256 | attempt)`; annotations carry the full contract-core hash, contract version, base commit and role-definition hash.
-
-**Create protocol (each step idempotent).**
-1. `create Job (suspend: true)`. On `AlreadyExists`: GET it. Same idempotency key → **adopt** and continue at the first incomplete step. Different key → refuse, never delete; `escalated` (`cannot_continue`): two writers or a bug.
-2. `create ConfigMap` / `create Secret` with `ownerReferences` to the Job uid. On `AlreadyExists`: verify the owner uid; a stale object from a deleted Job of the same name is replaced.
-3. `patch suspend: false`, then record `dispatched` with the Job uid. A crash between the patch and the record is repaired on restart: an unsuspended Job without a `dispatched` record for its uid gets the record (the event is idempotent per uid).
-
-**Adoption after a controller restart or leader change.** The new leader lists Jobs with `app.kubernetes.io/managed-by=devplat-controller` in every execution target and joins them with RUNNING tasks:
-
-| Found | Action |
-|---|---|
-| Job for the task's current attempt | Adopt; continue monitoring |
-| RUNNING task, no Job, no uploaded result | `stale_detected` → `env_retry` (same attempt, new dispatch `-d<n+1>`; not charged) |
-| RUNNING task, no Job, uploaded result under `runs/<uid>/` of the recorded uid | Continue at step 9 |
-| Job with no matching RUNNING task/attempt (orphan) | Collect its logs as evidence, delete it, report |
+- **Names, labels, idempotency key:** `platform/controller/jobspec.py` (`job_name`, `idempotency_key`, `build_job`) is normative; `test_jobspec.py` pins the example below. Labels carry `devplat.io/{project,task,attempt,dispatch,role,kind,network-class,idempotency-key}`; annotations carry the contract-core hash, contract version, base commit and role-definition hash.
+- **Create protocol** (suspended create → owned ConfigMap and Secret → unsuspend → `dispatched`), **adoption after a restart or leader change, foreign and orphan Jobs, rows without a Job:** `21-handoff-and-recovery-k8s.md` §1–§4 is normative (R6 A-12). This document has no separate adoption table.
 
 ## 4. Annotated example: Backend Engineer, DT-0001 (MERC-101), attempt 2
 
-The contract is the v1 example `examples/contract-implementation.json` (budget `max_wall_minutes: 30`, `max_turns: 10`). Profile: `mdev-backend-engineer` in `platform/agents/execution-profiles.yaml`. Image digests, registry host and hashes are placeholders.
+The contract is the v1 example `examples/contract-implementation.json` (budget `max_wall_minutes: 30`, `max_turns: 10`). Profile: `mdev-backend-engineer` in `platform/agents/execution-profiles.yaml`. Image digests, registry host, the devplat-dns address and hashes are placeholders.
 
 ### 4.1 Job
 
@@ -198,11 +185,12 @@ spec:
             - --wall-seconds=1800             # runner stops claude at the wall budget, keeping the grace for upload
           env:
             - {name: HOME, value: /home/agent}
-            - {name: ANTHROPIC_BASE_URL, value: "http://devplat-model-gateway.devplat-system.svc:8080/p/mercury"}
+            - {name: ANTHROPIC_BASE_URL, value: "http://devplat-model-gateway.devplat-system.svc:8080"}   # project bound to the token, not the URL (R6 D12)
             - name: ANTHROPIC_AUTH_TOKEN      # per-Job gateway token, not the API key; revoked when the Job ends
               valueFrom:
                 secretKeyRef: {name: dp-mercury-dt-0001-a2-d1-io, key: gateway_token}
-            - {name: NPM_CONFIG_REGISTRY, value: "http://devplat-registry-proxy.devplat-system.svc:4873/"}
+            - {name: DEVPLAT_ARTIFACT_GATEWAY, value: "http://devplat-artifact-gateway.devplat-system.svc:8082"}   # uploads only here (R6 D10)
+            - {name: NPM_CONFIG_REGISTRY, value: "http://devplat-registry-proxy-mercury.devplat-system.svc:4873/"}   # this project's read-only proxy (R6 D14)
             - {name: DISABLE_AUTOUPDATER, value: "1"}
             - {name: CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, value: "1"}
           resources:                          # from platform/agents/execution-profiles.yaml
@@ -245,7 +233,7 @@ spec:
             name: dp-mercury-dt-0001-a2-d1-contract   # ownerReference -> this Job
         - name: io
           secret:
-            secretName: dp-mercury-dt-0001-a2-d1-io   # one-time bundle URL, presigned upload URLs, gateway token; ownerReference -> this Job
+            secretName: dp-mercury-dt-0001-a2-d1-io   # one-time bundle URL, one-time upload token, gateway token; ownerReference -> this Job
             defaultMode: 0400
 ```
 
@@ -261,7 +249,7 @@ metadata:
     - {apiVersion: batch/v1, kind: Job, name: dp-mercury-dt-0001-a2-d1, uid: "<job uid>", controller: true}
 immutable: true
 data:
-  contract.json: '{"schema":"devorch.task_contract.v1","task_id":"DT-0001","attempt":2,"worktree":"/workspace/repo","evidence_dir":"/out", ...}'
+  contract.json: '{"schema":"devplat.task_contract.v2","project_id":"mercury","task_id":"DT-0001","attempt":2,"worktree":"/workspace/repo","evidence_dir":"/out", ...}'
 ---
 apiVersion: v1
 kind: Secret
@@ -274,77 +262,75 @@ immutable: true
 type: Opaque
 stringData:
   bundle_url: "http://devplat-gitbroker-fetch.devplat-system.svc:8081/v1/bundles/<one-time token>"
-  upload_targets.json: '{"result.json": {"url": "...", "fields": {...}}, "result.bundle": {...}, "agent.stream.jsonl": {...}, "runner.json": {...}, "fetch.log": {...}}'
-  gateway_token: "<per-Job opaque token, revoked at Job end>"
+  upload_token: "<one-time token for devplat-artifact-gateway, scope runs/<job uid>/, expires at deadline + 15 min>"
+  gateway_token: "<per-Job opaque model-gateway token: binds project and budget, revoked at Job end>"
 ```
 
 ### 4.3 Validation of the example
 
-The Job in §4.1 is byte-identical to the file validated in the drafting session with
-`jsonschema` 4.26.0 against `yannh/kubernetes-json-schema` **`v1.33.0-standalone-strict/job-batch-v1.json`**: 0 errors; a negative probe (an unknown field in the container and in `spec`) was rejected. This proves field names and types only — not admission, scheduling, gVisor, NetworkPolicy or runtime behaviour (§11). Strict-schema validation of the chart-rendered Job belongs to `29-…`.
+`python3 platform/controller/test_jobspec.py` (13 tests, run in the R6 fix round): `build_job()` output equals the vendored fixture `platform/controller/testdata/job-example.yaml`, the fixture equals the §4.1 block byte for byte (skipped only if this doc is absent), every profile builds a Job valid against the strict Kubernetes v1.33 schema (`yannh/kubernetes-json-schema` `v1.33.0-standalone-strict`), unknown and mistyped fields are rejected, and the security properties a Job spec can carry hold (no token, non-root, read-only root FS, no capabilities, seccomp, no host access, digest-pinned images, gateway URLs without a project path, per-project registry proxy). This proves field names, types and generator/doc agreement only — not admission, scheduling, gVisor, NetworkPolicy or runtime behaviour (§11).
 
 ## 5. Container responsibilities
 
 | | Init container `fetch` | Main container `agent` |
 |---|---|---|
-| Image | `devplat/fetch` (git + verifier, no LLM, no shell for agents) | `devplat/agent-<toolchain>`: devplat-runner as PID 1, Claude Code CLI **pinned**, project toolchain (Mercury: Node 24), `/opt/devplat/hooks/specialist_guard.py` |
-| Network | Same pod policy; uses only the gitbroker fetch port | `model-only` or `deps` per profile |
-| Does | Download the bundle once; `git bundle verify`; clone into `/workspace/repo` with `core.hooksPath=/dev/null`; check out the contract `branch` at the expected head (`base_commit` or the last validated head) and verify `HEAD`; write `fetch.log` | Read the contract; start `claude -p` (§9.3) with the fixed prompt; enforce `--max-turns` and the wall budget (SIGTERM to Claude at the budget, SIGKILL after 30 s); then **always**: `git status --porcelain` (dirty flag), `git bundle create /out/result.bundle <branch> ^<base>` (writing kinds), `runner.json` (exit status, timings, self-reported usage), upload all files to the presigned targets; exit with the code in §6 |
-| Never | Run repository code, hooks or LFS filters | Hold a token beyond the gateway token; reach GitHub, the DB or the Kubernetes API |
+| Image | `devplat/fetch` (git + verifier, no LLM) | `devplat/agent-<toolchain>`: devplat-runner as PID 1, Claude Code CLI **pinned**, project toolchain (Mercury: Node 24), the vendored guard `/opt/devplat/hooks/specialist_guard.py` (`platform/agents/hooks/`) |
+| Network | Same pod policy; uses only the gitbroker-fetch port | `model-only` or `deps` per profile, plus devplat-artifact-gateway; never the object store |
+| Does | Download the bundle once; `git bundle verify`; clone into `/workspace/repo` with `core.hooksPath=/dev/null`; check out the contract `branch` at the expected head and verify `HEAD`; write `fetch.log` | Read the contract; start `claude -p` (§9.3) with the fixed prompt; enforce `--max-turns` and the wall budget (SIGTERM at the budget, SIGKILL after 30 s); then **always**: `git status --porcelain` (dirty flag), `git bundle create /out/result.bundle <branch> ^<base>` (writing kinds), `runner.json`, upload all files to the artifact gateway with the upload token; exit with a code from §6 |
+| Never | Run repository code, hooks or LFS filters | Hold a token beyond the gateway and upload tokens; reach GitHub, the DB, the object store or the Kubernetes API |
 
-Sidecar-less by design: no log shipper or proxy runs next to the agent; logs leave the pod only as uploaded objects or through the controller's bounded `pods/log` read.
+Sidecar-less by design: logs leave the pod only as uploaded objects or through the controller's bounded `pods/log` read.
 
-## 6. Runner exit codes and Job ↔ task mapping
+## 6. Runner exit codes and failure classification (pointer)
 
-| Runner exit | Meaning | podFailurePolicy |
-|---|---|---|
-| 0 | Claude finished (any result status) and all uploads succeeded | — (Job `Complete`) |
-| 64 (`EX_USAGE`) | Contract or runner configuration unreadable — a platform defect | `FailJob` |
-| 65 (`EX_DATAERR`) | Claude finished but `/out/result.json` is missing or not JSON | `FailJob` |
-| 75 (`EX_TEMPFAIL`) | Gateway 429/5xx, budget hold, upload failure, wall budget hit before a result | `FailJob` |
-| other / signal | Crash; OOM is identified from the pod's termination reason | backoffLimit 0 fails the Job |
+| Runner exit | Meaning |
+|---|---|
+| 0 | Claude finished (any result status) and all uploads succeeded |
+| 64 (`EX_USAGE`) | Contract or runner configuration unreadable |
+| 65 (`EX_DATAERR`) | Claude finished but `/out/result.json` is missing or not JSON |
+| 75 (`EX_TEMPFAIL`) | The runner believes the failure is temporary (gateway error, upload failure, wall budget) |
 
-`podFailurePolicy` is a **classification hint** (the Job condition names the matching rule); the controller re-derives the class from pod status, termination reasons and uploaded objects. `DisruptionTarget` uses `FailJob`, not `Ignore`: `Ignore` would make Kubernetes create a second pod for the same attempt, which would re-use a consumed one-time URL and hide the retry from the budgets.
+Exit codes, `runner.json` and the result's `status` are **self-reported by an untrusted pod**. Classification follows R6 D17, and `21-handoff-and-recovery-k8s.md` §6 is the normative table:
 
-| Kubernetes observation | Task event (devorch names) | Task state after |
-|---|---|---|
-| Job created, `suspend: true` (setup) | none (`assigned` already recorded) | RUNNING |
-| `suspend: false` set | `dispatched` (session = Job uid) | RUNNING |
-| Pod `Running` | `started` (FULL lifecycle; SHORT has no `started` edge, kept as metadata) | RUNNING |
-| Pod `Pending` > 10 min (unschedulable, image pull) | delete Job → `env_retry`; admission hold for that role | RUNNING (next attempt) |
-| `Complete`, result `completed`, validation passes | `implementation_completed` (FULL) / `result_accepted` (SHORT) | RUNNING → G2 (FULL) / COMPLETED (SHORT) |
-| `Complete`, result `completed`, validation fails | `attempt_failed` (or `failed` when the budget is exhausted) | RUNNING / FAILED |
-| `Complete`, result `partial` | `attempt_failed`; `env_retry` if the reason is environmental (context, rate limit) | RUNNING |
-| `Complete`, result `escalated` | `escalated` + escalation entry in the API | BLOCKED |
-| `Failed`, exit 65 | `attempt_failed` | RUNNING / FAILED |
-| `Failed`, exit 75, `fetch` failure, `DisruptionTarget`, OOMKilled, `DeadlineExceeded` | `env_retry` (not charged; ≤ 5; backoff 1/5/15/60/240 min). Two consecutive OOM or deadline failures in one contract version → `escalated` to re-split the task (`07-…` §2 resource exhaustion) | RUNNING |
-| `Failed`, exit 64 | `escalated` (`cannot_continue`, platform defect; not charged) | BLOCKED |
-| Job vanished before collection | `stale_detected` → `env_retry` | RUNNING |
-| Task cancelled or contract revised while the Job runs | delete Job (Background), keep uploads as evidence → `cancelled` / `contract_revised` | CANCELLED / BLOCKED |
+1. **Environmental** (`env_retry`, ≤ 5, not charged to attempts but charged to the cost budget) only from **platform signals**: model-gateway-confirmed 429/5xx for this Job's token; node, eviction or `DisruptionTarget` events; fetch failure codes reported by gitbroker-fetch; image-pull errors.
+2. Runner exit 75, `partial` results and anything else the pod reports are **charged attempts** (`attempt_failed`) unless a platform signal of rule 1 explains them.
+3. `podFailurePolicy` (`FailJob` on `DisruptionTarget`, on any `fetch` failure and on agent exits 64/65/75) only makes the Job fail fast with a reason; it never decides the class. `Ignore` is not used: it would create a second pod for the same dispatch, re-use a consumed one-time URL and hide the retry from the budgets.
 
-## 7. Results: collection, persistence, validation
+## 7. Results: collection, persistence, validation, human commits
 
 ### 7.1 Collection and persistence
 
+The layout, names and caps are owned by `20-artifact-storage.md` (R6 D11):
+
 | Object (`runs/<job-uid>/…`) | Cap | Authority |
 |---|---|---|
-| `result.json` (`devorch.task_result.v1`) | 1 MiB | Claim, validated in step 11 |
-| `result.bundle` (writing kinds) | 200 MiB | Claim; gitbroker validation makes it a fact |
-| `agent.stream.jsonl` (Claude `stream-json` transcript) | 50 MiB | Log evidence |
-| `runner.json` (exit, timings, dirty flag, self-reported usage) | 1 MiB | Claim; usage authority is model-gateway metering |
-| `fetch.log` | 1 MiB | Log evidence |
+| `result.json` (`devplat.task_result.v2`, or v1 for v1 contracts) | 1 MiB | Claim, validated in step 11 |
+| `result.bundle` (writing kinds) | 256 MiB | Claim; gitbroker validation makes it a fact |
+| `agent.stream.jsonl` (Claude `stream-json` transcript) | 64 MiB | Log evidence |
+| `runner.json` (exit, timings, dirty flag, self-reported usage) | 64 MiB (log cap) | Claim; usage authority is model-gateway metering |
+| `fetch.log` | 64 MiB (log cap) | Log evidence |
+| **Total per run** | **512 MiB** | Enforced by the artifact gateway |
 
-Uploads use presigned **POST policies with `content-length-range`** where the store supports them (S3 and MinIO do — unverified for the chosen store), otherwise presigned PUTs with a server-side size check. URLs expire at the Job deadline + 15 min. The controller copies each object to `sha256/<hex>` (object lock where supported), records `evidence` rows with job uid, size and hash, and deletes `runs/<job-uid>/` (bucket lifecycle rule: 7 days as backstop). It deletes the Job only after the copy is committed; `ttlSecondsAfterFinished: 86400` is the backstop.
+The pod uploads only to `devplat-artifact-gateway` (in-cluster, port 8082) with its one-time upload token; the gateway enforces the caps and the `runs/<job-uid>/` scope and writes to the store with its own credentials. Presigned URLs are used only between platform components. The controller copies each object to `sha256/<hex>` (object lock where supported), registers `artifacts` rows, writes `manifests/<task>/<attempt>/<dispatch>.json`, and deletes `runs/<job-uid>/` (lifecycle rule: 7 days as backstop). It deletes the Job only after the copy is committed; `ttlSecondsAfterFinished: 86400` is the backstop. Bucket: `devplat-<project>`.
 
 ### 7.2 Bundle validation in gitbroker (port of devorch `result_errors`)
 
 1. Fetch the bundle into a per-task quarantine repository with gitbroker's own git config (no hooks, `protocol.ext.allow=never`, no system/global config); `git bundle verify`; `fsck --strict`.
 2. Refuse gitlinks (submodules), files above the project size limit, and changes to `.gitattributes` / `.gitmodules` / LFS pointers unless the contract's `allowed_paths` names them.
-3. devorch `result_errors` rules 4–8: `base_commit` is an ancestor; the branch tip = result `head_commit`; `commits` = `rev-list base..tip` (no hidden empty commits); `modified_files` = `diff --no-renames --name-only base..tip`; every changed file inside `allowed_paths` and outside `restricted_paths`; read-only kinds and `writes_allowed: false` profiles: **no** commits beyond `review_target.head_commit`; review kinds: `reviewed_head_commit` = `review_target.head_commit`; integration: `integrated_heads` complete and contained in the tip.
-4. Runner dirty flag set → INVALID (devorch rule 5; uncommitted work is never in the bundle, the flag only keeps v1 semantics).
+3. devorch `result_errors` rules 4–8: `base_commit` is an ancestor; the branch tip = result `head_commit`; `commits` = `rev-list base..tip`; `modified_files` = `diff --no-renames --name-only base..tip`; every changed file inside `allowed_paths` and outside `restricted_paths`; read-only kinds and `writes_allowed: false` profiles: **no** commits beyond `review_target.head_commit`; review kinds: `reviewed_head_commit` = `review_target.head_commit`; integration: `integrated_heads` complete and contained in the tip.
+4. Runner dirty flag set → INVALID (devorch rule 5).
 5. Store the validated commits under `refs/devplat/<project>/<task>/a<N>` in the mirror; the bundle in the artifact store is the durable copy.
 
 R5 N-02 (forged `.git` pointer, user git config) and N-03 (hidden index entries) do not apply: gitbroker never runs git in an agent-controlled directory; it reads objects only.
+
+### 7.3 Human commits on a `dev/*` PR branch (R6 D21)
+
+The operator may push commits to a task's `dev/*` branch while the PR is open (AWAITING_HUMAN or earlier).
+
+1. **Never force-push.** Gitbroker pushes only fast-forwards; it has no force option.
+2. **Detection.** GitHub reconciliation (`21-…` §7) compares the remote tip with the G6 head. Commits that gitbroker did not push are **non-platform commits**.
+3. **Response.** The controller records `human_changes_requested` (→ RUNNING; G2–G7 cleared, G1 kept), asks gitbroker to fetch the new tip and validate it like an agent bundle against the contract scope (allowed/restricted paths, no gitlinks, `fsck`). If valid, the new tip becomes the **base of the next attempt** (step 5), so agent work continues on top of the human commits and every gate is re-earned at the new head.
+4. **Scope violation or non-fast-forward** (history rewritten on the remote, or the human commits touch restricted paths) → `escalated` (`operator_decision`); nothing is pushed until the operator resolves it.
 
 ## 8. Deadlines, failure policy, TTL, leases
 
@@ -353,28 +339,28 @@ R5 N-02 (forged `.git` pointer, user git config) and N-03 (hidden index entries)
 | `activeDeadlineSeconds` | `min(contract budget.max_wall_minutes, profile max_wall_minutes) × 60 + setup_grace_seconds (600)` | Kubernetes resets the timer while a Job is suspended, so setup time is not charged |
 | Runner wall budget | `min(…) × 60` | Stops Claude before the deadline so the runner can still upload |
 | `terminationGracePeriodSeconds` | 60 | Runner uploads partial logs on SIGTERM (drain, cancel) |
-| `backoffLimit` / `podReplacementPolicy` | 0 / `Failed` | One pod per attempt |
+| `backoffLimit` / `podReplacementPolicy` | 0 / `Failed` | One pod per dispatch |
 | `ttlSecondsAfterFinished` | 86400 | Backstop only |
 | Pending timeout (controller) | 10 min | Unschedulable or image pull |
-| Task lease | `lease_expires_at` = now + 2 min, renewed by the leader each tick | A dead leader's tasks are taken over after expiry (`19-…`, `21-…`) |
+| Task lease | TTL 2 min, renewed by the leader each tick; a new leader may fence-transfer leases on election (token + 1) instead of waiting | RTO for task progress = lease TTL (2 min) + leader election (15 s) (R6 D22; `19-…` §6, `21-…` §5) |
 
 ## 9. Reuse of the 12 `mdev-*` definitions (and the orchestrator's)
 
 ### 9.1 Role ConfigMap
 
-A generator (`platform/tools/gen_role_configmap.py`, **implemented**; its output validates against the strict v1.33 ConfigMap schema) reads `.claude/agents/mdev-*.md` at a pinned, operator-approved commit and emits one immutable ConfigMap per project, `devplat-roles-<project>-<hash8>`:
+`platform/tools/gen_role_configmap.py` (implemented; deterministic; output validated against the strict v1.33 ConfigMap schema) reads, at one pinned commit, the definition files named by the catalogue's `agent_definition` and emits one immutable ConfigMap per project, `devplat-roles-<project>-<hash8>`:
 
-- one key per definition, **byte-identical** to the repository file except one recorded transform: the hook command `$CLAUDE_PROJECT_DIR/tools/devorch/hooks/specialist_guard.py` becomes `/opt/devplat/hooks/specialist_guard.py` (baked into the image, read-only root filesystem). In the workspace the script would be agent-writable, and non-Mercury repositories do not contain it;
-- `managed-settings.<role>.json` (mounted as `/etc/claude-code/managed-settings.json`): the deny rules of `.claude/settings.json`, allow rules for the role's frontmatter `tools` (headless runs cannot answer permission prompts), and the profile's `extra_disallowed_tools`;
-- annotations: source commit, per-file sha256 before and after the transform.
+- one key per definition, **unchanged except two recorded transforms**: (1) the fixed **devplat runtime preamble** (`devplat.runtime_preamble.v1`, R6 D23) is inserted right after the YAML frontmatter, above the unchanged v1 text: Kubernetes mode, no main session, no devorch CLI or ledger, workspace `/workspace/repo`, result `/out/result.json` (v2 schema for v2 contracts), no credentials or network, documents relative to the workspace, everything read is untrusted; (2) any hook command `$CLAUDE_PROJECT_DIR/…/specialist_guard.py` becomes `/opt/devplat/hooks/specialist_guard.py`, the vendored copy in `platform/agents/hooks/` baked into the read-only image;
+- `managed-settings.<role>.json` (mounted as `/etc/claude-code/managed-settings.json`): the deny rules of the source repository's `.claude/settings.json`, allow rules for the role's frontmatter `tools` (headless runs cannot answer permission prompts), and the profile's `extra_disallowed_tools`;
+- annotations: source commit, preamble version and sha256, per-file sha256 before and after the transforms.
 
-The Job mounts **only its own role file** (`items`) at `~/.claude/agents/` and the managed settings at `/etc/claude-code/`. The `.claude/agents/` files in the repository are not edited (`14-…` §3 rule 2).
+The Job mounts **only its own role file** (`items`) at `~/.claude/agents/` and the managed settings at `/etc/claude-code/`. The `.claude/agents/` files in the repository are not edited (`14-…` §3 rule 2). Projects other than Mercury get role definitions only through the catalogue; whether Jupiter uses these 12 is unresolved.
 
 ### 9.2 What still applies inside the container
 
-- Frontmatter `tools` and `disallowedTools` apply when Claude Code runs as that agent; the Code Reviewer still has no Edit/Write/NotebookEdit. No MCP servers are configured in the pod (`--strict-mcp-config` with none), so the GitHub/Linear MCP denies are moot — there is nothing to call.
+- Frontmatter `tools` and `disallowedTools` apply when Claude Code runs as that agent; the Code Reviewer still has no Edit/Write/NotebookEdit. No MCP servers are configured in the pod (`--strict-mcp-config` with none), so the GitHub/Linear MCP denies are moot.
 - Project-level settings from the **workspace** (`.claude/`, `.mcp.json`) are not loaded; repository `CLAUDE.md` and all repository text are untrusted content (v1 rule U).
-- The guard hook is a **tripwire**. It did not fire in v1 live dispatch (R5 N-01), and inside the container the agent controls its own process environment. The **real controls** are: default-deny NetworkPolicy (no route to GitHub, the DB or the Kubernetes API, so `git push` has nowhere to go); no credentials in the pod; gitbroker validation (only a validated bundle can become a commit, and only gitbroker pushes, only after G1–G5); zero-RBAC service account without a token; gVisor; read-only root filesystem.
+- The guard hook is a **tripwire**. It did not fire in v1 live dispatch (R5 N-01), and inside the container the agent controls its own process environment. The **real controls** are: default-deny NetworkPolicy (no route to GitHub, the DB, the object store or the Kubernetes API); no credentials in the pod; gitbroker validation (only a validated bundle can become a commit, and only gitbroker pushes, only after G1–G5); zero-RBAC service account without a token; gVisor; read-only root filesystem; and, against merge or approval by the App, the DOD-02 ruleset (R6 D13).
 
 ### 9.3 Invocation
 
@@ -391,45 +377,46 @@ The prompt is the fixed v1 dispatch instruction (`02-…` §4 step 7); for a cor
 
 | Aspect | Rule |
 |---|---|
-| What runs | Profile `planner`: definition `.claude/agents/mdev-principal-orchestrator.md` with `extra_disallowed_tools` `Agent`, `Edit`, `NotebookEdit`, GitHub/Linear MCP. Network `model-only`; `writes_allowed: false` |
+| What runs | Catalogue role `planner`: definition `.claude/agents/mdev-principal-orchestrator.md` with the runtime preamble and `extra_disallowed_tools` `Agent`, `Edit`, `NotebookEdit`, GitHub/Linear MCP. Network `model-only`; `writes_allowed: false` |
 | When | (a) drafting contracts for backlog items the controller found unblockable; (b) triage after `attempt_failed`, `tests_failed` or a review rejection; (c) drafting an escalation; (d) re-planning after `contract_revised` |
-| Contract | Same `devorch.task_contract.v1` / `task_result.v1` schemas, new kind `plan_proposal`, `allowed_paths: []`, ids `<task>-pN` (task-bound) or `PL-<nnnn>` (project-level). Both need a contract schema revision (§13) |
+| Contract | `devplat.task_contract.v2`, kind `plan_proposal`, `allowed_paths: []`, ids `<task>-pN` (task-bound) or `PL-<nnnn>` (project-level) |
 | Inputs | Read-only workspace at the approved design commit; backlog extract and prior evidence as files (rule U) |
-| Outputs | `/out/result.json` plus `/out/proposals/*.json` (contracts, triage) and `*.md` (escalation drafts) |
-| Acceptance | The controller overwrites derived fields (`task_id`, `created_by`, `branch`, `worktree`, `evidence_dir`, `attempt`), caps the budget at project defaults, keeps the lifecycle's `required_gates` and default `required_reviewers` (a planner cannot remove a gate or a reviewer), unions `restricted_paths` with the project baseline, runs the `contract_errors` port and G1. `allowed_paths` outside the role's scope in the project config → **operator approval** in `devplat-api` |
+| Outputs | `/out/result.json` (`devplat.task_result.v2`, `proposals[]`) plus `/out/proposals/*.json` (contracts, triage) and `*.md` (escalation drafts) |
+| Acceptance | The controller overwrites derived fields (`task_id`, `created_by`, `branch`, `worktree`, `evidence_dir`, `attempt`), caps the budget at project defaults, keeps the lifecycle's `required_gates` and default `required_reviewers`, unions `restricted_paths` with the project baseline, runs `register_contract` and G1. **Every planner-originated contract and every `contract_revised` needs an operator approval record in `devplat-api` before READY** (`origin.approval_ref`); revisions per task are capped at 3 and the counter is reset only by the operator (R6 D18) |
 | Cannot | Dispatch, record events, push, open PRs, approve, or reach GitHub, Linear, the DB or the Kubernetes API (no route, no token) |
 
-The controller's own classification of a failure (§6) stays authoritative; a triage proposal can only suggest a contract revision, which then follows the rules above.
+The controller's classification of a failure (§6, `21-…`) stays authoritative; a triage proposal can only suggest a contract revision, which then follows the rules above.
 
 ## 11. Verification items (must pass on a real cluster before the first agent Job)
 
 | ID | Item |
 |---|---|
-| V-16-1 | Pinned Claude Code CLI: `--agent` with `-p`, `--setting-sources`, `--strict-mcp-config`, `/etc/claude-code/managed-settings.json` precedence, frontmatter `tools`/`disallowedTools` enforced headless |
+| V-16-1 | Pinned Claude Code CLI: `--agent` with `-p`, `--setting-sources`, `--strict-mcp-config`, `/etc/claude-code/managed-settings.json` precedence, frontmatter `tools`/`disallowedTools` enforced headless; the runtime preamble is honoured |
 | V-16-2 | Claude Code and the Mercury toolchain run with read-only root FS, `emptyDir` HOME, uid 10001, under gVisor (amd64 and, for the workstation, arm64) |
-| V-16-3 | `ANTHROPIC_BASE_URL` + per-Job token through model-gateway; key never visible in the pod (env, files, `/proc`) |
-| V-16-4 | `suspend` → unsuspend resets the deadline; `podFailurePolicy` rules match `fetch` and `agent` as written; condition messages parseable |
-| V-16-5 | Default-deny egress enforced by the chosen CNI (probe: `git push`, GitHub API, PostgreSQL, Kubernetes API from an agent pod all fail) |
-| V-16-6 | Presigned POST size limits on the chosen store; expiry honoured |
-| V-16-7 | Adoption: kill the leader between each create step; no duplicate Job, event, push or PR |
+| V-16-3 | `ANTHROPIC_BASE_URL` + per-Job token through model-gateway; key never visible in the pod (env, files, `/proc`); server tools, `mcp_servers`, files/batches APIs refused (R6 D12) |
+| V-16-4 | `suspend` → unsuspend resets the deadline; `podFailurePolicy` rules match `fetch` and `agent` as written |
+| V-16-5 | Default-deny egress enforced by the chosen CNI (probe: `git push`, GitHub API, PostgreSQL, the object store endpoint and the Kubernetes API from an agent pod all fail) |
+| V-16-6 | Artifact gateway: upload token single-use, scope `runs/<job-uid>/` only, per-object and 512 MiB total caps, expiry at deadline + 15 min |
+| V-16-7 | Kill the leader between each create step; no duplicate Job, event, push or PR (`21-…`) |
 | V-16-8 | Port of the 30 devorch regression tests to controller + gitbroker (`29-…` §3) |
+| V-16-9 | Human commits on a PR branch (§7.3): detected, validated, used as the next base; no force-push; a rewritten remote escalates |
 
 ## 12. Capability status
 
 | Capability | Status |
 |---|---|
-| Lifecycle, naming, mapping, planner rules (this document) | Documented only |
-| Example Job manifest | Configured (example only); strict-schema validated, not applied |
-| `platform/agents/execution-profiles.yaml` + schema | Configured; schema-validated (`python3 -c "import json,yaml,jsonschema; jsonschema.Draft202012Validator(json.load(open('platform/schemas/execution-profiles.schema.json'))).validate(yaml.safe_load(open('platform/agents/execution-profiles.yaml')))"`) |
-| Controller Job creation/adoption, runner, fetch image, gitbroker validation | Documented only |
-| Role ConfigMap generator | Documented only (not written) |
-| devorch rules being ported | Implemented+tested in v1 (30 tests); the port is Documented only |
+| Lifecycle, planner rules, human-commit rule (this document) | Documented only |
+| Job spec generator `platform/controller/jobspec.py` and the example Job | Implemented+tested offline (13 tests: equality with fixture and doc, strict v1.33 schema, security properties); never applied to a cluster |
+| Role catalogue + execution profiles + schema | Configured; schema- and consistency-validated (`validate_projects.py` checks the catalogue) |
+| Role ConfigMap generator with runtime preamble | Implemented+tested offline (strict v1.33 ConfigMap schema, determinism); never mounted in a pod |
+| Result / handoff v2 schemas | Configured; examples validated (`platform/schemas/example-*-v2.json`) |
+| Controller Job creation, runner, fetch image, artifact gateway, gitbroker validation | Designed, unverified (not built) |
+| devorch rules being ported | Implemented+tested in v1 (30 tests); the DB port is owned by `19-…` |
 | Claude Code headless flags, gVisor compatibility, NetworkPolicy enforcement | Unverified assumption (V-16-1…5) |
-| Draft-PR push by gitbroker | Awaiting operator approval (DOD-03 dev-bot App) |
+| Draft-PR push by gitbroker | Awaiting operator approval (DOD-13; DOD-02 per repository) |
 
-## 13. Open questions and required changes elsewhere
+## 13. Open questions
 
-1. **Contract schema v2.** `created_by` const `principal-orchestrator`, `task_id` `^DT-…`, `branch` `^dev/(merc-…|dt-…)`, the `assigned_agent` enum and the `kind` enum do not admit the controller as creator, the `planner` role, the `plan_proposal` kind or non-Mercury projects. Owner: contracts (`04-…`) / persistence (`19-…`).
-2. **DevOps tasks touching `.github/workflows/**`.** DOD-03 (a) gives the dev-bot App no `workflows` permission, so gitbroker cannot push such commits. Options: operator pushes them, or a scoped exception (operator decision).
-3. Whether `started` should be added to `T_SHORT` for uniform monitoring (today it is metadata only for short kinds).
-4. Pod log retention when a pod is evicted before upload (bounded `pods/log` read requires the controller's `pods/log get` RBAC in `proj-*` namespaces; `18-…`).
+1. **DevOps tasks touching `.github/workflows/**`.** The dev-bot App has no `workflows` permission (DOD-13), so gitbroker cannot push such commits; Mercury currently restricts `.github/**` (DOD-23, operator decision).
+2. Whether `started` should be added to `T_SHORT` for uniform monitoring (today it is metadata only for short kinds).
+3. Pod log retention when a pod is evicted before upload (bounded `pods/log` read needs the controller's `pods/log get` in `proj-*` namespaces; `18-…`).

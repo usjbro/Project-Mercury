@@ -50,7 +50,8 @@ assurance:
 # object-store egress from project namespaces, so there is nothing to configure here.
 
 # Read-only package-registry proxy for this project (D14): devplat-registry-proxy-<id> in devplat-system, publish
-# and adduser disabled, upstreams = the project's registries_allowlist. Only npm is templated (Verdaccio); other
+# and adduser disabled, upstreams = the project's registries_allowlist. Only the npm part (Verdaccio, :4873) is
+# templated; the OCI pull-through on :5000 that base's NetworkPolicy allows is NOT templated yet, and other package
 # ecosystems are unresolved. Disabled = network class deps has no registry to reach.
 registryProxy:
   enabled: false
@@ -87,15 +88,21 @@ exec:
     pvcMaxStorage: 20Gi
 
 build:
-  # Builds are OFF by default (D20) and remain blocked on spike S-B1 (22-... section 9). When enabled, buildkitd
-  # must run with hostUsers: false, the Localhost seccomp profile below and exactly the pinned args; the builder
-  # image must be on the allowlist (digest-pinned). Not allowed in reduced-assurance mode (D16).
+  # Builds are OFF by default (D20) and remain blocked on spike S-B1 (22-... section 9). The build namespace always
+  # exists (as in base); `enabled` sets the params switch buildsEnabled. When enabled, base VAP
+  # devplat-build-exceptions (per-namespace params rendered by this chart) requires for the container buildkitd:
+  # hostUsers: false, the image prefix, exactly the pinned args and the Localhost seccomp profile below. This chart
+  # adds only the project-specific allowlist of full image references for every container in the build namespace.
+  # Not allowed in reduced-assurance mode (D16).
   enabled: false
   allowedBuilderImages: []        # e.g. ["registry.devplat.internal/mirror/moby/buildkit@sha256:..."]
   buildkit:
-    seccompLocalhostProfile: ""   # node-installed profile, e.g. "profiles/devplat-buildkitd.json"
-    args:                         # pinned buildkitd/buildctl-daemonless args (no --oci-worker-no-process-sandbox)
-      - "--oci-worker-snapshotter=overlayfs"
+    imagePrefix: "registry.devplat.internal/mirror/moby/buildkit@sha256:"
+    seccompLocalhostProfile: "profiles/devplat-buildkit.json"   # node-installed Localhost profile (as in base)
+    args:                         # pinned args (base params, space-joined), same default as platform/deploy/base
+      - "--oci-worker-no-process-sandbox"
+      - "--addr"
+      - "unix:///run/user/1000/buildkit/buildkitd.sock"
   quota:
     requests.cpu: "8"
     limits.cpu: "16"

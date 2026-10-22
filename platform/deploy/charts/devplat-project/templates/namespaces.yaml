@@ -9,9 +9,9 @@ metadata:
     {{- include "proj.labels" . | nindent 4 }}
     devplat.io/ns-role: exec
     {{- include "proj.psa" (dict "enforce" "restricted") | nindent 4 }}
-{{- if .Values.build.enabled }}
 ---
-# Build namespace: PSA enforce "privileged" ONLY because rootless BuildKit needs exceptions (Unconfined or Localhost
+# Build namespace (always present, as in base; builds run only when the params switch buildsEnabled is "true",
+# D20). PSA enforce "privileged" ONLY because rootless BuildKit needs exceptions (Unconfined or Localhost
 # seccomp/AppArmor, newuidmap) that Baseline/Restricted cannot express; audit/warn stay restricted. The real
 # controls are the base VAPs (devplat-pod-hardening, -proj-pod-identity, -build-exceptions,
 # -proj-runtime-placement, -image-pinning) plus this chart's builder allowlist (doc 18 section 10.1).
@@ -23,4 +23,3 @@ metadata:
     {{- include "proj.labels" . | nindent 4 }}
     devplat.io/ns-role: build
     {{- include "proj.psa" (dict "enforce" "privileged") | nindent 4 }}
-{{- end }}

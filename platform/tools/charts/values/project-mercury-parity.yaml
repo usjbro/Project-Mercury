@@ -1,0 +1,8 @@
+# TEST-ONLY: renders devplat-project for id mercury to compare with platform/deploy/base (builds disabled as in base,
+# registry proxy enabled because base declares registry-proxy-mercury). Quota numbers are the chart's generic
+# example values; Mercury's real quotas are unresolved (mercury.yaml).
+project: {id: mercury, namespacePrefix: proj-mercury, clusterRef: default}
+registryProxy:
+  enabled: true
+  image: {digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"}
+  npmUplinks: ["https://registry.npmjs.org/"]

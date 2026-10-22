@@ -1,6 +1,7 @@
 {{- /* Same policies as platform/deploy/base/networkpolicies.yaml for proj-<P>-exec / -build (doc 18 section 9).
 Default deny; DNS only via devplat-dns; fetch via keyless gitbroker-fetch :8081; model-gateway ONLY for
-network-class model-only|deps (class none = no LLM egress, I-10); registry-proxy only for class deps. */}}
+network-class model-only|deps (class none = no LLM egress, I-10); this project's registry proxy only for class deps
+(D14); artifacts only via devplat-artifact-gateway :8082 (D10; no object-store egress). */}}
 {{- $exec := include "proj.ns" (dict "Values" .Values "role" "exec") }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -75,16 +76,7 @@ spec:
       - {key: devplat.io/network-class, operator: In, values: ["deps"]}
   policyTypes: ["Egress"]
   egress:
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: {{ .Values.platformNamespace }}
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: devplat-registry-proxy
-      ports:
-        - {protocol: TCP, port: 4873}
-{{- if .Values.build.enabled }}
+    {{- include "proj.registryEgress" . | nindent 4 }}
 {{- $build := include "proj.ns" (dict "Values" .Values "role" "build") }}
 ---
 apiVersion: networking.k8s.io/v1
@@ -98,8 +90,7 @@ spec:
   podSelector: {}
   policyTypes: ["Ingress", "Egress"]
 ---
-# Builds: base images and packages via the proxy/mirror; OCI layout, SBOM and provenance to the artifact store.
-# No direct internet, no registry push credentials, no model gateway.
+# Builds: packages and base images via this project's read-only proxy; OCI layout, SBOM and provenance to the artifact gateway. No object store, no internet, no registry push credentials, no model gateway.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -114,15 +105,15 @@ spec:
   policyTypes: ["Egress"]
   egress:
     {{- include "proj.dnsEgress" . | nindent 4 }}
+    # This project's read-only proxy: packages :4873 and OCI pull-through :5000 (D14; no push identity here).
     - to:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: {{ .Values.platformNamespace }}
           podSelector:
             matchLabels:
-              app.kubernetes.io/name: devplat-registry-proxy
+              app.kubernetes.io/name: devplat-registry-proxy-{{ .Values.project.id }}
       ports:
         - {protocol: TCP, port: 4873}
         - {protocol: TCP, port: 5000}
     {{- include "proj.artifactsEgress" . | nindent 4 }}
-{{- end }}

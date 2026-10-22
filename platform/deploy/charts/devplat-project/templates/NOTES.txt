@@ -1,4 +1,5 @@
-devplat-project {{ .Values.project.id }}: namespaces {{ .Values.project.namespacePrefix }}-exec{{ if .Values.build.enabled }}, {{ .Values.project.namespacePrefix }}-build{{ end }}; ephemeral {{ .Values.project.namespacePrefix }}-t-<8 hex> created by devplat-namespacer.
+devplat-project {{ .Values.project.id }}: namespaces {{ .Values.project.namespacePrefix }}-exec, {{ .Values.project.namespacePrefix }}-build (builds {{ ternary "ENABLED" "disabled (D20)" (and .Values.build.enabled (eq .Values.assurance.mode "standard")) }}); ephemeral {{ .Values.project.namespacePrefix }}-t-<8 hex> created by the devplat-namespacer Deployment.
 Requires the platform/deploy/base cluster prerequisites (ClusterRole devplat-job-runner, VAPs, RuntimeClasses).
-RuntimeClass: {{ default "gvisor or kata (base rule)" .Values.exec.requiredRuntimeClassName }}.
+Assurance: {{ .Values.assurance.mode }}{{ if eq .Values.assurance.mode "reduced" }} - needs operator fact {{ .Values.assurance.reducedAssuranceFact }} for this project; dev-bot App on a sandbox repository only (D16){{ end }}.
+Artifacts only via devplat-artifact-gateway :8082. Registry proxy: {{ ternary (printf "devplat-registry-proxy-%s (read-only)" .Values.project.id) "none (network class deps unusable)" .Values.registryProxy.enabled }}.
 Verify with the isolation probes (22-build-test-architecture.md section 7) before dispatching any task.

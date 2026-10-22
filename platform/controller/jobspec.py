@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """Build the Kubernetes Job for one agent run (devplat controller; pure function, no cluster access).
 
+NORMATIVE for Job names, labels and idempotency keys (R6 A-23): docs cite this file instead of restating the formulas.
 Reference implementation of 16-agent-execution-and-job-lifecycle.md §4.1: `test_jobspec.py` asserts that
-build_job() reproduces the documented example Job exactly, validates the output against the strict
+build_job() reproduces the vendored example Job (testdata/job-example.yaml, == the doc's example) exactly, validates the output against the strict
 Kubernetes v1.33 Job schema, and checks every security rule of 18-kubernetes-security-model.md that a
 Job spec can carry (no service-account token, non-root, read-only root filesystem, no capabilities,
 seccomp RuntimeDefault, no host namespaces or hostPath, exec node pool + RuntimeClass, digest-pinned images,
 controller-owned retries, deadline, deterministic idempotent name).
 
 Inputs are the versioned documents the controller already holds:
-  contract  devorch.task_contract.v1 (task_id, kind, base_commit, contract_version, budget)
+  contract  devplat.task_contract.v2 or devorch.task_contract.v1 (task_id, kind, base_commit, contract_version, budget)
   project   devplat.project.v1 (project_id, execution_target.namespace_prefix)
   profile   one entry of platform/agents/execution-profiles.yaml (+ its `defaults`)
   run       facts chosen by the controller: attempt, contract_core_sha256, images, role ConfigMap,
@@ -18,6 +19,8 @@ Inputs are the versioned documents the controller already holds:
 import hashlib, os, re
 
 L = "devplat.io"
+MODEL_GATEWAY = "http://devplat-model-gateway.devplat-system.svc:8080"
+ARTIFACT_GATEWAY = "http://devplat-artifact-gateway.devplat-system.svc:8082"
 NAME_MAX = 63
 DIGEST = re.compile(r".+@sha256:[0-9a-f]{64}")
 
@@ -101,10 +104,15 @@ def build_job(contract, project, profile, defaults, run):
             "name": "agent", "image": run["agent_image"], "workingDir": "/workspace/repo",
             "args": ["--contract=/etc/devplat/contract/contract.json", f"--role={role}", "--io=/etc/devplat/io",
                      "--out=/out", f"--max-turns={turns}", f"--wall-seconds={wall_min * 60}"],
+            # Project and budget are bound to the per-Job gateway token, not to the URL (R6 D12).
             "env": [{"name": "HOME", "value": "/home/agent"},
-                    {"name": "ANTHROPIC_BASE_URL", "value": f"http://devplat-model-gateway.devplat-system.svc:8080/p/{dns_label(pid)}"},
-                    {"name": "ANTHROPIC_AUTH_TOKEN", "valueFrom": {"secretKeyRef": {"name": f"{name}-io", "key": "gateway_token"}}}]
-                   + ([{"name": "NPM_CONFIG_REGISTRY", "value": "http://devplat-registry-proxy.devplat-system.svc:4873/"}]
+                    {"name": "ANTHROPIC_BASE_URL", "value": MODEL_GATEWAY},
+                    {"name": "ANTHROPIC_AUTH_TOKEN", "valueFrom": {"secretKeyRef": {"name": f"{name}-io", "key": "gateway_token"}}},
+                    # uploads go to devplat-artifact-gateway with the one-time upload token from the io Secret;
+                    # the pod never reaches the object store (R6 D10)
+                    {"name": "DEVPLAT_ARTIFACT_GATEWAY", "value": ARTIFACT_GATEWAY}]
+                   + ([{"name": "NPM_CONFIG_REGISTRY",   # this project's own read-only proxy (R6 D14)
+                        "value": f"http://devplat-registry-proxy-{dns_label(pid)}.devplat-system.svc:4873/"}]
                       if net == "deps" else [])
                    + [{"name": "DISABLE_AUTOUPDATER", "value": "1"},
                       {"name": "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "value": "1"}],

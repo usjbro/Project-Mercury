@@ -50,6 +50,9 @@ limits:
 {{- if ne .Values.project.namespacePrefix (printf "proj-%s" .Values.project.id) -}}
 {{- fail "project.namespacePrefix must equal proj-<project.id>" -}}
 {{- end -}}
+{{- if and (eq .Values.assurance.mode "reduced") .Values.build.enabled -}}
+{{- fail "builds are disabled in reduced-assurance mode (D16)" -}}
+{{- end -}}
 {{- end -}}
 
 {{/* Egress rules for DNS (devplat-dns only; never kube-dns, doc 18 section 9.4). */}}
@@ -66,25 +69,33 @@ limits:
     - {protocol: TCP, port: 1053}
 {{- end -}}
 
+{{/* Artifacts only through devplat-artifact-gateway :8082 (D10); no object-store egress from project pods. */}}
 {{- define "proj.artifactsEgress" -}}
-{{- if .Values.artifacts.inCluster.enabled }}
 - to:
     - namespaceSelector:
         matchLabels:
-          kubernetes.io/metadata.name: devplat-artifacts
+          kubernetes.io/metadata.name: {{ .Values.platformNamespace }}
       podSelector:
         matchLabels:
-          app.kubernetes.io/name: devplat-artifacts
+          app.kubernetes.io/name: devplat-artifact-gateway
   ports:
-    - {protocol: TCP, port: 9000}
-{{- end }}
-{{- with .Values.artifacts.externalCidrs }}
+    - {protocol: TCP, port: 8082}
+{{- end -}}
+
+{{/* This project's read-only registry proxy (D14). */}}
+{{- define "proj.registryEgress" -}}
 - to:
-    {{- range . }}
-    - ipBlock:
-        cidr: {{ . }}
-    {{- end }}
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: {{ .Values.platformNamespace }}
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: devplat-registry-proxy-{{ .Values.project.id }}
   ports:
-    - {protocol: TCP, port: 443}
-{{- end }}
+    - {protocol: TCP, port: 4873}
+{{- end -}}
+
+{{/* Image prefixes admitted in this project's namespaces (D15). */}}
+{{- define "proj.imagePrefixes" -}}
+{{ .Values.imageRegistry }}/devplat/,{{ .Values.imageRegistry }}/projects/{{ .Values.project.id }}/,{{ .Values.imageRegistry }}/mirror/
 {{- end -}}

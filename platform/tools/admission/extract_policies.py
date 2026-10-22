@@ -45,7 +45,8 @@ for f, i, d in docs:
     if d["kind"] == "ValidatingAdmissionPolicyBinding":
         if ("ValidatingAdmissionPolicy", "", d["spec"]["policyName"]) not in seen: errors.append(f"REF {key(d)} policy missing")
         pr = d["spec"].get("paramRef")
-        if pr and ("ConfigMap", pr["namespace"], pr["name"]) not in seen: errors.append(f"REF {key(d)} paramRef missing")
+        if pr and pr.get("namespace") and ("ConfigMap", pr["namespace"], pr["name"]) not in seen: errors.append(f"REF {key(d)} paramRef missing")
+        if pr and not pr.get("namespace") and not [k for k in seen if k[0] == "ConfigMap" and k[2] == pr["name"]]: errors.append(f"REF {key(d)} per-namespace paramRef {pr['name']} has no ConfigMap")
     if d["kind"] == "ValidatingAdmissionPolicy":
         if ("ValidatingAdmissionPolicyBinding", "", d["metadata"]["name"]) not in seen: errors.append(f"REF policy {key(d)} has no binding")
     if d["kind"] == "ResourceQuota":
@@ -58,6 +59,13 @@ for f, i, d in docs:
                 for peer in r.get("from", []) + r.get("to", []):
                     nl = peer.get("namespaceSelector", {}).get("matchLabels", {}).get("kubernetes.io/metadata.name")
                     if nl and nl not in nss | ext_ns: errors.append(f"REF {key(d)} peer namespace {nl} unknown")
+# D10: project pods never reach the object store (in-cluster devplat-artifacts or any ipBlock)
+for f, i, d in docs:
+    if d["kind"] == "NetworkPolicy" and d["metadata"]["namespace"].startswith("proj-"):
+        for r in d["spec"].get("egress", []):
+            for peer in r.get("to", []):
+                if "ipBlock" in peer: errors.append(f"D10 {key(d)} project egress to ipBlock {peer['ipBlock']}")
+                if peer.get("namespaceSelector", {}).get("matchLabels", {}).get("kubernetes.io/metadata.name") == "devplat-artifacts": errors.append(f"D10 {key(d)} project egress to the object store")
 # every managed namespace has default deny
 for n in nss:
     if ("NetworkPolicy", n, "default-deny-all") not in seen: errors.append(f"NETPOL {n} lacks default-deny-all")
@@ -79,8 +87,7 @@ for f, i, d in docs:
                 if res == "secrets" and set(r["verbs"]) - {"create", "get", "delete"}: errors.append(f"RBAC {key(d)} secrets verbs {r['verbs']}")
                 if res == "pods" and set(r["verbs"]) & {"create", "update", "patch", "delete"}: errors.append(f"RBAC {key(d)} pod write")
             if res_jobs(r) and set(r["verbs"]) & {"update"}: errors.append(f"RBAC {key(d)} job update")
-            if set(r.get("verbs", [])) & {"escalate", "impersonate"} and not (d["kind"] == "Role" and r.get("resourceNames") == ["devplat-namespacer"]): errors.append(f"RBAC escalate/impersonate in {key(d)}")
-print("Cross-reference/invariant checks:", "PASS" if not [e for e in errors if not e.startswith("SCHEMA")] else "FAIL")
+            if set(r.get("verbs", [])) & {"escalate", "impersonate"}: errors.append(f"RBAC escalate/impersonate in {key(d)} (R6 D19: no impersonation)")
 # ---- CEL extraction ----
 items, pols = [], []
 for f, i, d in docs:
@@ -93,9 +100,20 @@ for f, i, d in docs:
                  "Validations": [v["expression"] for v in sp["validations"]],
                  "Conditions": [v["expression"] for v in sp.get("matchConditions", [])]})
 json.dump(items, open(os.path.join(OUT, "cel-items.json"), "w"))
-params = [d for _, _, d in docs if d["kind"] == "ConfigMap" and d["metadata"]["name"] == "devplat-admission-params"][0]
+# Params: per-namespace devplat-admission-params (paramRef without namespace, D15) and the cluster params.
+nsparams = {d["metadata"]["namespace"]: d for _, _, d in docs if d["kind"] == "ConfigMap" and d["metadata"]["name"] == "devplat-admission-params"}
+cluster = [d for _, _, d in docs if d["kind"] == "ConfigMap" and d["metadata"]["name"] == "devplat-cluster-params"][0]
 nsobj = {d["metadata"]["name"]: d for _, _, d in docs if d["kind"] == "Namespace"}
-json.dump({"pols": pols, "params": params, "ns": nsobj}, open(os.path.join(OUT, "pol-data.json"), "w"))
+for n in nsobj:
+    if n not in nsparams: errors.append(f"PARAMS namespace {n} lacks ConfigMap devplat-admission-params (image pinning would deny everything)")
+# Binding paramRefs: which params each policy uses.
+binding_params = {}
+for _, _, d in docs:
+    if d["kind"] == "ValidatingAdmissionPolicyBinding" and d["spec"].get("paramRef"):
+        pr = d["spec"]["paramRef"]; binding_params[d["spec"]["policyName"]] = pr.get("namespace") or "<request namespace>"
+json.dump({"pols": pols, "nsparams": nsparams, "cluster": cluster, "ns": nsobj, "bindingParams": binding_params},
+          open(os.path.join(OUT, "pol-data.json"), "w"))
+print("Cross-reference/invariant checks:", "PASS" if not [e for e in errors if not e.startswith("SCHEMA")] else "FAIL")
 for e in errors: print("  ", e)
 print("TOTAL errors:", len(errors))
 sys.exit(1 if errors else 0)

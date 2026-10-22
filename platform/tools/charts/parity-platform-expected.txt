@@ -1,0 +1,9 @@
+# Intended differences between the devplat chart (SAs, Roles, RoleBindings in devplat-system) and platform/deploy/base.
+# Per-project proxy names are not in the platform Role; each devplat-project release adds its own lookup Role.
+DIFF Role/devplat-system/devplat-controller-service-lookup .rules
+# The namespacer reads the projects' test-profile ConfigMaps (D19 fixed template + per-project parameters). Base
+# has no such Role yet (reported to the security owner).
+ONLY-CHART Role/devplat-system/devplat-namespacer-profiles
+ONLY-CHART RoleBinding/devplat-system/devplat-namespacer-profiles
+# ServiceAccount of an in-cluster object store; the chart deploys no store (24-... section 3).
+ONLY-BASE ServiceAccount/devplat-artifacts/devplat-artifacts

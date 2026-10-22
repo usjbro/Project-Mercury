@@ -1,8 +1,9 @@
 {{- /*
-Test-namespace profile read by devplat-controller. For every integration/e2e run the controller, impersonating
-devplat-namespacer (VAP devplat-namespacer-scope), creates proj-<P>-t-<8 hex> with these labels, quota, LimitRange,
-the NetworkPolicies of doc 18 section 9.3 and a RoleBinding controller -> devplat-test-runner; runs the test Jobs
-(SA `default`, token off, dnsPolicy None with devplat-dns); collects evidence; deletes the namespace after the TTL.
+Test-namespace profile read by devplat-namespacer (D19). For every integration/e2e run the controller asks the
+namespacer for proj-<P>-t-<8 hex>; the namespacer applies its FIXED template with only these per-project
+parameters (labels, quota, LimitRange size, admission params, optional sandbox egress CIDRs). The NetworkPolicy
+set is fixed in the namespacer, not taken from here; VAP devplat-namespacer-scope validates peers/ports and caps
+quotas from params. Test Jobs: SA `default`, token off, dnsPolicy None with devplat-dns.
 */}}
 apiVersion: v1
 kind: ConfigMap
@@ -16,7 +17,10 @@ data:
   profile.yaml: |
     project: {{ .Values.project.id }}
     namespaceNamePattern: "^{{ .Values.project.namespacePrefix }}-t-[0-9a-f]{8}$"
-    createdBy: system:serviceaccount:{{ .Values.platformNamespace }}:devplat-namespacer
+    createdBy: system:serviceaccount:{{ .Values.platformNamespace }}:devplat-namespacer   # Deployment devplat-namespacer
+    assuranceMode: {{ .Values.assurance.mode }}
+    admissionParams:
+      allowedImagePrefixes: {{ include "proj.imagePrefixes" . | quote }}
     namespaceLabels:
       devplat.io/project: {{ .Values.project.id }}
       devplat.io/ns-role: test
@@ -36,13 +40,14 @@ data:
     roleBinding:
       clusterRole: devplat-test-runner
       subject: {{ .Values.platformNamespace }}/devplat-controller
+    # Informational: the fixed NetworkPolicy set of the namespacer template (not configurable here).
     networkPolicies:
       - default-deny-all
       - allow-intra-namespace
       - allow-devplat-dns
-      - allow-fetch-and-artifacts      # gitbroker-fetch 8081 + artifact store
-      - allow-deps                     # registry-proxy 4873, network-class deps only
-      # never: model-gateway, gitbroker, PostgreSQL, kube-apiserver, kube-dns, internet
+      - allow-fetch-and-artifact-gateway   # gitbroker-fetch 8081 + devplat-artifact-gateway 8082
+      - allow-deps                         # devplat-registry-proxy-<P> 4873, network-class deps only
+      # never: model-gateway, gitbroker, object store, PostgreSQL, kube-apiserver, kube-dns, internet
     sandboxEgress:
       enabled: {{ .Values.test.sandboxEgress.enabled }}
       egressCidrs: {{ toJson .Values.test.sandboxEgress.egressCidrs }}

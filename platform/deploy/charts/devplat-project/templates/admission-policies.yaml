@@ -2,8 +2,10 @@
 Project-specific admission ONLY (doc 18 section 15 ownership split, I-6). Generic hardening, ServiceAccount, token,
 volume, Secret-name, network-class and generic gVisor/Kata placement rules are base VAPs and are not repeated here.
 Rendered:
-- devplat-<P>-builder-allowlist: every container in this project's build namespace runs an allowlisted builder image
-  (empty list = no build pod admitted);
+- devplat-<P>-builder-allowlist (only when builds are enabled; they are off by default, D20): every container in
+  this project's build namespace runs an allowlisted, digest-pinned builder image. The buildkitd requirements
+  (hostUsers: false, pinned args, Localhost seccomp, image prefix) are base VAP devplat-build-exceptions, driven by
+  the per-namespace params this chart renders (admission-params.yaml); they are not repeated here;
 - devplat-<P>-runtime-class: only when exec.requiredRuntimeClassName pins ONE sandbox class for this project.
 */}}
 {{- $id := .Values.project.id }}

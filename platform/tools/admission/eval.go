@@ -45,6 +45,11 @@ func runEval(env *cel.Env, path string) int {
 			p := pols[pn]
 			act := map[string]any{}
 			for k, v := range c.Input { act[k] = v }
+			// Input["paramsByPolicy"][policy] overrides params for that policy (per-policy paramRef in the bindings).
+			if pp, ok := c.Input["paramsByPolicy"].(map[string]any); ok {
+				if v, ok := pp[pn]; ok { act["params"] = v }
+			}
+			delete(act, "paramsByPolicy")
 			vars := map[string]any{}
 			act["variables"] = vars
 			for _, v := range p.Variables {

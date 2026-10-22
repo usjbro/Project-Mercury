@@ -1,7 +1,7 @@
 # 17 — Dependency-Aware Multi-Project Scheduling and Admission
 
-Status: **Proposed — Documented only** (Architecture Amendment 001, 2026-10-17). No scheduler code exists; all capacities and budgets below are **planning values**, not measurements.
-Reuses / supersedes: **extends** `09-resources-and-costs.md` §2 (concurrency limits), §4 (adjustment rule) and §5 (cost controls) from one project to many; **keeps** `02-principal-orchestrator.md` §3 (READY rule) and §4 (priority order: critical path, then downstream count) and the devorch path-ownership check (`contract_errors` / `active_primary_paths` / `overlap` in `tools/devorch/devorch.py`). Hardware sizing complements `25-…`.
+Status: **Proposed — Documented only** (Architecture Amendment 001, 2026-10-17; R6 fix round 2026-10-20). No scheduler code exists; all capacities and budgets below are **planning values**, not measurements. The DB state the scheduler needs (`admission_decisions`, `budget_reservations`, `test_runs`) is specified in `19-…` (R6 D8). Failure classification is normative in `21-…` §6 (R6 D17).
+Reuses / supersedes: **extends** `09-resources-and-costs.md` §2 (concurrency limits), §4 (adjustment rule) and §5 (cost controls) from one project to many; **keeps** `02-principal-orchestrator.md` §3 (READY rule) and §4 (priority order: critical path, then downstream count) and the devorch path-ownership check (`contract_errors` / `active_primary_paths` / `overlap` in `tools/devorch/devorch.py`). Installation profiles and sizing: **`25-deployment-profiles.md` P1–P6 is the only profile taxonomy** (R6 D25); this document refers to it.
 
 ## 1. Kubernetes is not the application scheduler
 
@@ -15,7 +15,7 @@ Runs in the controller leader on every relevant event (task READY, Job terminal,
 
 ```text
 admission_round(snapshot):
-  cands  = READY tasks of all ACTIVE projects            # READY already includes G1 and dependencies (16-... step 1)
+  cands  = READY tasks of projects in status active or onboarding   # READY includes G1, dependencies, required facts (16-... step 1)
   usage  = running Jobs per project, per role, per resource; budget spent + reserved
   admitted = []
   loop:
@@ -25,17 +25,22 @@ admission_round(snapshot):
     if none: break
     T = best unexamined candidate of P by priority key (§4)
     hold = first_failing_check(T):
-      1  project paused / draining / target unhealthy            -> "project_state"
-      2  hard preconditions for code kinds (DOD-02/03 facts of P)  -> "precondition"
-      3  contract_errors port (kind->role, read-only paths, ids)  -> "contract_invalid" (escalate)
+      1  project status / drain / target health (R6 D4):           -> "project_state"
+           paused, archived, draining or target unhealthy: hold everything
+           onboarding: only SHORT read-only kinds (planning, *_review, plan_proposal, operator_action, mac_validation)
+      2  FULL-lifecycle kind or push: P is active AND every key of P's review_gates.hard_preconditions
+         (default DOD-02, DOD-13) has a latest fact recorded FOR P (never a platform-wide fact, R6 D1);
+         reduced-assurance project: also P's REDUCED-ASSURANCE fact (R6 D16)            -> "precondition"
+      3  register_contract rules (catalogue kind->role, allowed vs restricted, ids) and,
+         for planner-originated or revised contracts, an operator approval record (R6 D18) -> "contract_invalid" / "approval_missing"
       4  path ownership / interface conflict (§9)                  -> "ownership"
       5  per-project max Jobs, per-role max (profile, project cfg) -> "project_cap" / "role_cap"
       6  review backpressure, human queue (§8)                     -> "review_backpressure" / "human_queue"
       7  token/cost budget incl. reservation (§6)                  -> "budget"
       8  resource fit on the exec pool and quota headroom (§6, §7) -> "capacity"
       9  approved image digest and role ConfigMap present          -> "image_unavailable"
-    if hold: record_hold(T, hold); mark T examined; continue
-    reserve(T): ownership, budget reservation, resources; record "assigned" (READY -> RUNNING); admitted += T
+    if hold: write admission_decisions(T, hold, since); mark T examined; continue
+    reserve(T): ownership, budget_reservations row (atomic reserve), resources; record "assigned" (READY -> RUNNING); admitted += T
     share(P) += dominant_share(profile(T).requests)
   return admitted                                                # Job creation follows (16-... steps 3-7)
 ```
@@ -44,11 +49,11 @@ Rules:
 1. **No speculative work.** Only READY tasks are candidates; an idle slot is never filled with non-READY work (v1 `02-…` §4).
 2. **No preemption of agent Jobs.** A running LLM Job is never evicted to make room (lost work costs money). Agent pods use PriorityClass `devplat-agent` with `preemptionPolicy: Never`; platform pods use `devplat-platform` (higher), so agents can never evict the platform.
 3. **Holds are visible.** Each held task shows its first failing check and since when, in the API and dashboard.
-4. **Admission is idempotent.** Reservations and `assigned` are written in one transaction; a crash before Job creation leaves a RUNNING task without a Job, which the adoption rules turn into `env_retry` (`16-…` §3).
+4. **Admission is idempotent.** Reservations and `assigned` are written in one transaction; a crash before Job creation leaves a `job_runs` row without a Job, which reconciliation repairs (`21-…` §3, normative).
 
 ## 3. Concurrency limits
 
-| Level | Source | Initial value (server profile B, §11) |
+| Level | Source | Initial value (planning example: P4 single server, Option B on two VMs, `25-…`) |
 |---|---|---|
 | Global max concurrent Jobs (agent + verifier) | Platform config | 6 |
 | Per project max concurrent Jobs | Project config `resources.max_concurrent.jobs` | Mercury 5 (3 implementation + 2 review, `26-…`); Jupiter 3 (placeholder; Jupiter unresolved) |
@@ -77,7 +82,7 @@ The critical path is computed per project from its DAG (Mercury: `data/dag.json`
 
 - **Share** of project P = Σ over P's running Jobs of the **dominant resource fraction** of the Job's requests (max of CPU/allocatable CPU and memory/allocatable memory of the exec pool), divided by P's `priority_weight` (project config `resources.priority_weight`, default 1). This is dominant-resource fairness on requests.
 - The next slot goes to the project with the lowest share that has an admissible candidate (§2). A project with no candidates does not accumulate credit.
-- **Guarantee:** a project with candidates waits at most one admission per other active project before it is examined.
+- **No bound is claimed.** With unequal Job sizes and weights, dominant-resource fairness does not bound how many admissions a project may wait (R6 A-26). Starvation is handled operationally: the READY-age alarm (§10) and the operator's recorded priority override.
 - Fair share decides *which project* gets the next slot; §4 decides *which task* of that project. Token/cost budgets (§6) are separate per project and are not traded between projects.
 
 ## 6. Budgets
@@ -85,10 +90,10 @@ The critical path is computed per project from its DAG (Mercury: `data/dag.json`
 | Dimension | Measured by | Admission check | Enforcement |
 |---|---|---|---|
 | CPU, memory | Exec-pool node allocatable minus requests of running pods (controller watch) | `requests` must fit on at least one exec node; Σ memory **limits** of running Jobs ≤ allocatable memory (no memory overcommit — OOM in a sandbox loses the attempt); CPU limits may overcommit up to 2× | kube-scheduler (placement); ResourceQuota (§7) |
-| Ephemeral storage | Node allocatable ephemeral storage; workspace `sizeLimit` | `requests.ephemeral-storage` fits | Kubelet eviction on `sizeLimit` → classified `env_retry` (`16-…` §6) |
+| Ephemeral storage | Node allocatable ephemeral storage; workspace `sizeLimit` | `requests.ephemeral-storage` fits | Kubelet eviction on `sizeLimit` (a node signal; classified in `21-…` §6) |
 | Artifact storage | Bucket usage per project | Hold at ≥ 90 % of the project's bucket quota | Store quota |
-| API tokens and cost | **model-gateway metering** (authoritative, not agent-reported) per Job, project, day | `spent_today + reserved + reservation(T) ≤ 80 %` of the project's daily cap (v1 DOD-08 rule: new dispatch stops at 80 %, running work finishes). `reservation(T)` = `min(contract budget.max_cost_usd, project per-Job cap)`; refunded to actual use at Job end | Gateway refuses calls beyond the Job's reservation (runner exit 75 with reason `job_budget` → `attempt_failed`, charged: the task was too large) and beyond the project's daily cap |
-| Provider rate limits (tokens/min, requests/min at the API org) | Gateway | Global token-rate limiter; admission holds new Jobs when the limiter is saturated for > 5 min | Gateway queues/429 → runner `env_retry` |
+| API tokens and cost | **model-gateway metering** (authoritative, not agent-reported) per Job token, project, day | `spent_today + reserved + reservation(T) ≤ 80 %` of the project's daily cap (v1 DOD-08 rule: new dispatch stops at 80 %, running work finishes). `reservation(T)` = `min(contract budget.max_cost_usd, project per-Job cap)`, written atomically to `budget_reservations` and settled to actual use at Job end. **Environmental retries consume the cost budget too** (R6 D17) | The gateway binds each per-Job token to its project and reservation (R6 D12) and refuses calls beyond them; how a refusal is classified is defined in `21-…` §6 |
+| Provider rate limits (tokens/min, requests/min at the API org) | Gateway | Global token-rate limiter; admission holds new Jobs when the limiter is saturated for > 5 min | Gateway queues or returns 429; a gateway-confirmed 429 for the Job's token is an environmental signal (`21-…` §6) |
 | Platform total cost | Gateway | Global daily cap across projects (operator-set) | As above |
 
 All money values are operator decisions (DOD-08 per project). Until measured, the per-Job cap is the reservation; `est_cost_usd_p80` in the profile schema is filled only from measured gateway data (§10).
@@ -130,7 +135,7 @@ Every full-lifecycle task needs G3 (code review) **and** G4 (security review, `0
 
 ## 11. Worked admission example (the amendment's mix)
 
-Setting: **profile B** (§12), exec pool allocatable **11.5 CPU / 45 GiB**; global max 6; Mercury max 5, Jupiter max 3; `priority_weight` 1 : 1; budgets below 80 %; no conflicts; nothing running. The two **Jupiter tasks are hypothetical** — Jupiter has no backlog, stack or role set yet; the example assumes it reuses the `mdev-*` profiles.
+Setting: a planning example on **P4** (`25-…`, Option B on two VMs), exec pool allocatable **11.5 CPU / 45 GiB**; global max 6; Mercury max 5, Jupiter max 3; `priority_weight` 1 : 1; budgets below 80 %; no conflicts; nothing running. The two **Jupiter tasks are hypothetical** — Jupiter has no backlog, stack or role set yet; the example assumes it reuses the `mdev-*` profiles.
 
 | Candidate | Role (profile requests) | Dominant share | k1 | k2 crit. path (d) | k3 downstream |
 |---|---|---|---|---|---|
@@ -154,19 +159,21 @@ Variations, same snapshot:
 - **A third Mercury backend task** becomes READY → held `role_cap` (backend 2/2) until M1 or M2 finishes; it does not take Jupiter's slot.
 - **M2's `allowed_paths` is `src/core/**` while M1 owns `src/core/config/**`** → round 4 holds M2 (`ownership`), and the next Mercury candidate (M3) is examined instead.
 - **Mercury has spent 70 % of its daily cap** and each reservation is 6 % → M1 admitted (76 %), M2 would reach 82 % > 80 % → held `budget`, and so is M3; Jupiter is unaffected.
-- **Workstation profile A** (global max 2): rounds 1–2 admit J2 and M1; J1, M2, M3 are held `capacity`.
+- **P1 workstation** (`25-…`; global max 2): rounds 1–2 admit J2 and M1; J1, M2, M3 are held `capacity`.
+- **Jupiter still `onboarding`** (its real status today is `draft`): J2 (a review, SHORT read-only) may run, J1 (implementation, FULL) is held `project_state`. **Mercury without its `DOD-13` fact**: M1–M3 are held `precondition`, whatever facts other projects hold.
 - **Mercury has 4 tasks in AWAITING_HUMAN** → M1, M2, M3 (all writing) are held `human_queue`; J2 and J1 proceed.
 
-## 12. Recommendations by installation profile
+## 12. Admission settings by installation profile (P1–P6 of `25-…`)
 
-| | **A — single workstation** (MacBook Air M2, 16 GB; *planning example only*) | **B — home/office server** | **C — multi-node cluster** | **D — cloud** |
-|---|---|---|---|---|
-| Topology | Option A, **reduced assurance** (`15-…` §7) | Option B on one host: two VMs (control, exec) | Option B | Option B (Option C per project if needed) |
-| Nodes | One Linux VM (4 vCPU, 8 GiB) with a single-node distribution (k3s or similar; choice open); the rest stays with macOS | Host 16 cores / 64 GiB / 1 TB NVMe: control VM 4 vCPU / 12 GiB; exec VM 12 vCPU / 48 GiB (tainted) | 3 control nodes 4 vCPU / 16 GiB (HA control plane, PG replicas); 3 exec nodes 16 vCPU / 64 GiB; optional build node 8 vCPU / 32 GiB without gVisor | Control pool 2 × 4 vCPU / 16 GiB always on; exec pool autoscaling 0–6 × 8 vCPU / 32 GiB; managed PostgreSQL and object storage |
-| Platform footprint (estimate) | ≈ 3–3.5 GiB (Kubernetes ≈ 0.8, PG 1, MinIO 0.5, services ≈ 1); minimal observability | ≈ 6 GiB incl. observability | Distributed | Mostly managed services |
-| Max concurrent Jobs | **2** (1 writing + 1 review/verifier); profile limits lowered to ≤ 2 GiB per Job by project config | **6** | **12–18** (≈ 6 per exec node) | Budget-bound; start at 12, raise by the §10 rule |
-| gVisor | Unverified in an arm64 VM; expect `runtime_class: default` (reduced assurance) | Expected on the exec VM (verify) | Exec nodes (verify per OS) | Provider sandbox where offered (e.g. GKE Sandbox is gVisor-based); otherwise self-managed — verify per provider |
-| Expected bottlenecks | RAM (macOS swap), fanless thermal throttling under sustained builds, contention with the **Mac lane** (Mercury T4 runs on the same Mac: stop the VM during Mac-lane sessions) | Model API rate limits and cost; security-review slots; operator review; disk I/O of dependency installs (registry-proxy cache) | Operator review queue (one human); API org rate limits; security reviews | Cost; exec-node cold start (minutes); egress charges; operator review |
+Sizing, node shapes and assurance modes are owned by `25-deployment-profiles.md` §2–§5. This table only adds what the scheduler needs; all values are planning starting points, re-fitted by the §10 rule.
+
+| Profile (`25-…`) | Initial global max Jobs | Expected admission bottlenecks |
+|---|---|---|
+| P1 macOS / P2 Windows workstation (P1: MacBook Air M2, 16 GB, *planning example only*) | 1–2 (`25-…` §4) | Memory of the Linux VM; thermal throttling; contention with the **Mac lane** (Mercury T4 runs on the same Mac: stop the VM during Mac-lane sessions). Reduced assurance only (R6 D16) |
+| P3 Linux workstation | 2–3 | Memory; disk I/O of dependency installs |
+| P4 single server | 3–6 | Model API rate limits and cost; security-review slots (§8); operator review |
+| P5 self-managed multi-node | 3 per project, global by capacity | Operator review queue (one human); API org rate limits; security reviews |
+| P6 managed cloud | As P5, bounded by the cost cap | Cost; exec-node cold start (minutes); operator review |
 
 Common to all: per-project throughput is bounded by the project's DAG width and the operator; v1's Mercury model showed no gain beyond 3 concurrent implementation agents (`05-…` §4). More projects raise total throughput, not Mercury's.
 
@@ -176,9 +183,9 @@ Common to all: per-project throughput is bounded by the project's DAG width and 
 |---|---|
 | Queues of suspended Jobs; `ClusterQueue` quotas per `ResourceFlavor` (≈ node pool); cohorts and borrowing; fair sharing; priorities; `AdmissionCheck` extension point | Good for the **resource** layer when exec capacity is shared with non-devplat workloads or across clusters |
 | No knowledge of DAG dependencies, gates, path ownership, review/human capacity or token budgets | The controller's admission (§2) is needed **in any case**; Kueue could only replace checks 5 and 8 |
-| Kueue owns `spec.suspend` | Conflicts with devplat's suspended-setup protocol (`16-…` §3); adoption would move per-Job ConfigMap/Secret creation before admission and key upload prefixes by Job name + nonce instead of uid |
+| Kueue owns `spec.suspend` | Conflicts with devplat's suspended-setup protocol (`21-…` §1); adoption would move per-Job ConfigMap/Secret creation before admission and scope upload tokens by Job name + nonce instead of uid |
 
-**Decision:** not adopted now (one more operator to install and upgrade, no capability gain at ≤ 18 Jobs on dedicated pools). Re-evaluate when exec capacity is shared beyond devplat, when Option C spreads execution over several clusters, or above ≈ 20 concurrent Jobs. Status: **Documented only** (evaluated from Kueue's documented features; not installed or tested).
+**Recommendation (a proposal, not a decision; R6 A-29):** do not adopt Kueue now (one more operator to install and upgrade, no capability gain at the concurrency of P1–P5). Re-evaluate when exec capacity is shared beyond devplat, when Option C spreads execution over several clusters, or above ≈ 20 concurrent Jobs. Status: **Documented only** (evaluated from Kueue's documented features; not installed or tested).
 
 ## 14. Capability status
 
@@ -188,9 +195,9 @@ Common to all: per-project throughput is bounded by the project's DAG width and 
 | Path-ownership rule being ported | Implemented+tested in v1 (`devorch.py`, single project) |
 | Execution profiles with per-role concurrency | Configured (`platform/agents/execution-profiles.yaml`, schema-validated) |
 | ResourceQuota / LimitRange / PriorityClass manifests | Owned by `platform/deploy/base` (`24-…`); not applied to any cluster |
-| Gateway metering and budgets | Documented only |
-| Hardware profiles A–D | Planning estimates (A is a planning example only; nothing measured) |
-| Kueue | Documented only (evaluated, not adopted) |
+| Gateway metering, budget reservations, admission decisions | Designed, unverified (gateway not built; DB tables specified in `19-…`) |
+| Admission settings per profile P1–P6 | Planning estimates (P1 M2 Air is a planning example only; nothing measured) |
+| Kueue | Documented only (evaluated; recommendation: not now) |
 | Jupiter parameters | Blocked (Jupiter unresolved) |
 
 ## 15. Open questions
@@ -198,4 +205,4 @@ Common to all: per-project throughput is bounded by the project's DAG width and 
 1. Operator values: daily caps per project and globally, per-Job caps (DOD-08 per project).
 2. Fair-share weights for Mercury and Jupiter (default 1 : 1).
 3. Whether the global human-queue cap (6) is right for one operator across projects.
-4. Workstation VM technology and whether gVisor is usable there at all (determines whether profile A is ever more than reduced assurance).
+4. Workstation VM technology and whether gVisor is usable there at all (determines whether P1/P2 are ever more than reduced assurance).
