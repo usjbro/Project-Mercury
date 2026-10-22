@@ -646,9 +646,9 @@ CREATE TABLE artifacts (
   legal_hold      boolean NOT NULL DEFAULT false,
   created_at      timestamptz NOT NULL DEFAULT now(),
   UNIQUE (project_id, sha256),
-  CHECK (object_key = 'sha256/' || sha256),     -- content addressed (doc 20 §2)
-  CHECK (bucket = 'devplat-' || project_id),
-  CHECK (alias_key IS NULL OR kind = 'evidence_manifest'),
+  CONSTRAINT artifacts_object_key_check CHECK (object_key = 'sha256/' || sha256),   -- content addressed (doc 20 §2)
+  CONSTRAINT artifacts_bucket_check CHECK (bucket = 'devplat-' || project_id),
+  CONSTRAINT artifacts_alias_check CHECK (alias_key IS NULL OR kind = 'evidence_manifest'),
   FOREIGN KEY (project_id, task_id) REFERENCES tasks
 );
 

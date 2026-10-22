@@ -929,7 +929,7 @@ class T09IsolationAndStatus(Base):
                      "result artifact over 1048576 bytes")
         self.refused(lambda: psql(f"SELECT * FROM devplat.register_artifact({lit(self.project)}, {lit(sha('m'))}, 10, "
                                   f"'application/json', 'result', NULL, NULL, NULL, 'evidence', 'manifests/T/1/1.json')",
-                                  role=R["ctl"]), "artifacts_check")
+                                  role=R["ctl"]), "artifacts_alias_check")
         psql(f"SELECT * FROM devplat.register_artifact({lit(self.project)}, {lit(sha('m'))}, 10, 'application/json', "
              f"'evidence_manifest', NULL, NULL, NULL, 'evidence', 'manifests/T-0001/1/1.json')", role=R["ctl"])
         self.assertEqual(psql("SELECT count(*) FROM devplat.expire_artifacts(100)", role=R["ctl"]), "0")

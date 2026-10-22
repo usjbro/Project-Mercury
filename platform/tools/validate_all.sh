@@ -19,7 +19,7 @@ run "task contract v2 example"             python3 -c "import json,jsonschema;js
 run "base manifests (strict v1.33)"        python3 platform/tools/validate_k8s.py platform/deploy/base
 run "role ConfigMap generator output"      bash -c 'python3 platform/tools/gen_role_configmap.py --project mercury --namespace proj-mercury-exec --commit HEAD > /tmp/devplat-roles.yaml && python3 platform/tools/validate_k8s.py /tmp/devplat-roles.yaml'
 run "PostgreSQL state schema (real PG16)"  python3 platform/db/test_schema.py
-if [ -n "${GO:-}" ]; then run "admission policies (CEL compile + 61 cases)" bash -c "GO=$GO platform/tools/admission/run.sh | tail -2 | grep -q '0 mismatches'"; else skip "admission CEL checks" "set GO"; fi
+if [ -n "${GO:-}" ]; then run "admission policies (CEL compile + behavioural cases)" bash -c "GO=$GO platform/tools/admission/run.sh | tail -2 | grep -q '0 mismatches'"; else skip "admission CEL checks" "set GO"; fi
 if [ -n "${HELM:-}" ] && [ -n "${KUBECONFORM:-}" ]; then
   D=$(printf 'sha256:%064d' 0)   # test-only digest: no real image exists yet
   SET=controller.image.digest=$D,api.image.digest=$D,gitbroker.image.digest=$D,gitbrokerFetch.image.digest=$D,modelGateway.image.digest=$D,dns.image.digest=$D

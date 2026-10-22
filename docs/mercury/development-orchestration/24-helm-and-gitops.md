@@ -159,7 +159,7 @@ The controller has **no cluster-wide grant and no impersonation** (doc 18 §7, D
 
 | Loss | Recovery | RPO / RTO (targets, unmeasured) |
 |---|---|---|
-| Controller pod or node | Second replica takes the Lease (≤ lease duration, 15 s default). Jobs reconciled by label selector | 0 / < 1 min |
+| Controller pod or node | Second replica takes the Lease (≤ lease duration, 15 s default) and may fence-transfer task leases (token + 1) instead of waiting for them to expire. Jobs are reconciled by label selector (`21-…`, D22) | 0 / task progress resumes within task-lease TTL (2 min) + election (15 s) |
 | PostgreSQL primary (CNPG, 3 instances) | Automatic failover to a replica | ≈ 0 / minutes |
 | PostgreSQL total loss | Restore the latest base backup + WAL from object storage into a new `Cluster`. Verify the `task_events` hash chain. Reconcile against GitHub (branches, PRs, merges) and the evidence bucket | Backup interval / < 1 h |
 | Artifact store | Restore the bucket from replication or backup. Evidence rows store content hashes, so a restored object is verified, and a missing one is reported, never silently accepted | Per store |
@@ -183,69 +183,65 @@ The controller has **no cluster-wide grant and no impersonation** (doc 18 §7, D
 
 The choice is an operator decision (ADR-028).
 
-## 9. Bootstrap procedure (amendment steps 1–10)
+## 9. Bootstrap procedure (Amendment 001 §9, steps 1–10)
 
-The platform is bootstrapped **without Mercury or Jupiter**: steps 1–7 use only synthetic fixtures and the fake agent.
+The step names are the amendment's own (`amendments/AMENDMENT-001-a.md` §9). The platform is bootstrapped **without Mercury or Jupiter**. Steps 1–9 use only the synthetic project `example-a` and the fake agent image.
 
-| # | Step | Commands / content (outline) | Done by | Needs operator authorization | Exit evidence |
+| # | Amendment step | Content in devplat | Done by | Operator authorization | Exit evidence |
 |---|---|---|---|---|---|
-| 1 | **Establish the cluster** for the chosen profile (`25-…`) | e.g. `kind create cluster --config …` (workstation) / k3s / managed cluster with `control` and tainted `exec` node pools | Operator | **Yes** (DOD-15): host changes, cloud spend | `kubectl get nodes -L devplat.io/pool` shows the pools and taints |
-| 2 | **Node and network prerequisites** | NetworkPolicy-enforcing CNI; gVisor/Kata on exec nodes where supported (otherwise the workstation overlay relaxes only `devplat-proj-runtime-placement` and records `assuranceMode: reduced`); **base cluster prerequisites** with the overlay placeholders replaced (§1): ClusterRoles incl. `devplat-namespacer`, VAPs and `devplat-admission-params`, RuntimeClasses, PriorityClasses, platform namespaces and their NetworkPolicies. Deploy VAP bindings first as `[Warn, Audit]` and check `status.typeChecking` before `Deny` | Operator | **Yes**: cluster-scoped objects | Probe N12 shows enforcement; `kubectl get runtimeclass gvisor`; VAP type checks empty |
-| 3 | **Cluster dependencies** | CloudNativePG operator (pinned); S3-compatible store or external bucket; optional ingress and OIDC provider | Operator | **Yes** | Operator pods Ready; bucket reachable |
-| 4 | **Identities and secrets** | Development bot GitHub App with `contents:write` on `dev/*` only, `pull_requests:write`, no `administration` or `workflows` (DOD-13, the Kubernetes-mode form of DOD-03 (a)); model API key with a spend limit; DB role secrets; artifact credentials; OIDC client (DOD-14) | **Operator only** | **Yes**: credentials | Secrets exist; App permission screenshot or API listing stored as evidence |
-| 5 | **Install the platform** | `helm install devplat platform/deploy/charts/devplat -n devplat-system -f <profile values with real digests>` (or the GitOps commit). Installs controller, api, gitbroker, gitbroker-fetch, model-gateway, devplat-dns | Operator | **Yes** | `helm status`; pods Ready; leader Lease held; `devplat-dns` resolves cluster names and refuses external names |
-| 6 | **Deployment smoke tests** | Health and readiness, migrations at the expected version, Lease holder, gitbroker dry-run token mint (no push), model-gateway health with budget 0 | Automated (operator triggers) | No (read-only) | Smoke report in evidence |
-| 7 | **Isolation probes** N1–N12 (`22-…` §7) with a synthetic project (`helm install devplat-project-example-a`) | Probe Jobs; **dispatch stays disabled until all pass** | Automated (operator triggers) | No | Probe report; any success at a forbidden action = stop |
-| 8 | **Register the first real project and record facts** | Approve `platform/projects/mercury.yaml` (`26-…`), including its still-`unresolved` namespace quotas; render its `devplat-project` values from it; `helm install devplat-project-mercury`; record DOD-02 (ruleset verified) and DOD-13/DOD-03 (identity) as operator facts through `devplat-api` with an OIDC subject | Operator | **Yes**: project approval, facts | Facts with authenticated subject; project namespaces with quotas |
-| 9 | **First end-to-end run** | (a) Fake-agent planning task end to end (no LLM, no push). (b) One real `planning` task (LLM spend under the budget, no push). (c) A `dev/*` push and a **draft** PR on a sandbox repository, then verify that the App cannot merge (probe N10) | Platform, with the operator approving each sub-step | **Yes**: LLM spend (b), first push (c) | Task events, gate records, the draft PR URL; no merge capability |
-| 10 | **Recover from a simulated worker failure** | During a running fake-agent Job: delete the agent pod; cordon and drain its `exec` node; delete the controller leader pod. Expect: the Job failure is classified and retried by the controller (not by Kubernetes, `backoffLimit: 0`); the standby takes the Lease; Jobs are adopted by label; no duplicate push or PR (idempotency keys); test namespaces are garbage-collected | Automated chaos Job; the operator triggers it | **Yes** (disruptive; non-production cluster only) | Recovery report: 0 duplicate effects, 0 lost tasks, time to the new leader |
+| 1 | **Establish the Kubernetes environment** | Cluster for the chosen profile (`25-…`) with a `control` pool and a tainted `exec` pool. NetworkPolicy-enforcing CNI. gVisor/Kata on exec nodes, or a declared reduced-assurance project (D16). **Base cluster prerequisites** with the overlay placeholders replaced; VAP bindings first as `[Warn, Audit]`, then `Deny` once `status.typeChecking` is empty | Operator | **Yes** (DOD-15): host changes, cloud spend, cluster-scoped objects | Pools and taints; RuntimeClass present; VAP type checks empty |
+| 2 | **Install required platform dependencies** | CloudNativePG operator (pinned); S3-compatible store or external bucket; optional ingress; OIDC provider (DOD-14) | Operator | **Yes** | Operator pods Ready; bucket reachable from platform namespaces only |
+| 3 | **Deploy persistent services** | Secrets (§2 table); `helm install devplat` creates `Cluster devplat-pg` (initdb owner `devplat_migrator`), and the migrator hook applies the schema and syncs `operator_identities` (≥ 1 entry, D2) | Operator | **Yes**: credentials, identities | Hook Job succeeded; schema version recorded; `devplat_owner` NOLOGIN |
+| 4 | **Deploy the development controller** | Same release: controller ×2, api, gitbroker, gitbroker-fetch, artifact-gateway, namespacer, model-gateway, devplat-dns | Operator | **Yes** (part of step 3's install) | Pods Ready; Lease held; controller ready only at the expected schema version |
+| 5 | **Register agent definitions** | Role catalogue from `platform/agents/execution-profiles.yaml` loaded into the DB `roles` table (D6); role ConfigMaps generated at a pinned commit | Operator triggers (api) | **Yes** | `roles` rows with content hashes |
+| 6 | **Register project configurations** | `example-a` first. Later Mercury: approve `platform/projects/mercury.yaml` (`26-…`; its namespace quotas are still `unresolved`), render its `devplat-project` values, `helm install devplat-project-mercury`. Project status `onboarding` (D4) | Operator | **Yes**: project approval | Namespaces, quotas, params, NetworkPolicies present |
+| 7 | **Validate security restrictions** | Deployment smoke tests, then isolation probes N1–N12 (`22-…` §7) in `example-a`. N10 attempts merge **and** approve with the development App on the sandbox repository, and must be refused by the ruleset (D13). **Dispatch stays disabled until all pass** | Automated (operator triggers) | No (read-only), except N10 on the sandbox repository | Probe report; any success at a forbidden action = stop |
+| 8 | **Execute a sample agent Job** | (a) Fake-agent planning Job end to end (no LLM, no push). (b) One real `planning` Job under a small budget (no push) | Platform; the operator approves (b) | **Yes**: LLM spend (b) | Job, result uploaded through artifact-gateway, gate records |
+| 9 | **Verify results are persisted** | `task_events` hash chain verifies; evidence objects `sha256/<hex>` and manifest present; controller restart does not change replayed state | Automated | No | Verification report |
+| 10 | **Recover from a simulated worker failure** | During a running fake-agent Job: delete the agent pod; cordon and drain its `exec` node; delete the controller leader pod. Expected: the controller classifies the failure from platform signals (`21-…`, D17) and retries (`backoffLimit: 0`); the standby takes the Lease and fence-transfers task leases; Jobs are adopted by label; there is no duplicate push or PR; test namespaces are garbage-collected | Automated chaos Job; the operator triggers it | **Yes** (disruptive; non-production cluster only) | Recovery report: 0 duplicate effects, 0 lost tasks, time to new leader |
 
-Only after steps 1–10 pass may the operator enable dispatch of Mercury code tasks, and only within the v1 hard preconditions (`08-…` §0): DOD-02 and DOD-03 recorded.
-
-*Note on step names:* steps 1 ("establish cluster") and 10 ("recover from simulated worker failure") are the amendment's endpoints as quoted in the drafting brief. Steps 2–9 are this document's decomposition and must be checked against the amendment text.
+Code tasks for a project are dispatched only after steps 1–10 have passed, the project is `active`, and its **per-project** facts `DOD-02` (ruleset and CI hardening on that repository, D13) and `DOD-13` (App installed for that repository) are recorded by an identity in `operator_identities` (D1, D2). A reduced-assurance project also needs its `REDUCED-ASSURANCE` fact. In that mode the App may be installed on a sandbox repository only, and builds stay disabled (D16).
 
 ## 10. Offline validation (reproducible)
 
+Every result in this section comes from one runner. Nothing here is claimed unless it runs:
+
 ```bash
-# helm and kubeconform built from source through the Go module proxy (no binaries were installed)
+# helm v3.17.3 and kubeconform v0.6.7 built from source through the Go module proxy (checksums via sum.golang.org)
 GOBIN=$PWD/bin go install helm.sh/helm/v3/cmd/helm@v3.17.3
 GOBIN=$PWD/bin go install github.com/yannh/kubeconform/cmd/kubeconform@v0.6.7
-D=$(printf 'sha256:%064d' 0)   # test-only digest; no real image exists
-SET=controller.image.digest=$D,api.image.digest=$D,gitbroker.image.digest=$D,gitbrokerFetch.image.digest=$D,modelGateway.image.digest=$D,dns.image.digest=$D
-bin/helm lint platform/deploy/charts/devplat -n devplat-system --kube-version 1.33.0 --set $SET
-bin/helm template t platform/deploy/charts/devplat -n devplat-system --kube-version 1.33.0 --set $SET \
-  | bin/kubeconform -strict -summary -kubernetes-version 1.33.0 \
-      -schema-location default \
-      -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
-bin/helm template m platform/deploy/charts/devplat-project --kube-version 1.33.0 | bin/kubeconform -strict -summary
+HELM=$PWD/bin/helm KUBECONFORM=$PWD/bin/kubeconform GO=$(command -v go) platform/tools/charts/run.sh
 ```
 
-Results on 2026-10-17 (after reconciliation with doc 18 and `platform/deploy/base`):
+What `platform/tools/charts/check_charts.py` checks. Test values are in `platform/tools/charts/values/`; they use placeholder digests and a fake operator identity.
 
-| Check | Result |
-|---|---|
-| `helm lint` both charts | Pass |
-| `devplat` strict schema validation | 33/33 valid (incl. the CNPG `Cluster` against the datreeio CRDs-catalog schema); external PG + ingress + OIDC variant 33/33 |
-| `devplat-project` strict schema validation | 21/21 valid; no-build + RuntimeClass-pin variant 13/13; builder-allowlist variant 21/21 |
-| `values.yaml` vs `values.schema.json` (jsonschema 4.26.0) | 0 errors, both charts |
-| **Parity with base** (project id `mercury`) | Every shared object identical in spec: 2 Namespaces (labels incl. PSA v1.33), 4 ResourceQuotas, 2 LimitRanges, 6 NetworkPolicies, 2 RoleBindings, 2 ServiceAccounts. Intended differences: chart adds the test-profile ConfigMap and the builder-allowlist VAP; base also re-declares the `default` SAs (§1) |
-| Controller Roles/RoleBindings in `devplat-system`/`devplat-artifacts` vs base | Identical (rules, roleRef, subjects) |
-| Base VAPs evaluated against the rendered platform pods (CEL, k8s 1.33 environment, offline evaluator) | `devplat-pod-hardening`, `devplat-platform-placement`, `devplat-secret-pinning`, `devplat-image-pinning` allow all 6 Deployments (with the chart's image prefixes in the params); api mounting the GitHub App key is denied |
-| Chart CEL (project-specific VAPs) | 4 expressions compile; 5 evaluation cases (allowlisted builder, foreign init image, pinned RuntimeClass, wrong class, no class) behave as intended |
-| Negative renders (must fail) | Empty digest; namespace ≠ `devplat-system`; ingress without OIDC; `draftPullRequestsOnly=false`; Secret-name override (unknown key); `cnpg.backup.enabled=true`; external PG without host; quota `secrets=0`; setting `services` quota; prefix mismatch; RuntimeClass `runc`; `platformNamespace≠devplat-system` |
-| Not covered | Admission on a real API server (OpenAPI typing of CEL), NetworkPolicy enforcement, anything needing a cluster |
+| # | Check | What exactly |
+|---|---|---|
+| 1 | `helm lint` | `devplat` (test values), `devplat-project` (defaults), `devplat-project` (all options on) |
+| 2 | Render + `kubeconform -strict` (Kubernetes 1.33.0; the CNPG `Cluster` against the datreeio CRDs-catalog schema) | 5 positive renders: devplat test values; devplat with external PostgreSQL + ingress + OIDC; devplat-project defaults; devplat-project with builds, registry proxy and RuntimeClass pin; devplat-project for `mercury` (parity values) |
+| 3 | Negative renders | 28 cases that must fail with an expected message, e.g. missing digests, empty `allowedSubjects` (D2), wrong namespace, ingress without OIDC, gitbroker consts, Secret-name override, shared or identical SA annotations (S-24), image outside `devplat/`/`mirror/` (D15), CNPG without operand digest (S-22), model-gateway policy relaxations (D12), quota `secrets=0`, project id length (D24), builds without allowlist/profile (D20), reduced mode without fact or with builds (D16), proxy without uplinks (D14). The list is in the script |
+| 4 | Values schema (jsonschema 4.26.0) | Chart values + test values pass; bare `devplat` defaults are rejected (no operator identity, no CNPG digest) |
+| 5 | **Parity with base** | `devplat-project` rendered for `mercury` vs every `proj-mercury-*` and `devplat-system/*-mercury` object of base, field by field; the `devplat` chart's ServiceAccounts, Roles and RoleBindings vs base. Allowed differences: `parity-expected.txt`, `parity-platform-expected.txt` (each with its reason). Unlisted or stale entries fail |
+| 6 | Secret pinning | Every Secret referenced by a rendered platform pod (Deployments and the migrator Job) is pinned to that pod's ServiceAccount in base `devplat-secret-pinning` |
+| 7 | CEL (needs `GO`) | Built from `platform/tools/admission` (Kubernetes 1.33 CEL environment, untyped inputs). (a) The chart's own VAPs compile and behave on 5 cases. (b) Base `devplat-build-exceptions`, driven by the **params the chart renders**, on 5 build-pod cases (allowed pod, builds disabled, host user namespace, Unconfined seccomp, extra arg). (c) Base `devplat-pod-hardening`, `-platform-placement`, `-secret-pinning`, `-image-pinning` allow every rendered platform pod, deny a mis-pinned Secret and deny a project image in `devplat-system` |
+
+Last run: 2026-10-22, against the base as of that day: **49 passed, 0 failed, 0 skipped**. Without `GO`, step 7 is reported as **skipped**, never as passed.
+
+**Not covered:** admission on a real API server (OpenAPI typing of CEL, defaulting), NetworkPolicy enforcement, image behaviour, and anything that needs a cluster.
 
 ## 11. Capability status
 
 | Capability | Status |
 |---|---|
-| `devplat` and `devplat-project` charts | **Implemented (untested)**: rendered, schema-validated and compared with base offline; never installed |
-| Keyless `devplat-gitbroker-fetch`, `devplat-dns` | **Implemented (untested)** as chart templates; no images |
-| Images referenced by the charts | **Blocked**: no images exist (placeholders `ghcr.io/OWNER/devplat-<component>@sha256:…`) |
+| `devplat` and `devplat-project` charts | **Implemented (untested)**: rendered and checked offline (§10); never installed |
+| Migrator hook, artifact-gateway, namespacer, keyless gitbroker-fetch, devplat-dns, per-project registry proxy | **Implemented (untested)** as chart templates. The components themselves are **not built** (no images); their behaviour is **Designed, unverified** |
+| Model-gateway request policy (D12) | **Implemented (untested)** as values and ConfigMap; enforcement code not built (**Designed, unverified**) |
+| Operator-identity allowlist (D2) | Chart side **Implemented (untested)**; the DB check in `record_operator_fact` is the DB group's (`19-…`) |
+| Images referenced by the charts | **Blocked**: no images exist |
 | CloudNativePG `Cluster` template | **Implemented (untested)**: valid against a community CRD schema; operator version not chosen |
 | CNPG backups | **Documented only** (template refuses) |
 | GitOps (Flux / Argo CD) | **Documented only**; choice **awaiting operator approval** |
-| Bootstrap steps 1–10 | **Documented only**; steps 1–5, 8, 9b/c and 10 **need operator authorization** |
+| Bootstrap steps 1–10 | **Documented only**; steps 1–6, the N10 part of 7, 8b and 10 **need operator authorization** |
 | Disaster recovery targets | **Unverified assumption** (not measured) |
 
 ## 12. Open questions
@@ -253,7 +249,8 @@ Results on 2026-10-17 (after reconciliation with doc 18 and `platform/deploy/bas
 1. **O-1:** Which S3-compatible store for workstation and single-node profiles, now that MinIO community is archived?
 2. **O-2:** CloudNativePG version and backup plugin configuration (Barman Cloud plugin).
 3. **O-3:** GitOps tool, and whether the deployment repository is separate.
-4. **O-4:** Exact wording of amendment bootstrap steps 2–9 (see the note in §9).
+4. **O-4:** Registry proxy for non-npm ecosystems, and the OCI pull-through on :5000 (not templated).
+5. **O-5:** First install with in-cluster PostgreSQL runs the migrator post-install (D9 asks for pre-install). Accept, or create the `Cluster` in a separate release first?
 
 ## Sources (accessed 2026-10-17; untrusted web content, used as data)
 
