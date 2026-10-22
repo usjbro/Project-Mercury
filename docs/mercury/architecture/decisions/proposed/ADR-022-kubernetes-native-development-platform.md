@@ -26,7 +26,7 @@ Amendment 001 also asks for one platform that builds several projects (Mercury n
 4. **Agents are untrusted workloads**: each attempt runs as a Kubernetes Job with no credentials, no Kubernetes token, no DB route and default-deny egress (ADR-024).
 5. **The Principal Orchestrator role is split**: the mechanical loop becomes the controller; LLM reasoning runs as short-lived `planner` Jobs whose outputs are proposals that the controller validates.
 6. **Projects are configuration**: a versioned project config and an execution target `{cluster_ref, namespace_prefix}` per project (topology: ADR-023).
-7. **Human authority unchanged**: draft PRs only; G7 is an observed human merge; DOD-02 (ruleset on `main`) and DOD-03 (dev-bot identity without merge/approve) remain hard preconditions for code work.
+7. **Human authority unchanged.** Draft PRs only, and G7 is an observed human merge. Per project, the hard preconditions are DOD-02 (ruleset on `main` plus the CI hardening of `23-…`, R6 D13) and DOD-13 (the dev-bot App, held only by gitbroker). Note: with `contents:write` and `pull_requests:write` the App *can* merge and approve through the API. The preventive control is the ruleset (code-owner review, no bypass actors), verified by probe N10 (`18-…` §13), not the App's permission set.
 8. **v1 stays as local mode** for use before a cluster exists.
 
 ## Alternatives considered
@@ -44,7 +44,7 @@ Amendment 001 also asks for one platform that builds several projects (Mercury n
 - **Positive:** credentials leave the agent's reach; the single-writer rule becomes enforceable (separate pod, DB role, NetworkPolicy); operator facts become authenticated; several projects share one platform with isolation; the platform survives a broken project.
 - **Negative:** much more infrastructure to build and operate (controller, brokers, PostgreSQL, artifact store, chart); nothing of it exists yet; a workstation install only reaches reduced assurance (ADR-023).
 - **New critical assets:** gitbroker (GitHub App key) and model-gateway (API key) become the highest-value targets (threat analysis in `18-…`).
-- **Unchanged limits:** Kubernetes does not change GitHub governance — merge authority still depends on DOD-02/03. Mercury T4 (launchd, Keychain, Seatbelt, `_mercuryagent`) cannot run in Kubernetes and stays an external macOS lane.
+- **Unchanged limits:** Kubernetes does not change GitHub governance. Merge authority still depends on DOD-02 and DOD-13 per repository (R6 D1/D13). Mercury T4 (launchd, Keychain, Seatbelt, `_mercuryagent`) cannot run in Kubernetes and stays an external macOS lane.
 
 ## Status of the decision's elements
 

@@ -293,9 +293,8 @@ cases += [ro("ok-run-secret", {"metadata": {"name": "dp-mercury-dt-0001-a1-io", 
           ro("ok-delete-stale-run-cm", None, "DELETE", {"metadata": {"name": "dp-mercury-dt-0001-a1-contract"}}, "allow", "ConfigMap")]
 
 # ---------------- doc 16 example Job, as written (cross-check) ----------------
-txt = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "docs/mercury/development-orchestration/16-agent-execution-and-job-lifecycle.md")).read()
-m = re.search(r"```yaml\n(# Rendered by devplat-controller.*?)```", txt, re.S)
-dj = yaml.safe_load(m.group(1))
+# reads the vendored fixture (platform-only; R6 A-04), which test_jobspec.py keeps equal to doc 16 §4.1 and to build_job()
+dj = yaml.safe_load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "controller", "testdata", "job-example.yaml")))
 A({"Name": "doc16-example-job", "Input": inp(dj, "proj-mercury-exec", "Job"), "Expect": {"devplat-job-shape": "allow"}})
 dp = {"metadata": dict(dj["spec"]["template"]["metadata"], namespace="proj-mercury-exec"), "spec": dj["spec"]["template"]["spec"]}
 A(pods("doc16-example-pod-as-written", dp, "proj-mercury-exec", dict(ALLP)))
