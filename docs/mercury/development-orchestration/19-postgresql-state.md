@@ -185,7 +185,7 @@ Import tool (`platform/tools/import_v1_ledger.py`, **Designed, unverified**): `v
 
 **Command:** `python3 platform/db/test_schema.py`. The suite does not import anything outside `platform/` except the optional cross-check (A-04).
 
-**Result:** see the final run table in the R6 hand-off (`reviews/R6-amendment-001.md` §4); this file lists what each test shows.
+**Result (2026-10-22, R6 fix round):** five consecutive runs, each `Ran 47 tests … OK` (37.6 s, 38.2 s, 38.9 s, 44.5 s, 39.8 s); the optional devorch cross-check ran (tools/devorch present). **Mutation check:** 17 copies of the schema, each with one R6 rule disabled (D1 platform-wide fact counts; D2 allowlist off; D3 admission off; D4 FULL dispatch in onboarding; D7 interface hash, required facts, result status, blocking findings, role↔kind, ownership; D8 verifier runs, task cost cap; D10 one-time upload; D17 signal check; D18 approval, revision limit 3→99; D22 fence transfer without leader lease) — **every one made at least one test fail**. The earlier mutations (G4, duplicate gate, append-only trigger, lease expiry, fencing token, review budget, head binding) were also all caught in the first round.
 
 | Class | Tests |
 |---|---|
