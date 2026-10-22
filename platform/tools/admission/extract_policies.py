@@ -38,8 +38,8 @@ for f, i, d in docs:
     if not dns1123.match(m["name"]) or len(m["name"]) > 63: errors.append(f"NAME {key(d)} not DNS-1123 label")
     if d["kind"] in ("RoleBinding", "ClusterRoleBinding"):
         rr = d["roleRef"]; rk = (rr["kind"], n if rr["kind"] == "Role" else "", rr["name"])
-        if rk not in seen: errors.append(f"REF {key(d)} roleRef {rk} missing")
-        if d["kind"] == "ClusterRoleBinding" and rr["name"] not in ("devplat-namespacer", "devplat-dns"): errors.append(f"POLICY unexpected ClusterRoleBinding {key(d)}")
+        if rk not in seen and not (rr["kind"] == "ClusterRole" and rr["name"] in ("system:service-account-issuer-discovery",)): errors.append(f"REF {key(d)} roleRef {rk} missing")
+        if d["kind"] == "ClusterRoleBinding" and rr["name"] not in ("devplat-namespacer", "devplat-dns", "system:service-account-issuer-discovery"): errors.append(f"POLICY unexpected ClusterRoleBinding {key(d)}")
         for s in d["subjects"]:
             if s["kind"] == "ServiceAccount" and ("ServiceAccount", s["namespace"], s["name"]) not in seen: errors.append(f"REF {key(d)} subject SA {s} missing")
     if d["kind"] == "ValidatingAdmissionPolicyBinding":

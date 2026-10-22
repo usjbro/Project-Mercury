@@ -32,7 +32,7 @@ The R6 security review found four weaknesses in the first version of this ADR:
    - pushes `dev/*` only after G1–G5;
    - opens **draft** PRs.
 
-   It has no code path to approve, merge, enable auto-merge, mark ready or change rulesets. Callers must authenticate with mTLS or a TokenReview-verified projected token, not just by network position (S-23). Only the controller may call it.
+   It has no code path to approve, merge, enable auto-merge, mark ready or change rulesets. Callers must present the controller's audience-bound projected ServiceAccount token, which gitbroker verifies against the cluster issuer's JWKS (`callerAuth: projected-token`; base binds `system:service-account-issuer-discovery` to gitbroker). mTLS is the documented alternative. Network position alone is not enough (S-23). Only the controller may call it.
 3. **The App's permissions do not prevent approval or merge.** With `contents:write` + `pull_requests:write` the App can submit reviews and call the merge API. The preventive control is the per-repository ruleset on `main` (DOD-02): required code-owner review (operator), no bypass actors, and the App cannot update `main`. The App has no `administration` or `workflows` permission and is not a CODEOWNER.
 4. **D13 is part of the DOD-02 checklist, per repository:**
    - read-only default workflow token;

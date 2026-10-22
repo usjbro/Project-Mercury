@@ -311,8 +311,9 @@ metadata:
   namespace: devplat-system
   annotations:
     devplat.io/purpose: 'Git broker (GitHub App key): called only by the controller,
-      never by project pods; caller authenticated by mTLS or TokenReview, not by network
-      position (S-23); GitHub over public 443 (host allowlist in-app).'
+      never by project pods; the caller''s audience-bound projected token is verified
+      against the issuer JWKS from the kube-apiserver (S-23), not by network position;
+      GitHub over public 443 (host allowlist in-app).'
 spec:
   podSelector:
     matchLabels:
@@ -362,6 +363,14 @@ spec:
     ports:
     - protocol: TCP
       port: 443
+  - to:
+    - ipBlock:
+        cidr: 192.0.2.10/32
+    ports:
+    - protocol: TCP
+      port: 443
+    - protocol: TCP
+      port: 6443
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

@@ -3,7 +3,7 @@
 Status: **Proposed — Designed, unverified** (Architecture Amendment 001; R6 fix round 2026-10-20; awaits operator approval, `12-…` DOD-11…DOD-24). Nothing here is deployed.
 
 The base manifests in `platform/deploy/base/` are **Implemented (untested on a cluster)**. Offline results (§17):
-- **133 documents** validate against the strict Kubernetes v1.33 schemas.
+- **140 documents** validate against the strict Kubernetes v1.33 schemas.
 - **128 CEL expressions** compile in the Kubernetes v0.33 CEL environment.
 - **115 sample admission requests** give the expected outcome for all **133 policy decisions**. They include the R6 reviewer's exploit cases E1–E11, kept as DENY regressions.
 
@@ -95,7 +95,7 @@ flowchart LR
 | B2 → EXT | Agent pod → internet, object store | No direct route; no object-store URL in the pod (D10). Data leaves only through model-gateway (endpoint and host allowlist, D12) and the project's read-only registry proxy (upstream allowlist, D14) |
 | B2 → B2' | Project A pod → project B | No allow rule between project namespaces; per-project proxies, image prefixes, buckets and tokens; label checks in admission |
 | B2 output → B1 | Bundle, result, logs → artifact-gateway → controller/gitbroker | Size-capped per D11; treated as data: schema-validated; bundle checked in a quarantine repo; tests re-run by verifier Jobs; no field becomes a command or path without validation (§12) |
-| B1 → B1 | controller → gitbroker push request | **Authenticated caller** (mTLS client certificate or a projected, audience-bound ServiceAccount token verified by TokenReview), not network position alone (S-23). NetworkPolicy is the second layer |
+| B1 → B1 | controller → gitbroker push request | **Authenticated caller**: the controller's projected, audience-bound ServiceAccount token, verified by gitbroker against the cluster issuer's JWKS (`callerAuth: projected-token`); mTLS is the documented alternative. Not network position alone (S-23). NetworkPolicy is the second layer |
 | B1 → EXT | gitbroker → GitHub | Installation tokens scoped per repository; push only `dev/*`; draft PRs only; the ruleset is the preventive control on `main` |
 | Operator → B1 | Approvals, facts | OIDC subject must be in `operator_identities` for that project (D2); facts are per project (D1) |
 | B2 → GitHub Actions | Agent-written code pushed to `dev/*` runs in CI | Per-repository CI hardening (D13, §13): read-only workflow token, no secrets and `contents: read` for `dev/**` workflows, no `pull_request_target`, Actions may not create or approve PRs |
@@ -159,11 +159,13 @@ flowchart LR
 | `devplat-controller` | ClusterRole `devplat-job-runner` via **RoleBinding** in each `proj-<P>-exec` and `proj-<P>-build` | Namespaced | Jobs: create/get/list/watch/patch/delete (suspended-setup protocol, `16-…` §3); pods: get/list/watch; pods/log: get; events: read; configmaps and secrets: create/get/delete. Admission narrows this: `dp-*` names only, owned by one Job, immutable, Secrets of type Opaque only. No list/watch/update/patch on Secrets |
 | `devplat-controller` | ClusterRole `devplat-test-runner` via a RoleBinding **created by the namespacer** inside each test namespace | Namespaced (dynamic) | As above, plus services and apps deployments/statefulsets create/get/list/watch for declared test fixtures (ClusterIP Services only, §15) |
 | `devplat-controller` | Role `devplat-controller-leader-election` | devplat-system | Lease create; get/update only `devplat-controller`; events |
-| `devplat-controller` | Role `devplat-controller-service-lookup` | devplat-system | `get` on the Services named in the Role (ClusterIPs for `dnsConfig`) |
+| `devplat-controller` | Role `devplat-controller-service-lookup` (model-gateway, gitbroker-fetch, artifact-gateway, devplat-dns) and one Role `devplat-controller-service-lookup-<P>` per project (only `devplat-registry-proxy-<P>`, rendered by that project's `devplat-project` release) | devplat-system | `get` on named Services (ClusterIPs for `dnsConfig`) |
+| `devplat-namespacer` | Role `devplat-namespacer-profiles` (configmaps get/list/watch) | devplat-system | Reads the projects' test-profile ConfigMaps for the fixed template (D19). Residual: can read every ConfigMap in devplat-system (no Secrets) |
+| `devplat-gitbroker` | ClusterRoleBinding `devplat-gitbroker-issuer-discovery` → built-in `system:service-account-issuer-discovery` | Cluster, read-only non-resource URLs | Fetch the issuer JWKS to verify the controller's audience-bound projected token (S-23, `callerAuth: projected-token`). gitbroker mounts its own apiserver-audience projected token for this call |
 | `devplat-namespacer` | ClusterRole `devplat-namespacer` via **ClusterRoleBinding** | Cluster | **The only cluster-scoped write.** Namespaces are cluster-scoped, and the bootstrap objects must exist in a namespace that has just been created. Rights: namespaces create/delete/get/list/watch; networkpolicies, resourcequotas, limitranges, configmaps, rolebindings create; `bind` only on `devplat-test-runner`. Held by the dedicated **namespacer Deployment** (D19, DOD-17). VAP `devplat-namespacer-scope` checks every request (§15) |
 | `devplat-dns` | ClusterRole `devplat-dns` (list/watch services, namespaces, endpointslices) | Cluster, **read-only** | Service names in dynamic test namespaces must resolve. Residual: Service names are enumerable cluster-wide |
 | `devplat-prometheus` | Role `devplat-prometheus-discovery` | devplat-system, devplat-artifacts | Scrape discovery; never project namespaces |
-| api, gitbroker, gitbroker-fetch, artifact-gateway, model-gateway, registry proxies, migrator, artifacts, every project SA | **none** | — | Kubernetes API not needed; `automountServiceAccountToken: false` on every SA |
+| api, gitbroker-fetch, artifact-gateway, model-gateway, registry proxies, migrator, artifacts, every project SA | **none** | — | Kubernetes API not needed; `automountServiceAccountToken: false` on every SA |
 
 Notes:
 1. **No impersonation (R6 D19, DOD-17).** The controller asks the namespacer Deployment (`:8083`) for a test namespace with `(project, runid, profile ref)` only. The namespacer renders a fixed template from the project's test profile. A compromised controller can therefore neither choose NetworkPolicy or quota content nor create namespaces itself. The namespacer is the real privilege boundary, and VAP is the independent check of its output.
@@ -225,7 +227,7 @@ The per-run Secret is type `Opaque`, `immutable`, owned by its Job and garbage-c
 | controller | PostgreSQL 5432; gitbroker 8080; model-gateway admin 9443; artifact-gateway admin 9444; namespacer 8083; object store; kube-apiserver | — | No internet |
 | namespacer | kube-apiserver | — | Ingress only from the controller (8083) |
 | api | PostgreSQL; object store; public 443 (OIDC, Linear) | — | Ingress only from the ingress-gateway namespace |
-| gitbroker | public 443 (GitHub); object store | — | Ingress only from the controller (and authenticated, S-23) |
+| gitbroker | public 443 (GitHub); object store; kube-apiserver (issuer JWKS only) | — | Ingress only from the controller; every call carries the controller's audience-bound projected token, verified against the issuer JWKS (S-23) |
 | gitbroker-fetch, artifact-gateway | object store | — | Ingress from project pods (8081/8082) and the controller (9444) |
 | model-gateway | public 443 (providers); PostgreSQL (budgets) | — | Ingress from exec pods (classes model-only/deps) and the controller (9443) |
 | `devplat-registry-proxy-<P>` | public 443 (P's upstream allowlist) | — | Ingress only from P's deps-class exec/test pods and P's build pods |
@@ -363,7 +365,7 @@ Status words follow D26. "Designed, unverified" = the mechanism needs an unbuilt
 | R6 S-20 Service externalIPs | VAP + `DenyServiceExternalIPs` recommended; test quota allows ClusterIP fixtures | Implemented (untested) |
 | R6 S-21 seLinuxOptions | Baseline SELinux rules at pod and container level | Implemented (untested) |
 | R6 S-22 CNPG label | `cnpg.io/cluster: devplat-pg`; external-PG policy option | Implemented (untested) |
-| R6 S-23 label-only auth to gitbroker push | mTLS or TokenReview requirement (§4) | Designed, unverified |
+| R6 S-23 label-only auth to gitbroker push | Projected-token verification via issuer JWKS (RBAC binding and apiserver egress in base; chart `callerAuth: projected-token`); mTLS alternative | Implemented (untested) for RBAC/NetworkPolicy; verification code Designed, unverified |
 | R6 S-24 shared workload-identity annotations | One identity per SA (§8.1 rule 2); charts group | Documented |
 
 ## 15. ValidatingAdmissionPolicies (`platform/deploy/base/admission-policies.yaml`)
@@ -425,12 +427,12 @@ Params live in `devplat-cluster-params` (devplat-system) and in one `devplat-adm
 
 | Check | Tool | Result |
 |---|---|---|
-| Strict schema validation of `platform/deploy/base/*.yaml` | `platform/tools/validate_k8s.py` (jsonschema `Draft7Validator`) and `platform/tools/admission/extract_policies.py` (`Draft4Validator`), schemas `yannh/kubernetes-json-schema` `v1.33.0-standalone-strict` | **133 valid, 0 invalid, 0 skipped**: admission-policies 32, namespaces 7, networkpolicies 36, priorityclasses 2, quotas 12, rbac 18, runtimeclasses 2, serviceaccounts 24 |
+| Strict schema validation of `platform/deploy/base/*.yaml` | `platform/tools/validate_k8s.py` (jsonschema `Draft7Validator`) and `platform/tools/admission/extract_policies.py` (`Draft4Validator`), schemas `yannh/kubernetes-json-schema` `v1.33.0-standalone-strict` | **140 valid, 0 invalid, 0 skipped**: admission-policies 32, namespaces 7, networkpolicies 36, priorityclasses 2, quotas 12, rbac 25, runtimeclasses 2, serviceaccounts 24 |
 | Cross-reference and invariant checks | `extract_policies.py` | **PASS, 0 errors**. Adds R6 invariants: no project-namespace NetworkPolicy reaches the object store or any ipBlock (D10); every namespace has its params ConfigMap; per-namespace paramRefs resolve; no impersonation anywhere |
 | CEL compilation | `platform/tools/admission` (Go, `k8s.io/apiserver` v0.33.0 base environment, dynamic types) | **128 expressions, 0 failures** |
 | Behavioural evaluation | `cases.py` + `main.go eval` (per-policy params as the bindings resolve them) | **115 cases, 133 decisions, 0 mismatches**. Includes the R6 exploit regressions E1, E2, E3, E5–E11, all **DENIED**. E4 is closed at the source by E3: no non-Opaque `dp-*` Secret can be created. Also: namespacer template objects allowed and every deviation denied; builds disabled by default; D20 pins (args, Localhost profile, userns); D16 reduced project; D15 per-namespace prefixes; S-17…S-22 cases; doc 16's example Job and pod allowed |
 
-Command: `GO=/usr/local/go1.24.7/bin/go OUT=<dir> bash platform/tools/admission/run.sh`.
+Command: `GO=/usr/local/go1.24.7/bin/go OUT=<dir> bash platform/tools/admission/run.sh`. Chart parity (`platform/tools/charts/run.sh`, helm v3.17 + kubeconform): 51 passed, 0 failed; both parity checks with 0 unexpected and 0 stale differences.
 
 ### 17.2 Not performed (needs a cluster or built services)
 
@@ -481,7 +483,7 @@ Command: `GO=/usr/local/go1.24.7/bin/go OUT=<dir> bash platform/tools/admission/
 3. `devplat-project`: one read-only registry proxy per project (`devplat-registry-proxy-<project>`, ports 4873/5000, publish/adduser off); project NetworkPolicies select it and the artifact-gateway (no object-store egress); test profile renders exactly the §9.3 objects, with `services` ≤ `maxServices` and the params ConfigMap; builds off by default (`buildsEnabled: "false"`).
 4. CNPG `Cluster` stays named `devplat-pg` (base selects `cnpg.io/cluster: devplat-pg`).
 5. Workload-identity annotations: one identity per SA (S-24).
-6. gitbroker: require mTLS or TokenReview for controller calls (S-23).
+6. gitbroker: verify the controller's projected token (`callerAuth: projected-token`). The gitbroker Deployment must mount its own apiserver-audience projected token to fetch the JWKS: the template comment "no RBAC grant needed" holds only with an authenticated request (base binds `system:service-account-issuer-discovery` explicitly).
 
 **Other docs (owners):**
 - Doc 22 §7: N10 as redefined in §13, plus probes for D10 (pod → S3 denied) and D12 (server tool rejected).

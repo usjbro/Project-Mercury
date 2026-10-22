@@ -10,7 +10,8 @@
 #    update or patch any Secret, and holds no Secret rights at all outside project namespaces.
 #  - No pods/exec, pods/attach, pods/portforward, pods/ephemeralcontainers, no update on Jobs, no pod writes.
 #  - ClusterRole objects devplat-job-runner and devplat-test-runner are granted ONLY through namespaced RoleBindings.
-#  - Cluster-wide grants: devplat-namespacer (the only cluster-scoped WRITE) and devplat-dns (read-only discovery).
+#  - Cluster-wide grants: devplat-namespacer (the only cluster-scoped WRITE), devplat-dns (read-only discovery) and
+#    devplat-gitbroker-issuer-discovery (built-in, read-only issuer JWKS, S-23).
 #    devplat-namespacer (namespaces + fixed bootstrap objects of test namespaces), constrained by
 #    ValidatingAdmissionPolicy devplat-namespacer-scope (names, labels, NetworkPolicy peers/ports, quota caps).
 #  - The controller no longer impersonates the namespacer (R6 D19): it calls the namespacer's API (:8083) with
@@ -203,7 +204,7 @@ rules:
   - apiGroups: [""]
     resources: ["services"]
     verbs: ["get"]
-    resourceNames: ["devplat-model-gateway", "devplat-registry-proxy-mercury", "devplat-registry-proxy-jupiter", "devplat-gitbroker-fetch", "devplat-artifact-gateway", "devplat-dns"]
+    resourceNames: ["devplat-model-gateway", "devplat-gitbroker-fetch", "devplat-artifact-gateway", "devplat-dns"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -231,6 +232,106 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: devplat-controller
+    namespace: devplat-system
+---
+# Per project (rendered by each devplat-project release): ClusterIP lookup of that project's registry proxy only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: devplat-controller-service-lookup-mercury
+  namespace: devplat-system
+rules:
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get"]
+    resourceNames: ["devplat-registry-proxy-mercury"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: devplat-controller-service-lookup-mercury
+  namespace: devplat-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: devplat-controller-service-lookup-mercury
+subjects:
+  - kind: ServiceAccount
+    name: devplat-controller
+    namespace: devplat-system
+---
+# Per project (rendered by each devplat-project release): ClusterIP lookup of that project's registry proxy only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: devplat-controller-service-lookup-jupiter
+  namespace: devplat-system
+rules:
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get"]
+    resourceNames: ["devplat-registry-proxy-jupiter"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: devplat-controller-service-lookup-jupiter
+  namespace: devplat-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: devplat-controller-service-lookup-jupiter
+subjects:
+  - kind: ServiceAccount
+    name: devplat-controller
+    namespace: devplat-system
+---
+# D19: the namespacer renders test namespaces from the projects' test-profile ConfigMaps
+# (devplat-test-profile-<P>, devplat-system). Read-only, ConfigMaps only; names are per project, so list/watch
+# cannot be restricted by resourceNames. Residual: it can read every ConfigMap in devplat-system (no Secrets).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: devplat-namespacer-profiles
+  namespace: devplat-system
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: devplat-namespacer-profiles
+  namespace: devplat-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: devplat-namespacer-profiles
+subjects:
+  - kind: ServiceAccount
+    name: devplat-namespacer
+    namespace: devplat-system
+---
+# S-23 (callerAuth: projected-token): gitbroker verifies the controller's audience-bound projected token offline
+# against the cluster's service-account issuer keys (GET /.well-known/openid-configuration and /openid/v1/jwks on
+# the kube-apiserver). Binding to the built-in read-only ClusterRole system:service-account-issuer-discovery
+# (non-resource URLs only) is explicit here instead of relying on the bootstrap binding to all service accounts.
+# The gitbroker pod therefore mounts its own apiserver-audience projected token for this call only.
+# Cloud profiles whose issuer is public may fetch the JWKS from the issuer URL instead (overlay).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: devplat-gitbroker-issuer-discovery
+  labels:
+    app.kubernetes.io/part-of: devplat
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:service-account-issuer-discovery
+subjects:
+  - kind: ServiceAccount
+    name: devplat-gitbroker
     namespace: devplat-system
 ---
 # ---- controller in project namespaces (namespaced grant of ClusterRole devplat-job-runner) ----
