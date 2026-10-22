@@ -302,7 +302,7 @@ The general procedure of §1.9 applies. Jupiter-specific order: Q-J01 first (if 
 
 1. **Restricted vs. v1 role scopes (Q-M3).** v1 role 08 (DevOps) owns `.github/workflows/**` and role 01 writes proposed ADRs under `docs/`, but every v1 example contract restricts `docs/**` and `.github/**`. This configuration keeps both restricted (the stricter reading); MERC-030 and ADR proposals therefore need an operator decision before they can be agent tasks on devplat.
 2. **Network class vocabulary.** Resolved (R6 D5): `none | model-only | deps` in every schema, profile and policy.
-3. **`cluster_ref` default.** `jobspec.py` tests use `cluster_ref: default`; the `devplat-project` chart example uses `clusterRef: local`. One name must be chosen (this file uses `default`).
+3. **`cluster_ref` default.** Resolved: the configs, `jobspec.py` tests and the `devplat-project` chart all use `default` (R6 A-22).
 4. **Chart example quotas.** `devplat-project/values.yaml` shows concrete Mercury quotas as an example; the Mercury configuration has them `unresolved` because no measurement or cluster decision exists. The renderer must not emit the example values.
 5. **File name.** `15-…` §7 mentions `jupiter.yaml`; the draft is `jupiter.onboarding.yaml` (stem `jupiter`). It should be renamed to `jupiter.yaml` when it reaches `onboarding`.
 6. **Repository name case.** Design docs say `usjbro/project-mercury`; the remote is `usjbro/Project-Mercury`.

@@ -1,10 +1,10 @@
 # 24 — Helm Deployment, GitOps and Cluster Bootstrap
 
-Status: **Proposed** (Architecture Amendment 001, 2026-10-17).
-- The charts in `platform/deploy/charts/` are **Implemented (untested)**: rendered with `helm template` and strict-validated offline, never installed on a cluster.
-- No devplat image exists. Every `image.digest` is empty, and the charts refuse to render until real digests are supplied.
+Status: **Proposed** (Architecture Amendment 001, 2026-10-17; R6 fix round 2026-10-22: D2, D9, D10, D12, D14–D16, D19, D20, D24, S-13, S-22, S-24).
+- The charts in `platform/deploy/charts/` are **Implemented (untested)**. They are rendered and checked offline by `platform/tools/charts/run.sh` (§10) and have never been installed on a cluster.
+- No devplat image exists. Every image digest is empty, and the charts refuse to render until real digests are supplied.
 
-Reuses / supersedes: v1 `13-…` RB-D1 (host bootstrap with a git ledger) stays as the **local mode** bootstrap. This document adds the cluster bootstrap. The v1 operator-only steps (DOD-02 ruleset, DOD-03 development identity, operator facts) are kept and move into §9 steps 4 and 8.
+Reuses / supersedes: v1 `13-…` RB-D1 (host bootstrap with a git ledger) stays as the **local mode** bootstrap. This document adds the cluster bootstrap. The v1 operator-only steps (ruleset, development identity, operator facts) are kept as per-project facts (D1) in §9.
 
 ## 1. Chart layout and the boundary with `platform/deploy/base`
 
@@ -12,53 +12,47 @@ Reuses / supersedes: v1 `13-…` RB-D1 (host bootstrap with a git ledger) stays 
 
 | Layer | Content | Installed by |
 |---|---|---|
-| **Cluster prerequisites** | ClusterRoles `devplat-job-runner`, `devplat-test-runner`, `devplat-namespacer` (+ ClusterRoleBinding), `devplat-dns` (+ ClusterRoleBinding); all ValidatingAdmissionPolicies and the `devplat-admission-params` ConfigMap; RuntimeClasses; PriorityClasses; the namespaces `devplat-system`, `devplat-artifacts` and `devplat-observability` with their `default` ServiceAccounts; and every NetworkPolicy of those platform namespaces | **Operator, always from base** (bootstrap step 2), before any chart |
-| **Namespace layer** | Platform ServiceAccounts and the controller's Roles in `devplat-system`/`devplat-artifacts`; per project: namespaces, quotas, LimitRanges, ServiceAccounts, the controller's RoleBindings to `devplat-job-runner`, NetworkPolicies | **Either** the charts (parameterized) **or** `kubectl apply` of base's static rendering for `proj-mercury-*` / `proj-jupiter-*`. Never both for the same namespace: Helm refuses to adopt objects it does not own |
+| **Cluster prerequisites** | ClusterRoles `devplat-job-runner`, `devplat-test-runner`, `devplat-namespacer` (+ ClusterRoleBinding), `devplat-dns` (+ ClusterRoleBinding); all ValidatingAdmissionPolicies, `devplat-cluster-params` and the `devplat-admission-params` of the platform namespaces; RuntimeClasses; PriorityClasses; the namespaces `devplat-system`, `devplat-artifacts` and `devplat-observability` with their `default` ServiceAccounts; every NetworkPolicy of those platform namespaces | **Operator, always from base** (bootstrap step 1), before any chart |
+| **Namespace layer** | Platform ServiceAccounts and the controller's Roles in `devplat-system`. Per project: namespaces, quotas, LimitRanges, ServiceAccounts, the controller's RoleBindings, NetworkPolicies, the per-namespace `devplat-admission-params`, and the registry-proxy NetworkPolicy `registry-proxy-<P>` | **Either** the charts (parameterized) **or** `kubectl apply` of base's static rendering for `proj-mercury-*` / `proj-jupiter-*`. Never both for the same namespace: Helm refuses to adopt objects it does not own |
 
-The charts render the namespace layer, plus the Deployments that base does not contain. Rendered for project id `mercury`, `devplat-project` produces objects whose specs are **identical** to base's for every shared object (namespaces, quotas, LimitRanges, NetworkPolicies, RoleBindings, ServiceAccounts). This was checked by a field-by-field comparison on 2026-10-17 (§10).
+The charts render the namespace layer, plus the workloads that base does not contain. `platform/tools/charts/run.sh` compares the shared objects field by field with base (§10). The intended differences are listed with their reasons in `platform/tools/charts/parity-expected.txt` and `parity-platform-expected.txt`. Any other difference fails the run.
 
 ```text
 platform/deploy/charts/
 ├── devplat/                      # control plane: one release per cluster, namespace devplat-system (enforced)
-│   ├── Chart.yaml                # apiVersion v2, kubeVersion >=1.30 (ValidatingAdmissionPolicy GA)
-│   ├── values.yaml               # defaults = standard-assurance profile; no Secret names (fixed, doc 18 §8.1)
-│   ├── values.schema.json        # draft-07, additionalProperties:false everywhere
+│   ├── values.yaml / values.schema.json   # draft-07, additionalProperties:false; images <registry>/{devplat|mirror}/…
 │   └── templates/
-│       ├── _helpers.tpl          # labels, digest-only image helper (fails on empty), security contexts,
-│       │                         # fixed-name DB/S3 env, guards
-│       ├── _workload.tpl         # shared Deployment + Service (+ PDB); priorityClassName devplat-platform
-│       ├── serviceaccounts.yaml  # controller, api, gitbroker, gitbroker-fetch, model-gateway, dns, namespacer;
-│       │                         # all automount false (controller and dns opt in at pod level)
-│       ├── controller-rbac.yaml  # Roles in devplat-system: leader election (one Lease), impersonate
-│       │                         # devplat-namespacer, service lookup; plus service lookup in devplat-artifacts.
-│       │                         # NO ClusterRole or ClusterRoleBinding for the controller
-│       ├── controller.yaml       # 2 replicas, Lease devplat-controller, admission limits, namespacer impersonation
+│       ├── _helpers.tpl, _workload.tpl    # digest-only images, security contexts, fixed-name Secret env, guards
+│       │                                  # (empty operator identities, wrong namespace, shared SA annotations)
+│       ├── serviceaccounts.yaml  # one SA per component, automount false, per-component annotations (S-24)
+│       ├── controller-rbac.yaml  # Lease, events, service lookup; namespacer reads test profiles. No ClusterRole,
+│       │                         # no impersonation
+│       ├── controller.yaml       # 2 replicas, Lease; NEVER migrates (DEVPLAT_RUN_MIGRATIONS=never)
+│       ├── migrator-job.yaml     # Helm hook Job + its SA: migrations as devplat_migrator (D9)
+│       ├── operator-identities.yaml  # hook ConfigMap: api.oidc.allowedSubjects -> operator_identities (D2)
 │       ├── api.yaml              # OIDC operator auth (DOD-14)
-│       ├── gitbroker.yaml        # GitHub App key (devplat-gitbroker-github-app); dev/* and draft PRs only;
-│       │                         # ingress only from the controller
-│       ├── gitbroker-fetch.yaml  # KEYLESS bundle server on :8081 for fetch init containers
-│       ├── model-gateway.yaml    # :8080 for agents (classes model-only|deps), admin :9443; keys in
-│       │                         # devplat-model-gateway-llm-keys
-│       ├── dns.yaml              # devplat-dns: CoreDNS, kubernetes plugin only (no forward); pod 1053, Service 53
-│       ├── postgres-cnpg.yaml    # CloudNativePG Cluster CR (postgres.mode=cnpg), managed roles from devplat-db-*
+│       ├── gitbroker.yaml        # GitHub App key; dev/* and draft PRs only; ingress only from the controller
+│       ├── gitbroker-fetch.yaml  # keyless source-bundle server :8081
+│       ├── artifact-gateway.yaml # :8082, the ONLY artifact path for project pods; writes S3 itself (D10)
+│       ├── namespacer.yaml       # :8083, test namespaces from a fixed template (D19)
+│       ├── model-gateway.yaml    # :8080 / admin :9443; policy ConfigMap: endpoint allowlist, server-tool and
+│       │                         # MCP rejection, project from token (D12); separate key for reduced projects
+│       ├── dns.yaml              # devplat-dns: CoreDNS, kubernetes plugin only (no forward)
+│       ├── postgres-cnpg.yaml    # Cluster devplat-pg, digest-pinned operand image, initdb owner devplat_migrator
 │       ├── ingress.yaml          # optional; refused without OIDC
 │       └── NOTES.txt
 └── devplat-project/              # per-project namespace layer: one release per project per execution target
-    ├── Chart.yaml
-    ├── values.yaml               # GENERATED from platform/projects/<id>.yaml (26-…); defaults = hypothetical example-a
-    ├── values.schema.json
+    ├── values.yaml / values.schema.json   # GENERATED from platform/projects/<id>.yaml; defaults = example-a
     └── templates/
-        ├── namespaces.yaml       # proj-<P>-exec (PSA restricted), proj-<P>-build (PSA privileged + base VAPs);
-        │                         # PSA versions pinned v1.33
-        ├── quotas.yaml           # devplat-compute (per-run ConfigMaps/Secrets bounded, services 0),
-        │                         # devplat-no-platform-priority, LimitRange devplat-defaults
-        ├── serviceaccounts.yaml  # <P>-agent, <P>-build: zero RBAC, no token
-        ├── controller-rolebindings.yaml  # controller -> ClusterRole devplat-job-runner, per namespace
-        ├── networkpolicies.yaml  # default-deny-all; exec-base-egress (devplat-dns, gitbroker-fetch :8081,
-        │                         # artifacts); model-egress (classes model-only|deps only); deps-egress;
-        │                         # build-egress
-        ├── admission-policies.yaml  # PROJECT-SPECIFIC only: builder allowlist; optional RuntimeClass pin
-        ├── test-profile.yaml     # ConfigMap in devplat-system: profile the namespacer applies to proj-<P>-t-<8 hex>
+        ├── namespaces.yaml       # proj-<P>-exec (PSA restricted), proj-<P>-build (PSA privileged + base VAPs)
+        ├── quotas.yaml, serviceaccounts.yaml, controller-rolebindings.yaml
+        ├── admission-params.yaml # per-namespace devplat-admission-params: image prefixes (D15), build switches (D20)
+        ├── networkpolicies.yaml  # default deny; devplat-dns, gitbroker-fetch :8081, artifact-gateway :8082;
+        │                         # model-gateway only for classes model-only|deps; this project's proxy only
+        ├── registry-proxy.yaml   # devplat-registry-proxy-<P>: read-only npm proxy + its NetworkPolicy (D14)
+        ├── admission-policies.yaml  # project-specific only: builder allowlist; optional RuntimeClass pin
+        ├── test-profile.yaml     # parameters the namespacer applies to proj-<P>-t-<8 hex> (D19)
+        ├── project-settings.yaml # assurance mode, builds, proxy, LLM key variant (D16)
         └── NOTES.txt
 ```
 
@@ -66,45 +60,44 @@ platform/deploy/charts/
 
 | Group | Key values | Rules enforced by schema or template |
 |---|---|---|
-| `platform` | `clusterRef` (`default`), `assuranceMode` (`standard` / `reduced`) | — |
-| Release | — | `devplat` renders only in namespace `devplat-system` (template `fail`), because base RBAC, NetworkPolicies and Secret pinning are bound to it |
-| Images | `<component>.image.repository`, `.digest` for controller, api, gitbroker, gitbrokerFetch, modelGateway, dns | Digest-only; empty digest ⇒ render fails with "no image has been published yet". The repository prefix must be listed in base's `devplat-admission-params.allowedImagePrefixes` |
-| `controller` | replicas, Lease timings (the Lease name is fixed: `devplat-controller`), global and per-project admission limits, test-namespace TTL | Ranges bounded |
-| `api.oidc` | issuer, client id, allowed subjects | Ingress refused without an issuer |
-| `gitbroker` | `pushRefPrefix`, `draftPullRequestsOnly` | Exactly one replica (not configurable); `pushRefPrefix` const `dev/`; `draftPullRequestsOnly` const `true`; no merge/approve key; unknown keys (e.g. a Secret-name override) rejected |
-| `gitbrokerFetch`, `dns` | replicas, image, resources | — |
-| `modelGateway.providers[]` | name (`anthropic`, `openai`), host | At least one provider; key `<name>-api-key` in the fixed Secret |
-| `postgres` | `mode` `cnpg` / `external`; instances, storage; external host, port, database, sslmode | `external` needs a host; `cnpg.backup.enabled` const false (not templated, §7) |
-| `artifacts` | S3 endpoint, region, bucket prefix | — |
-| Project chart | `project.id` (≤ 24 chars), prefix (= `proj-<id>`), `platformNamespace` (const `devplat-system`), quotas, LimitRanges, `exec.requiredRuntimeClassName` (`""` / `gvisor` / `kata`), builder allowlist (digests), test profile, `sandboxEgress` | Prefix mismatch fails; `configmaps`/`secrets` quota must be 1–200 (never 0, doc 18 I-5); `services*` are always 0 and cannot be set |
+| `platform` | `clusterRef` (`default`), `assuranceMode` | `reduced` also needs each project's `REDUCED-ASSURANCE` fact (D16) |
+| Release | — | `devplat` renders only in namespace `devplat-system` (template `fail`) |
+| Images | `imageRegistry`; `<component>.image.name`, `.digest` | Name must start with `devplat/` or `mirror/` (D15); digest-only; an empty digest fails the render; CNPG operand image required in `cnpg` mode (S-22) |
+| ServiceAccount annotations | `<component>.serviceAccountAnnotations` | No shared map (S-24): unknown key `serviceAccount` is rejected, and identical non-empty annotations on two components fail the render |
+| `controller` | replicas, Lease timings (Lease name fixed), admission limits | Ranges bounded |
+| `migrator` | image, deadline | Hook Job; see §6 |
+| `api.oidc` | issuer, client id, **`allowedSubjects`** `[{issuer, subject, project}]` | `minItems: 1`; an empty list fails the render (D2). Synced into `operator_identities`, which `record_operator_fact` checks; `project: ""` means all projects |
+| `gitbroker` | `pushRefPrefix`, `draftPullRequestsOnly` | Consts `dev/` and `true`; one replica. These are gitbroker's own behaviour, not a merge control (§4) |
+| `artifactGateway` | replicas, per-run caps | Caps may only be lowered below the D11 limits |
+| `namespacer` | image | Exactly one replica |
+| `modelGateway` | providers; `policy` | `allowedEndpoints` ⊆ {`POST /v1/messages`, `POST /v1/messages/count_tokens`}; `rejectServerTools`, `rejectMcpServers`, `rejectContainer`, `rejectFilesAndBatches` const `true`; `projectFrom` const `token`; only the beta-header allowlist is free (D12) |
+| `postgres` | `cnpg` (instances, image, storage) / `external` | Cluster name fixed `devplat-pg` (S-22); `backup.enabled` const false (§7) |
+| `artifacts` | S3 endpoint for platform components | `bucketPrefix` const `devplat-` (D11) |
+| Project chart | `project.id` `^[a-z][a-z0-9-]{1,22}[a-z0-9]$` (D24); `imageRegistry`; `assurance`; `registryProxy`; quotas; `exec.requiredRuntimeClassName`; `build` (off by default); test profile | Prefix = `proj-<id>`; `reduced` needs a fact id and forbids builds (D16); enabled builds need an allowlist and a Localhost profile (D20); an enabled proxy needs uplinks and a digest (D14); `secrets`/`configmaps` quota 1–200; `services*` always 0 |
 
 **Secrets are never chart values, and their names are fixed** (doc 18 §8.1). Base VAP `devplat-secret-pinning` pins each name to one ServiceAccount. The operator creates them out of band (or through an external secret store, §5):
 
 | Secret | Keys | Consumer |
 |---|---|---|
 | `devplat-gitbroker-github-app` | `app-id`, `private-key.pem` | gitbroker |
-| `devplat-model-gateway-llm-keys` | `<provider>-api-key` | model-gateway |
-| `devplat-db-controller`, `devplat-db-api`, `devplat-db-model-gateway` | basic-auth `username`, `password` (also CNPG managed-role passwords) | controller, api, model-gateway |
-| `devplat-artifacts-controller`, `-gitbroker`, `-gitbroker-fetch`, `-api` | `access-key-id`, `secret-access-key` (scoped per prefix; workload identity preferred in cloud) | the named component |
+| `devplat-model-gateway-llm-keys` | `<provider>-api-key`, `<provider>-api-key-reduced` (separate spend-limited key, D16) | model-gateway |
+| `devplat-db-migrator` | basic-auth; the only login that changes the schema (D9) | migrator hook Job |
+| `devplat-db-controller`, `devplat-db-api`, `devplat-db-model-gateway` | basic-auth (also CNPG managed-role passwords) | controller, api, model-gateway |
+| `devplat-artifacts-controller`, `-gitbroker`, `-gitbroker-fetch`, `-api`, `-artifact-gateway` | `access-key-id`, `secret-access-key` (scoped per prefix; workload identity preferred in cloud) | the named component |
 | `devplat-oidc-client`, `devplat-linear-token` (optional) | `client-secret`, `token` | api |
 
-Per-run objects are created by the controller, never by the charts:
-- Job `dp-<project>-<task>-a<attempt>-d<dispatch>`;
-- ConfigMap `<job>-contract`;
-- Secret `<job>-io`: the one-time fetch URL, presigned upload targets and the per-Job gateway token.
-
-These objects are owner-referenced to the Job (base VAP `devplat-controller-run-objects`).
+Per-run objects are created by the controller, never by the charts: Job `dp-<project>-<task>-a<attempt>-d<dispatch>`, ConfigMap `<job>-contract`, and Secret `<job>-io`. The Secret holds the one-time fetch token, the artifact-gateway upload token (TTL = Job deadline + 15 min) and the per-Job gateway token. All three objects are owner-referenced to the Job (base VAP `devplat-controller-run-objects`).
 
 ## 3. Dependencies
 
 | Dependency | Decision | Reason |
 |---|---|---|
-| **`platform/deploy/base` cluster prerequisites** (§1) | **Prerequisite**, applied by the operator with an overlay that replaces the placeholders (kube-apiserver IPs, external S3 CIDR, image prefixes, ingress namespace label, `cnpg-system`) | Canonical security model; cluster-scoped objects must not be owned by an application release |
-| **CloudNativePG operator** | **Prerequisite**, installed separately by the operator (its own Helm chart or manifest, pinned version). The devplat chart only creates the `Cluster` CR (`postgres.mode=cnpg`) | Operators own cluster-scoped CRDs and webhooks. Bundling them as a subchart couples upgrades and makes `helm uninstall devplat` dangerous. Several releases must not fight over CRDs. Its operator role's cluster-wide Secret rights are residual risk R-18-3 (doc 18 §7) |
+| **`platform/deploy/base` cluster prerequisites** (§1) | **Prerequisite**, applied by the operator with an overlay that replaces the placeholders (kube-apiserver IPs, external S3 CIDR, `registryBase`, ingress namespace label, `cnpg-system`) | Canonical security model; cluster-scoped objects must not be owned by an application release |
+| **CloudNativePG operator** | **Prerequisite**, installed separately (pinned version). The devplat chart only creates the `Cluster` `devplat-pg` | Operators own cluster-scoped CRDs and webhooks; bundling couples upgrades and makes `helm uninstall devplat` dangerous. Its cluster-wide Secret rights are residual risk R-18-3 (doc 18 §7) |
 | Managed PostgreSQL (RDS, Cloud SQL, Azure DB) | `postgres.mode=external` | Cloud profiles (`25-…`) |
-| **S3-compatible artifact store** | **External endpoint**, or an in-cluster store installed separately into `devplat-artifacts` (Service `devplat-artifacts:9000`, as base's NetworkPolicies expect) | The MinIO community edition went **source-only in late 2025, and its GitHub repository was archived on 2026-04-25** [S1]. Pinning it as a subchart would ship an unmaintained dependency. Candidates for an in-cluster store (evaluate; none verified here): a maintained S3-compatible server, Rook/Ceph RGW for multi-node, or cloud object storage |
+| **S3-compatible object store** | External endpoint, or an in-cluster store installed separately into `devplat-artifacts`. Reached **only by platform components**; project pods use `devplat-artifact-gateway` (D10) | The MinIO community edition went **source-only in late 2025, and its GitHub repository was archived on 2026-04-25** [S1]. In-cluster candidates (none verified): a maintained S3-compatible server, Rook/Ceph RGW, or cloud object storage |
 | Ingress controller | Optional (`ingress.enabled`), any class | Workstations use `kubectl port-forward` |
-| Package-registry proxy (`devplat-registry-proxy`, 4873 / OCI mirror 5000) | Separate release; not in this chart yet | Needed for network class `deps` and builds. Base already defines its ServiceAccount and NetworkPolicies |
+| Per-project registry proxy | `devplat-project` renders `devplat-registry-proxy-<P>` (Verdaccio, npm only, read-only) when enabled (D14) | The OCI pull-through on :5000 that base's NetworkPolicy allows is **not templated**; other package ecosystems are unresolved |
 | gVisor / Kata RuntimeClass | Cluster prerequisite (node-level install + base `runtimeclasses.yaml`) | Node OS dependent (`25-…`) |
 
 ## 4. Install, configure, operate: separation of duties
@@ -112,22 +105,23 @@ These objects are owner-referenced to the Job (base VAP `devplat-controller-run-
 | Phase | Who | What | Never |
 |---|---|---|---|
 | **Install** (cluster-scoped) | **Operator** (cluster admin) | Cluster, node pools and taints, CNI, RuntimeClass, CloudNativePG operator, base cluster prerequisites, `helm install devplat`, `helm install devplat-project` per project | Agents or the platform installing cluster-scoped objects |
-| **Configure** | **Operator** | Secrets, GitHub App (DOD-13), ruleset (DOD-02), OIDC client (DOD-14), budgets, project configuration approval | Configuration through agent PRs that take effect without operator review |
-| **Operate** | devplat-controller (automatic) | Jobs, per-run ConfigMaps/Secrets, test namespaces (as `devplat-namespacer`), reconciliation, gate records | Changing its own RBAC, policies, charts or platform secrets |
+| **Configure** | **Operator** | Secrets; per repository: GitHub App installation (DOD-13) and ruleset + CI hardening (DOD-02, D13); OIDC client (DOD-14); operator identities (`allowedSubjects`); budgets; project configuration approval | Configuration through agent PRs that take effect without operator review |
+| **Migrate** | migrator hook Job, triggered by the operator's `helm install/upgrade` | Forward-only schema migrations, grants, `operator_identities` sync | The controller migrating; any runtime role with DDL rights |
+| **Operate** | devplat-controller; devplat-namespacer on its request | Jobs and per-run objects; test namespaces from the fixed template; reconciliation; gate records | Changing its own RBAC, policies, charts or platform secrets |
 | **Change** | PR to the chart or values repository → operator review → operator applies (or GitOps sync, §8) | Every change to `platform/**` is a restricted path for agent tasks (`23-…` §5.3) | Self-modification by the platform |
 
-The controller has **no cluster-wide grant** (doc 18 §7, I-1). Its rights are:
-- **Project namespaces:** a RoleBinding to `devplat-job-runner`, rendered by `devplat-project`. Jobs create/get/list/watch/patch/delete (patch only to unsuspend, base VAP `devplat-controller-job-update`); ConfigMaps and Secrets create/get/delete (no list, watch or update); pods get/list/watch; pods/log get; events read.
-- **Test namespaces:** it impersonates `devplat-namespacer` to create them. The namespacer's cluster-scoped rights are confined by base VAP `devplat-namespacer-scope` to `^proj-<P>-t-[0-9a-f]{8}$` with mandatory labels, and it binds `devplat-test-runner` for the controller inside each test namespace.
-- **`devplat-system`:** one Lease, impersonation of exactly one ServiceAccount, and `get` on named Services.
+The controller has **no cluster-wide grant and no impersonation** (doc 18 §7, D19). Its rights are:
+- **Project namespaces:** a RoleBinding to `devplat-job-runner`, rendered by `devplat-project`. This allows Jobs create/get/list/watch/patch/delete (patch only to unsuspend), ConfigMaps and Secrets create/get/delete, pods get/list/watch, pods/log get, and reading events.
+- **Test namespaces:** a request `{project, runid}` to `devplat-namespacer`. The namespacer applies its fixed template plus the project's test profile. Its cluster-scoped rights are confined by base VAP `devplat-namespacer-scope`, which checks names, labels, NetworkPolicy peers/ports, quota caps and the computed admission params.
+- **`devplat-system`:** one Lease, events, and `get` on named platform Services. Each `devplat-project` release adds `get` on its own proxy Service.
 
-It has no verbs on RBAC objects (except through the namespacer's single RoleBinding shape), CRDs, webhooks, admission policies or nodes. It therefore cannot widen its own permissions. Impersonation separates the namespacer's writes in the audit log and lets admission target them. It is **not** a privilege boundary against a compromised controller (doc 18 Q-18-1).
+**Merge authority (D13).** gitbroker has no merge or approve code path, and the chart pins `dev/` and draft PRs. But the development App's `contents:write` + `pull_requests:write` **can** merge and approve through the GitHub API. The preventive control is each repository's ruleset (required code-owner review, no bypass; DOD-02), not this chart. Probe N10 attempts both actions in the sandbox repository (`22-…` §7).
 
 ## 5. Secrets handling
 
 1. Created by the operator: `kubectl create secret …` from the operator's machine, or an external secret store (External Secrets Operator with cloud secret managers, or Sealed Secrets for GitOps). An external store is recommended for multi-node and cloud profiles.
-2. Each Secret is referenced only by its one consumer (table in §2), enforced by base VAP `devplat-secret-pinning`. Example: a pod of `devplat-api` that mounts `devplat-gitbroker-github-app` is denied; this case was evaluated offline (§10). Key material (GitHub App key, LLM keys) is mounted as read-only files (mode `0400`). DB and S3 credentials are environment variables, because the client libraries read them from there.
-3. Project namespaces hold **only per-run Secrets** `dp-<job>-io`, bounded by quota (`secrets` 1–200; default 100 in exec, 50 in build). Base VAP `devplat-proj-pod-identity` lets project pods reference only `dp-*` Secrets, so a pod spec naming a platform Secret is rejected even inside a project namespace. Test Secrets (Mercury T3 sandbox credentials) exist only in a `sandbox`-class test namespace (`22-…` §4.3).
+2. Each Secret is referenced only by its one consumer (table in §2), enforced by base VAP `devplat-secret-pinning`. `run.sh` checks that every Secret referenced by a rendered platform pod is pinned to that pod's ServiceAccount in base, and evaluates the policy on a pod of `devplat-api` that mounts `devplat-gitbroker-github-app`: it is denied (§10). Key material (GitHub App key, LLM keys) is mounted as read-only files (mode `0400`). DB and S3 credentials are environment variables, because the client libraries read them from there.
+3. Project namespaces hold **only per-run Secrets** `dp-<job>-io`, bounded by quota (`secrets` 1–200; default 100 in exec, 50 in build). None of them holds an object-store credential (D10). Base VAP `devplat-proj-pod-identity` lets project pods reference only `dp-*` Secrets, so a pod spec naming a platform Secret is rejected even inside a project namespace. Test Secrets (Mercury T3 sandbox credentials) exist only in a `sandbox`-class test namespace (`22-…` §4.3).
 4. Rotation: replace the Secret, then `kubectl rollout restart` the consumer. The GitHub App key is rotated in GitHub first (two keys valid during the overlap).
 
 ## 6. Upgrades, rollback, uninstall and teardown
@@ -136,8 +130,10 @@ It has no verbs on RBAC objects (except through the namespacer's single RoleBind
 1. Read the release notes, compatibility matrix and digests (`23-…` §6).
 2. Pause dispatch through the API: running Jobs finish, and no new admissions happen.
 3. Take a CloudNativePG backup (or a managed snapshot).
-4. `helm upgrade devplat … --atomic --timeout 10m`. The controller runs forward-only migrations at startup under the leader Lease. The standby replica waits.
-5. Smoke tests and isolation probes (§9 steps 6–7).
+4. `helm upgrade devplat … --atomic --timeout 10m`. The **pre-upgrade hook Job** `devplat-migrate-r<rev>` applies the forward-only migrations as `devplat_migrator` and syncs `operator_identities`. If it fails, the upgrade stops before any Deployment changes. The controller **never** migrates. It refuses to become ready while the schema version differs from the version it was built for.
+   - On a first install with `postgres.mode=cnpg` the hook runs **post-install**, because the `Cluster` is part of the release; the controller stays unready until the hook has finished.
+   - D9 asks for pre-install. That is only possible with `external` PostgreSQL.
+5. Smoke tests and isolation probes (§9 steps 7–9).
 6. Resume dispatch.
 
 **Rollback.**
@@ -153,7 +149,7 @@ It has no verbs on RBAC objects (except through the namespacer's single RoleBind
 
 **Uninstall the platform.**
 1. Uninstall every project first.
-2. Then `helm uninstall devplat`.
+2. Then `helm uninstall devplat`. Hook resources (`devplat-migrator` ServiceAccount, `devplat-operator-identities` ConfigMap, the last migrate Job) are not owned by the release; delete them explicitly.
 3. The CloudNativePG `Cluster` is deleted with the release, but its PVCs follow the operator's reclaim policy. **Take a final backup first.**
 4. Cluster prerequisites (CloudNativePG operator, RuntimeClass, base policies) are removed separately, last.
 
