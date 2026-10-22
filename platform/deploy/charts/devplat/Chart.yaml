@@ -1,16 +1,17 @@
 apiVersion: v2
 name: devplat
 description: >-
-  devplat control plane (controller, api, gitbroker, keyless gitbroker-fetch, model-gateway, devplat-dns) for the project-agnostic AI development
-  platform. Proposed design (Architecture Amendment 001); no images are published yet, so this chart cannot be
-  installed until real image digests are supplied. See docs/mercury/development-orchestration/24-helm-and-gitops.md.
+  devplat control plane (controller, migrator hook, api, gitbroker, keyless gitbroker-fetch, artifact-gateway,
+  namespacer, model-gateway, devplat-dns) for the project-agnostic AI development platform. Proposed design
+  (Architecture Amendment 001, R6 fix round); no images are published yet, so this chart cannot be installed until
+  real image digests are supplied. See docs/mercury/development-orchestration/24-helm-and-gitops.md.
 type: application
 version: 0.1.0-alpha.0
 appVersion: "0.1.0-alpha.0"
 kubeVersion: ">=1.30.0-0"
 keywords: [devplat, ai-development-platform]
 annotations:
-  devplat.io/status: "Implemented (untested) - rendered and validated offline (24-... section 10), never installed"
+  devplat.io/status: "Implemented (untested) - rendered and validated offline by platform/tools/charts/run.sh, never installed"
   devplat.io/prerequisites: "platform/deploy/base cluster prerequisites (ClusterRoles, VAPs, RuntimeClasses, PriorityClasses, platform namespaces and NetworkPolicies); CloudNativePG operator (postgres.mode=cnpg); S3-compatible store"
 # No chart dependencies on purpose: operators (CloudNativePG) and object stores are cluster-level prerequisites
 # installed and upgraded separately (24-helm-and-gitops.md section 3).

@@ -299,8 +299,11 @@ class Base(unittest.TestCase):
         return int(psql(f"SELECT devplat.record_admission({lit(p)}, {lit(tid)}, {attempt}, {lit(role)}, 'admit', 'admitted', "
                         f"NULL, {lit(HOLDER)}, {TOKENS[(p, tid)]})", role=R["ctl"]))
 
-    def dispatch(self, tid, role, attempt=1, dispatch_no=1, key=None, project=None):
+    def dispatch(self, tid, role, attempt=1, dispatch_no=None, key=None, project=None):
         p = project or self.project
+        if dispatch_no is None:   # next ordinal for (task, attempt, role): e.g. a second verifier run
+            dispatch_no = int(psql(f"SELECT coalesce(max(dispatch_no), 0) + 1 FROM devplat.job_runs WHERE project_id = {lit(p)} "
+                                   f"AND task_id = {lit(tid)} AND attempt = {attempt} AND role = {lit(role)}"))
         adm = self.admit(tid, role, attempt, project=p)
         key = key or sha(f"{p}|{tid}|{attempt}|{role}|{dispatch_no}|{secrets.token_hex(4)}")
         name = f"dp-{p}-{tid.lower()}-a{attempt}-{role[:4]}{dispatch_no}-{secrets.token_hex(2)}"[:63].rstrip("-")
@@ -917,7 +920,10 @@ class T09IsolationAndStatus(Base):
                          f"devplat-{self.project} sha256/{h}")
         self.refused(lambda: psql(f"UPDATE devplat.artifacts SET size_bytes = 1 WHERE sha256 = '{h}'"), "identity is immutable")
         self.refused(lambda: psql(f"DELETE FROM devplat.artifacts WHERE sha256 = '{h}'"), "artifact is retained")
-        self.refused(lambda: psql(f"UPDATE devplat.artifacts SET bucket = 'other' WHERE sha256 = '{h}'"), "artifacts_bucket_check")
+        self.refused(lambda: psql(f"UPDATE devplat.artifacts SET bucket = 'other' WHERE sha256 = '{h}'"), "identity is immutable")
+        self.refused(lambda: psql(f"INSERT INTO devplat.artifacts (project_id, sha256, bucket, object_key, size_bytes, media_type, "
+                                  f"kind, retention_class, retain_until) VALUES ({lit(self.project)}, {lit(sha('b2'))}, 'other', "
+                                  f"'sha256/' || {lit(sha('b2'))}, 1, 'x', 'log', 'standard', now())"), "artifacts_bucket_check")
         self.refused(lambda: psql(f"SELECT * FROM devplat.register_artifact({lit(self.project)}, {lit(sha('big'))}, 2000000, "
                                   f"'application/json', 'result', NULL, NULL, NULL, 'evidence')", role=R["ctl"]),
                      "result artifact over 1048576 bytes")

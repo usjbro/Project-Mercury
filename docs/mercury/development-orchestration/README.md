@@ -4,13 +4,13 @@
 |---|---|
 | Status | **Proposed — awaiting operator approval (DOD-01).** Documentation, configuration and development tooling only. No MERCURY application code has been written. |
 | Version | devorch v2 (review fix round after R1–R4) |
-| Branch | `claude/dev-orchestration` (stacked on the unmerged design branch `claude/mercury-tdd`) |
+| Branch | v1: `claude/dev-orchestration`; Amendment 001 (devplat): `claude/devplatform-k8s`, stacked on v1. Neither is merged |
 | Scope | The **temporary** system that builds MERCURY. It is **not** production MERCURY and holds no production authority (`01-development-architecture.md` §1) |
 | Start | `claude --agent mdev-principal-orchestrator` (required; the tool allowlist holds only in that mode) |
 
 ## Amendment 001 — Kubernetes-native, multi-project platform (devplat)
 
-Branch `claude/devplatform-k8s` (stacked on `claude/dev-orchestration`). **Proposed; awaits DOD-11…24.** v1 (docs 00–13, devorch) stays as **local mode**. Docs 14–29 define **devplat**, which is independent of Mercury and Jupiter. Mercury's production design is unchanged (`27-…`: 0 production changes proposed). Machine-readable artifacts are under `/platform`.
+Branch `claude/devplatform-k8s` (stacked on `claude/dev-orchestration`). **Proposed; awaits DOD-11…25.** v1 (docs 00–13, devorch) stays as **local mode**. Docs 14–29 define **devplat**, which is independent of Mercury and Jupiter. Mercury's production design is unchanged (`27-…`: 0 production changes proposed). Machine-readable artifacts are under `/platform`.
 
 | # | Amendment deliverable | Location |
 |---|---|---|
@@ -49,12 +49,26 @@ Branch `claude/devplatform-k8s` (stacked on `claude/dev-orchestration`). **Propo
 | 13 | Resource and cost management | `09-resources-and-costs.md` |
 | 14 | Integration and release process | `10-integration-and-release.md` |
 | 15 | Self-hosting transition plan | `11-self-hosting-transition.md` |
-| 16–17 | Roadmap amendments RA-D1…D9; ADR amendment; operator decisions DOD-01…24 | `12-amendments.md`, `../architecture/decisions/proposed/ADR-021-development-orchestration.md` |
+| 16–17 | Roadmap amendments RA-D1…D9; ADR amendment; operator decisions DOD-01…25 | `12-amendments.md`, `../architecture/decisions/proposed/ADR-021-development-orchestration.md` |
 | 18 | Operational runbook | `13-runbook.md` |
 | — | Independent reviews R1 (architecture), R2 (security), R3 (TPM), R4 (code/reliability) | `reviews/R1-…` … `reviews/R4-…` |
 | — | Dispositions of every review finding | `reviews/R0-dispositions.md` (every Critical/High finding of R1–R4 → fix, location, test; residual risks); `reviews/R5-recheck.md` (independent re-check of R0: new findings, fixes, what is still open) |
 
-## Status of each element
+## Status of devplat (Amendment 001)
+
+| Element | Status |
+|---|---|
+| devplat controller, api, gitbroker, gitbroker-fetch, model gateway, artifact gateway, namespacer, devplat-dns, registry proxy, images | **Designed, not built** (DP2–DP4, `28-…`) |
+| Job spec generator `platform/controller/jobspec.py` | **Implemented and tested**: output equals the doc 16 example and is strict-valid for every profile. Never applied to a cluster |
+| Role ConfigMap generator | **Implemented**; output is strict-valid |
+| PostgreSQL state schema `platform/db` | **Implemented and tested** on a real PostgreSQL 16 (DB level only). The R6 fix round is in progress |
+| Base manifests, admission policies, Helm charts | **Configured**: strict-validated offline; CEL compiled and evaluated against sample requests. **Never installed on a cluster.** The R6 fix round is in progress |
+| Project configuration contract; Mercury config; Jupiter onboarding | **Implemented and validated.** Jupiter is `draft` with every value unresolved (no repository or specification exists) |
+| NetworkPolicy enforcement, gVisor, recovery, GitHub App behaviour | **Unverified**: needs a cluster (DOD-15) and a sandbox repository |
+| Security residuals closed by unbuilt components | **Designed, unverified** (R6 D26) |
+| Independent review | R6: architecture accept_with_conditions (direction); security changes_required. Fix round in progress |
+
+## Status of each element (v1 local mode)
 
 | Element | Status |
 |---|---|

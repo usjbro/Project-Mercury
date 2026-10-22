@@ -1,18 +1,18 @@
 # 27 — Mercury TDD Compatibility Review and Amendment Proposal
 
-Status: **Proposed** (Architecture Amendment 001, 2026-10-17). Review of the Mercury TDD v1.0-rc1, its owner documents and ADR-001…020 against the devplat platform (docs 15–26, ADR-022…030). **Awaiting operator approval**; no TDD file is changed by this document (CLAUDE.md: design documents change only through an operator-approved amendment).
+Status: **Proposed** (Architecture Amendment 001, 2026-10-17; R6 fix round 2026-10-20: I-35, I-36, W-4b, W-5 and §2 corrected per R6 A-20). Review of the Mercury TDD v1.0-rc1, its owner documents and ADR-001…020 against the devplat platform (docs 15–26, ADR-022…030). **Awaiting operator approval**; no TDD file is changed by this document (CLAUDE.md: design documents change only through an operator-approved amendment).
 Reuses / supersedes: **extends** `12-amendments.md` §4 ("Proposed TDD change summary"), which proposed one cross-reference in TDD §27. That cross-reference stays and is widened (W-1). Nothing in the TDD, its owner documents or ADR-001…020 is superseded.
 
 ## 1. Result in one paragraph
 
-**Mercury's production architecture is unchanged.** Kubernetes is a property of the platform that *builds* Mercury, not of Mercury. Every production decision — the local `mercuryd` LaunchAgent on the operator's Mac (ADR-010, CON-002), SQLite (ADR-002), `_mercuryagent` + Seatbelt + root-owned wrappers (ADR-013), Claude and Codex invocation (ADR-004/005, CON-016), Keychain credentials, recovery and adoption (ADR-020), deployment and upgrade (TDD §24) — is class **(3) no change**. What changes is **where and how Mercury's own development and tests run** (class **(1)**): Linux-portable test tiers T0, T2 and the Linux part of T1 may run as devplat Kubernetes test Jobs; T1-macOS stays on GitHub-hosted macOS runners; T3 may run in a dedicated devplat sandbox namespace if the operator allows sandbox credentials there; T4, T4v and T5 stay on Apple hardware as the **external macOS lane**. Five TDD/owner-document passages need **wording** amendments (§5). Four production changes are listed **as options only** (§4); none is proposed, and each would need its own ADR.
+**Mercury's production architecture is unchanged.** Kubernetes is a property of the platform that *builds* Mercury, not of Mercury. Every production decision — the local `mercuryd` LaunchAgent on the operator's Mac (ADR-010, CON-002), SQLite (ADR-002), `_mercuryagent` + Seatbelt + root-owned wrappers (ADR-013), Claude and Codex invocation (ADR-004/005, CON-016), Keychain credentials, recovery and adoption (ADR-020), deployment and upgrade (TDD §24) — is class **(3) no change**. What changes is **where and how Mercury's own development and tests run** (class **(1)**): Linux-portable test tiers T0, T2 and the Linux part of T1 may run as devplat Kubernetes test Jobs; T1-macOS stays on GitHub-hosted macOS runners; T3 may run in a dedicated devplat sandbox namespace if the operator allows sandbox credentials there; T4, T4v and T5 stay on Apple hardware as the **external macOS lane**. Six TDD/owner-document passages need **wording** amendments (§5). The development platform does change the **schedule** of agent-driven Mercury implementation (I-35), not its scope or acceptance. Four production changes are listed **as options only** (§4); none is proposed, and each would need its own ADR.
 
 Classes: **(1)** development-platform change only · **(2)** proposed Mercury production change · **(3)** no change.
-Count over 34 items: 16 have a class-(1) development-platform aspect (11 of them are "3 for production, 1 for development, tests or co-hosting"; 5 are development-only); 18 are class (3) only; **0 are class (2)**; 4 production options are listed but not proposed.
+Count over 36 items: 18 have a class-(1) development-platform aspect (12 of them are "3 for production, 1 for development, tests or co-hosting"; 6 are development-only); 18 are class (3) only; **0 are class (2)**; 4 production options are listed but not proposed.
 
 ## 2. What was reviewed
 
-TDD §1–§32; `architecture/overview.md` (AP-11), `components.md` §1–§2, `state-machine.md`; `operations/macos-service.md` §1, §3, §9, §10, §13, §15; `operations/recovery.md`; `security/threat-model.md` (SEC-201, SEC-310, §8.10 gates); `testing/verification-plan.md` §2–§3; `planning/traceability.md` CON-001…018; `planning/roadmap.md`, `issue-breakdown.md`; `integrations/github.md` §9, `claude.md`, `codex.md`; ADR-001…020; development package docs 00–16, 28–29.
+TDD §1–§32; `architecture/overview.md` (AP-11), `components.md` §1–§2, `state-machine.md`; `operations/macos-service.md` §1, §3, §9, §10, §13, §15; `operations/recovery.md`; `security/threat-model.md` (SEC-201, SEC-310, §8.10 gates); `testing/verification-plan.md` §2–§3; `planning/traceability.md` CON-001…018; `planning/roadmap.md`, `issue-breakdown.md`; `integrations/github.md` §9, `claude.md`, `codex.md`; ADR-001…020; development package docs 00–29 (devplat: 14–29) and proposed ADR-021…030.
 
 ## 3. Impact register
 
@@ -32,7 +32,7 @@ TDD §1–§32; `architecture/overview.md` (AP-11), `components.md` §1–§2, `
 | I-10 | System of record | ADR-009 | 3 | None |
 | I-11 | macOS service (launchd) | ADR-010; macos-service §4–§6 | 3 | None. Kubernetes is not imposed on Mercury |
 | I-12 | Local process supervision | ADR-010 item 3–4; ADR-020; macos-service §3.8 | 3 | None |
-| I-13 | Authority records | ADR-011, ADR-018 | 3 | None |
+| I-13 | Authority records | ADR-011 | 3 | None |
 | I-14 | Migration from Slack | ADR-012 | 3 | None |
 | I-15 | Agent sandboxing | ADR-013 (`_mercuryagent`, Seatbelt, sudoers wrappers); SEC-201; CON-018 | 3 (prod) / 1 (tests) | Production unchanged. SEC-T-20 and every uid/Seatbelt test stay on the real Mac (T4). Pod isolation is a development control only |
 | I-16 | Merge governance, required checks | ADR-014; github.md §9; roadmap P0d | 3 | None. P0d "govern MERCURY's own repository like a target" and RA-D2's time-boxed exception unchanged |
@@ -54,6 +54,8 @@ TDD §1–§32; `architecture/overview.md` (AP-11), `components.md` §1–§2, `
 | I-32 | Threat model | threat-model §3–§9; RISK-27, RISK-28 | 3 (prod) / 1 (dev) | Production unchanged. devplat's own threat model is doc 18 |
 | I-33 | Requirements and traceability | traceability CON/FR/NFR/OPS | 3 | No requirement text changes; W-3 adds an environment note only |
 | I-34 | Design approval gate | CON-001; TDD §32.3 | 3 | None: devplat runs no Mercury implementation before DOD-01, exactly as v1 |
+| I-35 | Schedule of agent-driven implementation | TDD §27; roadmap §5 (effort, critical path) and §6 (calendar) | 1 | Scope and acceptance unchanged; the **start** of agent-driven M1+ implementation moves behind the devplat track DP0–DP4 unless DOD-16 allows v1 local mode earlier (detail below; estimates owned by `28-…`) |
+| I-36 | Audit integrity | ADR-018 (hash chain, off-host anchors, HMAC) | 3 (prod) / 1 (dev) | Production unchanged. devplat copies the *pattern* for its own `task_events` (hash chain, checkpoints anchored outside the writer, DOD-18) without sharing any Mercury chain, key or anchor repository |
 
 ### 3.2 Detail for every item that is not a plain "no change"
 
@@ -120,6 +122,16 @@ Fields: **E** existing design · **P** proposed change · **R** reason · **C** 
 
 **I-28 Co-hosting — class 1 recommendation.** CON-002 forbids a MERCURY listener off loopback; devplat-api has an authenticated ingress. If devplat runs in workstation mode (kind/k3d) on the same Mac on which production `mercuryd` later runs (M9b+), a second privileged system shares the host with MERCURY's Zone C, widening RISK-27. Recommendation: from M9b on, devplat does not run on the production Mac; before that, workstation mode is acceptable (no production MERCURY exists).
 
+**I-35 Schedule (TDD §27; roadmap §5–§6) — class 1.**
+- E: the TDD roadmap and its calendar (roadmap §5 effort and critical path, §6 calendar view) assume one operator-engineer with agent assistance from the start of implementation (ASM-F-10); v1 (`05-…`) modelled that assistance as local subagents, with the operator as the bottleneck.
+- P: if the operator adopts devplat (DOD-11) and declines interim v1 local mode (DOD-16 = no), agent-driven Mercury implementation (M1 onwards) starts only after the devplat track DP0–DP4. `28-…` estimates that track at ≈ 29–39 working days, roughly 6–8 calendar weeks later than the v1 plan if run serially. These are **unmodelled P50 judgements owned by `28-…`** (being re-modelled per R6 A-07), not TDD numbers. Phase 0 operator and Mac work (P0a–P0d) is unaffected and can run in parallel.
+- R: devplat must exist and pass its security and recovery acceptance before it builds Mercury. C: no MERC scope, dependency or acceptance criterion changes; only the start date of agent execution moves. M: W-5 records the pointer; the TDD calendar is re-baselined by the operator only after `28-…` is modelled. S: none for production; choosing DOD-16 = yes keeps the v1 timeline with the R5 residual risks. B: implementation then runs on infrastructure-enforced controls. N: a later Mercury start; operator time is split between the two tracks.
+
+**I-36 Audit integrity (ADR-018) — class 3 / 1.**
+- E: `audit_log` hash chain, off-host anchors (check-run summary on private repositories, Linear comment, private anchor repository), optional HMAC, verification at startup, restore epochs; honest limit: rewriting is detectable, not impossible.
+- P: production unchanged. devplat applies the same pattern to its **own** development state: `task_events` is append-only and hash-chained per `(project_id, task_id)`, checkpoints are exported to object-lock storage and signed outside the controller (DOD-18, `19-…` §8). Nothing is written to Mercury's audit chain, anchor repository or keys.
+- R/C: same threat (a writer able to rewrite its own store); different store and identities (S1–S2). M: none. S: devplat checkpoints must not use `mercury-ops` or the Mercury anchor repository. B: one verified design pattern, two independent instances. N: none for production.
+
 **I-30 Self-hosting — class 1.** `11-…` Stages A–E stay; `15-…` §8 rule 4 adds that Mercury building itself never makes devplat depend on Mercury.
 
 **I-32 Threat model — class 3 / 1.** No SEC requirement changes. RISK-28 (operator's interactive agents can approve as the human) is about the operator's own sessions; devplat agents hold no human credential, so the development side of RISK-28 shrinks once DOD-13 is in place.
@@ -145,7 +157,8 @@ The TDD contains **no explicit statement that Mercury's development runs on the 
 | W-2 | TDD §22 table, row "Integration (generic) — macOS runner" | "macOS runner, both SQLite drivers" | Unchanged; add a sentence under the table: "Linux-portable levels may also run as development-platform test Jobs; such runs are development evidence and never replace the required CI, sandbox (T3) or real-Mac (T4) evidence." |
 | W-3 | verification-plan §2.1 "Runs where" (T0, T1, T2, T3) and §2.5 | T0 "CI (Linux and macOS runners)"; T1 "CI (macOS runner preferred)"; T2 "CI"; T3 "Operator's Mac or a dev machine with sandbox credentials" | T0/T2: "CI; optionally devplat test Jobs (Linux)". T1: "CI (macOS runner preferred; the L4 exit requires it); the Linux part optionally in devplat test Jobs". T3: "Operator's Mac, a dev machine, or a devplat sandbox test namespace, with sandbox credentials only (operator decision, `27-…` I-09)" |
 | W-4 | macos-service §15.1 | "GitHub-hosted runners only (public repo …)" | Add: "The development platform's test Jobs are not GitHub Actions runners; no self-hosted runner is registered for this repository." |
-| W-5 | roadmap §5 / ASM-F-10 ("one operator-engineer with agent assistance", "≈ 1.5 focused engineer-days per workday") | as is | Add a pointer: "Agent execution capacity and its effect on the schedule: `development-orchestration/05-…`, `28-roadmap-k8s.md`." No estimate changes |
+| W-4b | macos-service §1 summary table, row "CI" | "GitHub-hosted runners only. No self-hosted runner. Power-loss tests in a macOS guest VM …" | Append: "Development-platform test Jobs (Linux, Kubernetes) are development evidence, not CI runners (§15.1, W-4)." |
+| W-5 | roadmap §5–§6 / ASM-F-10 ("one operator-engineer with agent assistance", "≈ 1.5 focused engineer-days per workday"); TDD §27 | as is | Add a pointer: "Agent execution capacity and its effect on the schedule: `development-orchestration/05-…`, `28-roadmap-k8s.md` (I-35). If the devplat track precedes agent-driven implementation, the calendar of §6 shifts by that track; the TDD's effort estimates per issue do not change." The re-baselined calendar is an operator decision after `28-…` is modelled |
 
 Not amended: TDD §1 ("on the operator's Mac"), §3 non-goals, §18, §24 deployment — they describe production and remain correct.
 
@@ -161,14 +174,16 @@ Not amended: TDD §1 ("on the operator's Mac"), §3 non-goals, §18, §24 deploy
 | MERC-802 (power-loss VM rig), MERC-803 (real-Mac recovery), MERC-805 (security suite on the Mac) | Apple hardware | **None**; external lanes |
 | M8–M9 (MERC-806…906) | Pilot and cutover on the Mac | **None**. I-28 co-hosting recommendation applies from M9b |
 | Operator decisions OD-01…37 | Production | **None** added or changed |
-| Development decisions | — | DOD-11…16 (`12-…`), Q-M1…Q-M11 (`26-…`) |
+| Calendar (roadmap §6) | Start of agent-driven M1+ | Shifts behind DP0–DP4 unless DOD-16 = yes (I-35; numbers in `28-…`) |
+| Development decisions | — | DOD-11…24 (`12-…`), Q-M1…Q-M11 (`26-…`) |
 
 ## 7. Capability status
 
 | Capability | Status |
 |---|---|
 | This compatibility review | Documented only (inspection; no test can prove a negative impact) |
-| W-1…W-5 wording amendments | Awaiting operator approval |
+| W-1…W-5, W-4b wording amendments | Awaiting operator approval |
+| I-35 schedule impact | Documented only (unmodelled estimate owned by `28-…`) |
 | Classification "production unchanged" | Documented only; holds as long as no option P-1…P-4 is adopted |
 | T0/T2 in devplat Jobs | Documented only (no Mercury code or image exists) |
 | T3 in a devplat sandbox namespace | Awaiting operator approval (I-09) |

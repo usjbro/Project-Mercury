@@ -1,19 +1,24 @@
 devplat {{ .Chart.AppVersion }} (chart {{ .Chart.Version }}) in namespace {{ .Release.Namespace }}.
 
-STATUS: proposed design (Architecture Amendment 001). Only the operator installs this chart.
+STATUS: proposed design (Architecture Amendment 001, R6 fix round). Only the operator installs this chart.
 Prerequisites (platform/deploy/base, applied first): platform namespaces, ClusterRoles devplat-job-runner,
 devplat-test-runner, devplat-namespacer, devplat-dns (+ bindings), PriorityClasses, RuntimeClasses, admission
-policies + devplat-admission-params, and the platform NetworkPolicies. This chart renders none of them.
+policies with devplat-cluster-params and the per-namespace devplat-admission-params, and the platform NetworkPolicies.
+
+Components: controller (never migrates), migrator hook Job ({{ ternary "post-install" "pre-install" (eq .Values.postgres.mode "cnpg") }}, pre-upgrade), api, gitbroker,
+gitbroker-fetch (:8081, keyless), artifact-gateway (:8082, the only artifact path for project pods),
+namespacer (:8083, fixed template), model-gateway (:8080 / admin :9443, endpoint allowlist), devplat-dns.
 
 Secrets (fixed names, doc 18 section 8.1; created by the operator, never by this chart):
   devplat-gitbroker-github-app, devplat-model-gateway-llm-keys,
-  devplat-db-controller, devplat-db-api, devplat-db-model-gateway,
-  devplat-artifacts-controller, devplat-artifacts-gitbroker, devplat-artifacts-gitbroker-fetch, devplat-artifacts-api,
+  devplat-db-migrator, devplat-db-controller, devplat-db-api, devplat-db-model-gateway,
+  devplat-artifacts-controller, -gitbroker, -gitbroker-fetch, -api, -artifact-gateway,
   devplat-oidc-client, devplat-linear-token (optional).
 
-Next: bootstrap verification (24-helm-and-gitops.md section 9, steps 6-10), including the isolation probes: an
-agent-like pod must NOT reach PostgreSQL, gitbroker, the Kubernetes API, kube-dns or the internet.
+Operator identities allowed to record facts: {{ len .Values.api.oidc.allowedSubjects }} (synced into operator_identities by the migrator).
+Next: bootstrap verification (24-helm-and-gitops.md section 9, steps 6-10), including the isolation probes.
 Then install one devplat-project release per project.
 
-Assurance mode: {{ .Values.platform.assuranceMode }}{{ if eq .Values.platform.assuranceMode "reduced" }} - REDUCED: evidence produced by this install is labelled reduced-assurance.{{ end }}
-The platform never merges or approves pull requests. G7 is an observed human merge on GitHub.
+Assurance mode: {{ .Values.platform.assuranceMode }}{{ if eq .Values.platform.assuranceMode "reduced" }} - REDUCED: every project also needs its REDUCED-ASSURANCE operator fact; builds stay disabled.{{ end }}
+The platform never merges or approves pull requests. NOTE: the dev-bot App's contents:write + pull_requests:write could
+do both through the API; the repository ruleset (DOD-02) is what prevents it. G7 is an observed human merge.
