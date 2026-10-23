@@ -101,7 +101,7 @@ Abbreviations. Tests: `db:` = `platform/db/test_schema.py`, `adm:` = `platform/t
 |---|---|---|
 | R-1 | A-05: 13 project-neutral role bodies not written | Agent work, in the platform repository after DOD-12 |
 | R-2 | Every "runtime open" row: needs a cluster (DOD-15) and the built components (DP1–DP4) | DP3–DP4 acceptance tests (`29-…`) |
-| R-3 | `execution-profiles.yaml` header says no kind literal is seeded in `schema.sql`; `task_kinds` is seeded (platform vocabulary). Either load kinds from the catalogue or correct the comment | Agent work; low |
+| R-3 | Fixed 2026-10-23: the `execution-profiles.yaml` header now says task kinds are seeded in `schema.sql` as platform vocabulary and must equal the catalogue's kinds (checked by `test_transitions_table_matches_vendored_devorch_rules`) | Closed — tested |
 | R-4 | Fixed 2026-10-23: `interface_contracts[].frozen_by` now uses the project-neutral task-id pattern (was the v1 form `DT-nnnn`) | Closed — tested (schema: `test_interface_frozen_by_any_project_task_id`) |
 | R-5 | Operator decisions S-3/S-14 (DOD-02, DOD-13), S-15 (DOD-24), A-15 signer (DOD-18) | Operator |
 | R-6 | Re-check RS-9: `dispatch_job()` with a NULL execution target does not tie the namespace to the project (mitigated by the `job-shape` VAP) | Agent work; low |

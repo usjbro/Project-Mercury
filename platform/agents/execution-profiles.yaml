@@ -3,7 +3,9 @@
 # Spec:   16-agent-execution-and-job-lifecycle.md §4, §9; 17-multi-project-scheduling.md §3 (development-orchestration package)
 #
 # This file is the PLATFORM ROLE CATALOGUE (R6 D6): the controller loads `kind_catalogue` and `profiles` into the
-# DB `roles` table at registration; no role or kind literal is seeded in platform code or schema.sql. A project
+# DB `roles` table at registration; no role literal is seeded in platform code or schema.sql. Task kinds
+# are platform vocabulary seeded in schema.sql `task_kinds`; the DB tests require this catalogue's kinds to equal them
+# (same lifecycle, read-only flag and subtask suffix). A project
 # config only ENABLES catalogue roles and bounds their path scopes. The `mdev-` prefix of the role ids is historical
 # (the roles were first written for Mercury) and is kept for compatibility with the v1 contracts and definitions.
 # Role definition files (`agent_definition`) are read from the definition source repository at a pinned commit

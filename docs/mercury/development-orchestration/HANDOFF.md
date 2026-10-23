@@ -16,7 +16,7 @@ For the operator and for the next Claude Code session. Facts are separated from 
 **Start here:**
 - Package index: `docs/mercury/development-orchestration/README.md`.
 - Amendment texts: `amendments/`.
-- Decisions awaiting you: `12-amendments.md` (DOD-01…25).
+- Decisions awaiting you: **`OPERATOR-BRIEF.md`** (sequenced short list); full records in `12-amendments.md` (DOD-01…25).
 - Review record: `reviews/R6-amendment-001.md`, `reviews/R6-dispositions.md`, `reviews/R6-recheck.md`.
 
 ## 2. What the design says (in one paragraph each)
@@ -68,11 +68,11 @@ Helm v3.17.3 and kubeconform v0.6.7 were built from source into the session scra
 3. A-05 direction (subject to your review): project-neutral role bodies plus a project section generated from the project config. The generator part is implemented and tested; the 13 neutral bodies are not written (R-1).
 4. `reviews/R6-dispositions.md`; decisions that had never reached the files were applied (A-15 checkpoint anchoring; D13 CI hardening in the DOD-02 row; contract v2 `frozen_by`).
 5. Independent re-check run, its findings fixed, confirmation pass run and its two conditions fixed (`reviews/R6-recheck.md`); strict validation green.
+6. Operator decision brief: `OPERATOR-BRIEF.md`.
 
 **Open, in order:**
-1. Prepare the operator decision brief from §6.
-2. Residuals R-1…R-7 in `R6-dispositions.md` §4 (R-1 neutral role bodies after DOD-12; R-2 every runtime check; R-6 RS-9; R-7 a cluster-scoped baseline deny for project namespaces at DP4).
-3. PRs: the original brief forbade opening PRs without your authorization. None has been opened.
+1. Residuals R-1…R-7 in `R6-dispositions.md` §4 (R-1 neutral role bodies after DOD-12; R-2 every runtime check; R-6 RS-9; R-7 a cluster-scoped baseline deny for project namespaces at DP4).
+2. PRs: the original brief forbade opening PRs without your authorization. None has been opened.
 
 ## 6. Decisions only the operator can make
 
