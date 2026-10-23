@@ -47,6 +47,13 @@ class ContractV2Dependencies(unittest.TestCase):
             self.assertFalse(self.valid({"task_id": "MERC-0100", "required_state": st, "path": "a"}))
             self.assertFalse(self.valid({"task_id": "MERC-0100", "required_state": st, "sha256": H}))
 
+    def test_interface_frozen_by_any_project_task_id(self):
+        # frozen_by joins tasks.task_id in the DB; it was a v1-only DT-nnnn pattern (R6 dispositions R-4)
+        for tid, ok in (("MERC-0100", True), ("DT-0001", True), ("dt-0001", False), ("MERC-01", False)):
+            d = copy.deepcopy(EXAMPLE)
+            d["interface_contracts"] = [{"path": "src/ports/a.ts", "sha256": H, "frozen_by": tid}]
+            self.assertEqual(not list(self.v.iter_errors(d)), ok, tid)
+
     def test_project_level_plan_proposal_id(self):
         # doc 16 §10: project-level planner contracts use PL-<nnnn>
         d = copy.deepcopy(EXAMPLE)

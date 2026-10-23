@@ -140,7 +140,7 @@ erDiagram
 
 Append-only triggers now also cover the contract-derived tables, `admission_decisions` and `test_runs`. `verify_chain(project?, task?)` and `chain_digest()` as before (tails keyed by `(project_id, task_id)`).
 
-**Honest limit.** A PostgreSQL superuser, the owner role, or anyone with data files or backups can rewrite history consistently; `verify_chain()` then passes (tested). Mitigations: signed checkpoints exported outside the DB (object-locked object + git branch, DOD-18) — **Designed, unverified**; owner role NOLOGIN and the migrator pinned and used only by the migration Job (R6 D9); no superuser access in normal operation; pgaudit of DDL and role changes; G7 anchored on GitHub.
+**Honest limit.** A PostgreSQL superuser, the owner role, or anyone with data files or backups can rewrite history consistently; `verify_chain()` then passes (tested). Mitigations: signed checkpoints exported outside the DB to **object-lock storage**, signed by a signer outside the controller (DOD-18; not a git branch: the development App may push only `dev/*` under DOD-13, so gitbroker cannot anchor them, R6 A-15) — **Designed, unverified**; owner role NOLOGIN and the migrator pinned and used only by the migration Job (R6 D9); no superuser access in normal operation; pgaudit of DDL and role changes; G7 anchored on GitHub.
 
 ## 9. Backups, PITR and restore
 

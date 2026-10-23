@@ -53,7 +53,7 @@ np("controller", S, app("devplat-controller"), ["Egress"], egress=[
     {"to": [{"podSelector": app("devplat-artifact-gateway")}], "ports": tcp(9444)},
     *ART,
     {"to": APISERVER, "ports": tcp(443, 6443)}],
-    comment="Controller: DB, gitbroker internal API, model-gateway admin (budgets, Job tokens), namespacer API, artifact-gateway admin (Job upload tokens), object store, kube-apiserver. No internet.")
+    comment="Controller: DB, gitbroker internal API, model-gateway admin, namespacer API, artifact-gateway admin (admin channels; per-Job tokens are registered and authorized in PostgreSQL), object store, kube-apiserver. No internet.")
 np("migrator", S, app("devplat-migrator"), ["Egress"], egress=[{"to": [{"podSelector": PG}], "ports": tcp(5432)}],
    comment="D9 migration hook Job: PostgreSQL only.")
 np("external-postgres", S, {"matchExpressions": [{"key": "app.kubernetes.io/name", "operator": "In", "values": DB_CLIENTS}]}, ["Egress"],

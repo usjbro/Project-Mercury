@@ -219,7 +219,8 @@
           },
           "frozen_by": {
             "type": "string",
-            "pattern": "^DT-[0-9]{4}(-[a-z0-9]+)?$"
+            "pattern": "^[A-Z][A-Z0-9]{1,7}-[0-9]{4,6}(-[a-z][0-9]{1,3})?$",
+            "description": "Task that freezes the interface (any task id of this project; DB task_interface_contracts.frozen_by joins tasks.task_id)."
           }
         }
       }
