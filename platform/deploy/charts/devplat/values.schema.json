@@ -582,7 +582,9 @@
             "projectFrom",
             "allowedToolTypes",
             "allowedContentSourceTypes",
-            "rejectFileReferences"
+            "rejectFileReferences",
+            "allowedContentBlockTypes",
+            "allowedRequestFields"
           ],
           "properties": {
             "allowedEndpoints": {
@@ -636,6 +638,36 @@
             "rejectFileReferences": {
               "const": true,
               "description": "R6 re-check RS-1: any `file_id` anywhere in the request is refused."
+            },
+            "allowedContentBlockTypes": {
+              "const": [
+                "text",
+                "image",
+                "document",
+                "tool_use",
+                "tool_result",
+                "thinking",
+                "redacted_thinking"
+              ],
+              "description": "R6 confirmation C-1: content blocks of these types only, at any depth (messages, system, tool_result content); any other type, present or future, is refused with 403."
+            },
+            "allowedRequestFields": {
+              "const": [
+                "model",
+                "messages",
+                "system",
+                "max_tokens",
+                "tools",
+                "tool_choice",
+                "temperature",
+                "top_p",
+                "top_k",
+                "stop_sequences",
+                "stream",
+                "metadata",
+                "thinking"
+              ],
+              "description": "R6 confirmation C-1: top-level request fields allowlist; any other field (mcp_servers, container, a future provider feature) is refused with 403."
             }
           }
         },

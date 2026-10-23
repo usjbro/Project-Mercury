@@ -1,6 +1,6 @@
 # R6 — Independent re-check of the fix round
 
-Status: **Fixes applied; confirmation of the two High fixes pending** (2026-10-23). The re-check reviewed `ea13dd5`. The fixes below are in the commit after it on `claude/nice-edison-q1ai3u`.
+Status: **Closed offline** (2026-10-23). The re-check reviewed `ea13dd5`; the fixes are in `c249c51`; the confirmation pass on `c249c51` (§6) accepted with conditions, and both conditions are fixed in the commit after it. Runtime verification remains (R-2).
 
 ## 1. Reviewers and verdicts
 
@@ -46,5 +46,19 @@ Status: **Fixes applied; confirmation of the two High fixes pending** (2026-10-2
 
 ## 5. Remaining before operator review
 
-1. A narrow confirmation of the RA-1 and RS-1 fixes by the same reviewers (read-only).
-2. Residuals in `R6-dispositions.md` §4 (R-1 neutral role bodies, R-2 runtime, R-3, R-5 operator decisions, R-6 RS-9).
+Residuals in `R6-dispositions.md` §4 (R-1 neutral role bodies, R-2 runtime, R-3, R-5 operator decisions, R-6 RS-9, R-7 cluster baseline deny).
+
+## 6. Confirmation pass (same reviewers, read-only, at `c249c51`)
+
+| Review | Verdict | Re-ran |
+|---|---|---|
+| Architecture | **accept_with_conditions**: RA-1…RA-16 fixed; RA-1 verified end to end (112 generated names for every role plus `verifier` at maximum id lengths: unique, valid, ≤ 54 characters) | validate_projects 2/2, self-test 50/50, schema 7, roles 12, jobspec 14, DB 52 |
+| Security | **accept_with_conditions**: RS-1…RS-8 fixed; RS-9 residual agreed; bypass attempts against the RS-1 spec (url image inside `tool_result`, nested document sources, `container_upload`, server-like custom tool names) all covered | `validate_all.sh --strict` exit 0; admission 0 mismatches; own 8 admission exploits (5 now denied, 3 not exploitable: blocked by other controls); 2 DB exploits refused |
+
+| ID | Sev | Condition | Fix | Check |
+|---|---|---|---|---|
+| RC-1 | Medium | Evidence-manifest alias `manifests/<task>/<attempt>/<dispatch>.json` had no role (same class as RA-1) and gate manifests shared it | `manifests/<task>/<attempt>/<role>-d<dispatch>.json` and `…/gate-G<n>.json`; DB alias regex, unique `(project_id, alias_key)` index and an explicit refusal; docs 16, 19, 20, ADR-026 | db: `test_artifact_immutability_bucket_and_caps` (role-less form refused, alias reuse refused, re-registration idempotent) |
+| C-1 | Medium | Content-block types and top-level request fields still screened by a denylist | Chart schema `allowedContentBlockTypes` and `allowedRequestFields` (const); doc 18 K-13, ADR-025, doc 22 N13 | chart: "model-gateway extra content block type (C-1)", "… extra request field (C-1)" |
+| RC-2 | Low | Doc 20 example manifest used the old Job name | Updated, with `role` | — |
+| RC-4 | Low | Mercury uses a minor-2 value but declared `schema_minor: 1` | `schema_minor: 2` | validator |
+| RC-3 | Low | Admission fixtures use old Job names (valid for the loose name regex) | Not changed (cosmetic) | — |

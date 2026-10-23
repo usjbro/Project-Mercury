@@ -74,7 +74,7 @@ erDiagram
 | `run_uploads` | One-time, capped objects of a run | `authorize_upload()`, `complete_upload()` (artifact-gateway) |
 | `test_runs` | Verifier results per test at a head (G2) | `record_test_run()` |
 | `budget_days`, `budget_reservations` | Atomic per-project-day and per-task cost/token reservations | model-gateway functions |
-| `artifacts` | Evidence objects `sha256/<hex>` (+ manifest alias `manifests/<task>/<attempt>/<dispatch>.json`) | `register_artifact()`, `expire_artifacts()` |
+| `artifacts` | Evidence objects `sha256/<hex>` (+ manifest alias `manifests/<task>/<attempt>/<role>-d<dispatch>.json` or `…/gate-G<n>.json`, unique per project) | `register_artifact()`, `expire_artifacts()` |
 | `operator_identities`, `oidc_issuers`, `operator_facts` | Allowed operator subjects (per project or all), and authenticated facts | migrator / `record_operator_fact()` (api only) |
 | `outbox`, `reconciliation_runs`, `leases`, `chain_checkpoints`, `checkpoint_exports` | As before | controller functions |
 

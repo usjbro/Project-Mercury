@@ -4,7 +4,7 @@
 # Nothing here is a secret value. Unknown values are {unresolved: <question>}; designed-but-absent commands are {planned, ref}.
 # Mercury PRODUCTION architecture is not described here: this file only tells devplat how to BUILD Mercury.
 schema: devplat.project.v1
-schema_minor: 1
+schema_minor: 2
 project_id: mercury
 display_name: Project MERCURY
 # onboarding, not active: the TDD is not approved (DOD-01), no package.json/source exists, the ruleset (DOD-02)

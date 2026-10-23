@@ -58,7 +58,7 @@ Helm v3.17.3 and kubeconform v0.6.7 were built from source into the session scra
 | R1–R4 (v1) | Critical/High dispositions in `reviews/R0-dispositions.md` |
 | R5 (v1 re-check) | Guard hook **did not fire** in live subagent dispatch (DOD-10). Dispositions in `R5-recheck.md` |
 | R6 (Amendment 001) | Findings and decisions D1–D26: `reviews/R6-amendment-001.md`. Per-finding fix, location, check and status: `reviews/R6-dispositions.md` |
-| R6 re-check (2026-10-23) | Independent, read-only, fresh-context reviews with the `mdev-lead-architect` and `mdev-security-engineer` briefs against `ea13dd5`: both **changes_required**: 2 new High (RA-1 Job name/key collision between roles; RS-1 model-gateway URL content sources) and 11 Medium. **All fixed except RS-9 (Low, residual R-6)**. Record: `reviews/R6-recheck.md` |
+| R6 re-check (2026-10-23) | Independent, read-only, fresh-context reviews with the `mdev-lead-architect` and `mdev-security-engineer` briefs against `ea13dd5`: both **changes_required**: 2 new High (RA-1 Job name/key collision between roles; RS-1 model-gateway URL content sources) and 11 Medium. **All fixed except RS-9 (Low, residual R-6)**. Confirmation pass on `c249c51`: both **accept_with_conditions**; the conditions (RC-1 manifest alias without role, C-1 block-type and field allowlists) are fixed. Record: `reviews/R6-recheck.md` |
 
 ## 5. Done on 2026-10-23, and open items
 
@@ -67,13 +67,12 @@ Helm v3.17.3 and kubeconform v0.6.7 were built from source into the session scra
 2. `mercury.yaml` config_version 3: no in-cluster build environment; images are built in devplat CI (doc 22 O-5).
 3. A-05 direction (subject to your review): project-neutral role bodies plus a project section generated from the project config. The generator part is implemented and tested; the 13 neutral bodies are not written (R-1).
 4. `reviews/R6-dispositions.md`; decisions that had never reached the files were applied (A-15 checkpoint anchoring; D13 CI hardening in the DOD-02 row; contract v2 `frozen_by`).
-5. Independent re-check run, its findings fixed (`reviews/R6-recheck.md`), strict validation green.
+5. Independent re-check run, its findings fixed, confirmation pass run and its two conditions fixed (`reviews/R6-recheck.md`); strict validation green.
 
 **Open, in order:**
-1. A narrow read-only confirmation of the RA-1 and RS-1 fixes (`R6-recheck.md` §5).
-2. Prepare the operator decision brief from §6.
-3. Residuals R-1…R-7 in `R6-dispositions.md` §4 (R-1 neutral role bodies after DOD-12; R-2 every runtime check; R-6 RS-9; R-7 a cluster-scoped baseline deny for project namespaces at DP4).
-4. PRs: the original brief forbade opening PRs without your authorization. None has been opened.
+1. Prepare the operator decision brief from §6.
+2. Residuals R-1…R-7 in `R6-dispositions.md` §4 (R-1 neutral role bodies after DOD-12; R-2 every runtime check; R-6 RS-9; R-7 a cluster-scoped baseline deny for project namespaces at DP4).
+3. PRs: the original brief forbade opening PRs without your authorization. None has been opened.
 
 ## 6. Decisions only the operator can make
 
@@ -114,7 +113,7 @@ The full list is in `12-amendments.md`. The ones that unblock the most:
 | Role ConfigMap generator tests; output | 12 tests OK; output valid |
 | PostgreSQL state schema (real PostgreSQL 16) | 52 tests OK |
 | Admission policies (CEL compile and behavioural cases) | 131 expressions compiled; 125 cases / 143 decisions; 0 mismatches |
-| Charts | 56 passed, 0 failed, 0 skipped |
+| Charts | 58 passed, 0 failed, 0 skipped |
 
 Mutation checks run this round (each weakened rule made at least one test fail): DB 7 (plan_proposal id branch, kind writable, `PL-` pattern, admission TTL, mandatory hard preconditions, write-fact separation, role-less jobspec formulas); generator 4; charts 1 (`db-paths`).
 

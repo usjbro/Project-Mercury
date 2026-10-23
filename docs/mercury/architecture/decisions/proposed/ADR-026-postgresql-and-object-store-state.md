@@ -46,7 +46,7 @@ R5 §3.3 showed that the ledger writer's uid can forge a consistent v1 ledger. R
    - environmental classification only from platform signals.
 8. **Operator control of contracts** (R6 D18). Planner-originated contracts and every revision need an operator approval fact before READY. A task gets at most 3 revisions until an operator reset.
 9. **Artifacts in an S3-compatible store** (R6 D10, D11).
-   - Layout (owned by `20-…`): bucket `devplat-<project>`; `runs/<job-uid>/{result.json, result.bundle, agent.stream.jsonl, runner.json, fetch.log}` with caps; immutable `sha256/<hex>`; `src/<project>/<sha>.bundle`; `manifests/<task>/<attempt>/<dispatch>.json`.
+   - Layout (owned by `20-…`): bucket `devplat-<project>`; `runs/<job-uid>/{result.json, result.bundle, agent.stream.jsonl, runner.json, fetch.log}` with caps; immutable `sha256/<hex>`; `src/<project>/<sha>.bundle`; `manifests/<task>/<attempt>/<role>-d<dispatch>.json`.
    - **Pods never reach the store.** They upload only to `devplat-artifact-gateway`, with a per-Job one-time token that PostgreSQL authorises. The gateway writes with its own credential.
    - The store product is an operator decision: an external S3-compatible endpoint, or a filesystem/PVC on the workstation. MinIO is an option only, with the caveat in `20-…` §1.
 10. **v1 stays the local mode.** Migration happens through an import tool that replays every v1 record through `record_event()`. v1 facts are not imported as authenticated.

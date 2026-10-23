@@ -640,7 +640,8 @@ CREATE TABLE artifacts (
   sha256          text NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
   bucket          text NOT NULL,
   object_key      text NOT NULL,
-  alias_key       text CHECK (alias_key ~ '^manifests/[A-Za-z0-9._-]+/[0-9]+/[0-9]+\.json$'),
+  -- manifests/<task>/<attempt>/<role>-d<dispatch>.json per dispatch, or .../gate-G<n>.json per gate (R6 re-check RC-1)
+  alias_key       text CHECK (alias_key ~ '^manifests/[A-Za-z0-9._-]+/[0-9]+/([a-z0-9-]+-d[0-9]+|gate-G[1-7])\.json$'),
   size_bytes      bigint NOT NULL CHECK (size_bytes >= 0),
   media_type      text NOT NULL,
   kind            text NOT NULL REFERENCES artifact_kinds,
@@ -657,6 +658,7 @@ CREATE TABLE artifacts (
   CONSTRAINT artifacts_alias_check CHECK (alias_key IS NULL OR kind = 'evidence_manifest'),
   FOREIGN KEY (project_id, task_id) REFERENCES tasks
 );
+CREATE UNIQUE INDEX artifacts_alias_unique ON artifacts (project_id, alias_key) WHERE alias_key IS NOT NULL;   -- one object per alias (RC-1)
 
 -- Authenticated human statements. Append-only; a revocation is a newer fact with the same key.
 -- Written ONLY by record_operator_fact() (devplat_api) for an allowed operator identity (R6 D2).
@@ -1819,6 +1821,10 @@ BEGIN
   IF NOT FOUND THEN PERFORM _refuse(format('unknown artifact kind %s', p_kind)); END IF;
   IF p_size_bytes > ak.max_bytes THEN PERFORM _refuse(format('%s artifact over %s bytes', p_kind, ak.max_bytes)); END IF;
   v_until := now() + make_interval(days => CASE p_retention_class WHEN 'ephemeral' THEN 7 ELSE ak.default_retention_days END);
+  IF p_alias_key IS NOT NULL AND EXISTS (SELECT 1 FROM artifacts x WHERE x.project_id = p_project_id AND x.alias_key = p_alias_key
+                                                                    AND x.sha256 <> p_sha256) THEN
+    PERFORM _refuse(format('manifest alias %s is already bound to another object', p_alias_key));
+  END IF;
   INSERT INTO artifacts (project_id, sha256, bucket, object_key, alias_key, size_bytes, media_type, kind, task_id, job_id, gate,
                          retention_class, retain_until)
   VALUES (p_project_id, p_sha256, 'devplat-' || p_project_id, 'sha256/' || p_sha256, p_alias_key, p_size_bytes, p_media_type,

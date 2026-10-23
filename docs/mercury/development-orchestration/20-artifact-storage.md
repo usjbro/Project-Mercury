@@ -27,7 +27,7 @@ One bucket per project: **`devplat-<project>`** (enforced by DB constraint), plu
 | — run total | | | **512 MiB** | |
 | `src/<project>/<sha>.bundle` | Source bundle for a Job's fetch | gitbroker | — | Rebuildable cache |
 | `sha256/<hex>` | **Immutable evidence**: every object an event cites, under its own SHA-256 | controller (copy after verification) | per kind (§7) | Immutable (§5) |
-| `manifests/<task>/<attempt>/<dispatch>.json` | Evidence manifest of one dispatch (§6); also stored as `sha256/<hex>` and recorded as `artifacts.alias_key` | controller | 16 MiB | Immutable |
+| `manifests/<task>/<attempt>/<role>-d<dispatch>.json`, `manifests/<task>/<attempt>/gate-G<n>.json` | Evidence manifest of one dispatch, or of one gate (§6); also stored as `sha256/<hex>` and recorded as `artifacts.alias_key` | controller | 16 MiB | Immutable |
 | `checkpoints/<id>.json` (platform bucket) | Signed chain checkpoints (`19-…` §8) | controller | 16 MiB | Immutable |
 
 The names are a closed list (`run_object_caps`): any other name is refused by `authorize_upload()` (tested). The per-object caps sum to 449 MiB, so the 512 MiB total is a backstop that the current list cannot reach.
@@ -85,11 +85,11 @@ Rules:
 
 ## 6. Evidence manifests
 
-After each dispatch is collected (and at each gate), the controller writes `manifests/<task>/<attempt>/<dispatch>.json`:
+After each dispatch is collected the controller writes `manifests/<task>/<attempt>/<role>-d<dispatch>.json` (role as in the Job name, `jobspec.role_code()`), and at each gate `manifests/<task>/<attempt>/gate-G<n>.json`. The role is part of the key because one attempt runs Jobs of several roles (R6 re-check RC-1); the DB refuses a second object under one alias:
 
 ```json
-{"schema": "devplat.evidence_manifest.v1", "project": "mercury", "task": "DT-0001", "attempt": 2, "dispatch": 1,
- "job": {"name": "dp-mercury-dt-0001-a2", "uid": "<uid>", "image": "<digest>"},
+{"schema": "devplat.evidence_manifest.v1", "project": "mercury", "task": "DT-0001", "attempt": 2, "role": "mdev-backend-engineer", "dispatch": 1,
+ "job": {"name": "dp-mercury-dt-0001-a2-backend-engineer-d1", "uid": "<uid>", "image": "<digest>"},
  "config_version": "<project config_version>", "event": {"seq": 6, "hash": "<task_events.hash>", "gate": "G2"},
  "items": [{"name": "result.json", "kind": "result", "sha256": "<hex>", "size": 1834}]}
 ```

@@ -47,6 +47,7 @@ The R6 security review found four weaknesses in the first version of this ADR:
 7. **`devplat-model-gateway` is the only holder of LLM provider keys (D12).** It allows only `POST /v1/messages` and `POST /v1/messages/count_tokens`. It rejects:
    - every tool except one without `type` or with `type: custom` (an allowlist: web search, web fetch, code execution, computer use and any server-side type added later are refused);
    - image or document content blocks whose `source.type` is not `base64` or `text` (a `url` source makes the provider fetch an agent-chosen URL; a `file` source refers to the Files API), and any `file_id` (R6 re-check RS-1);
+   - any content block type other than `text`, `image`, `document`, `tool_use`, `tool_result`, `thinking`, `redacted_thinking`, and any top-level request field outside an allowlist (`model`, `messages`, `system`, `max_tokens`, `tools`, `tool_choice`, `temperature`, `top_p`, `top_k`, `stop_sequences`, `stream`, `metadata`, `thinking`) — so `mcp_servers`, `container` and future fields are refused without being named (C-1);
    - `mcp_servers` and `container`;
    - Files and Batches APIs;
    - non-allow-listed `anthropic-beta` headers.

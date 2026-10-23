@@ -1024,10 +1024,17 @@ class T09IsolationAndStatus(Base):
                                   f"'application/json', 'result', NULL, NULL, NULL, 'evidence')", role=R["ctl"]),
                      "result artifact over 1048576 bytes")
         self.refused(lambda: psql(f"SELECT * FROM devplat.register_artifact({lit(self.project)}, {lit(sha('m'))}, 10, "
-                                  f"'application/json', 'result', NULL, NULL, NULL, 'evidence', 'manifests/T/1/1.json')",
+                                  f"'application/json', 'result', NULL, NULL, NULL, 'evidence', 'manifests/T/1/verifier-d1.json')",
                                   role=R["ctl"]), "artifacts_alias_check")
-        psql(f"SELECT * FROM devplat.register_artifact({lit(self.project)}, {lit(sha('m'))}, 10, 'application/json', "
-             f"'evidence_manifest', NULL, NULL, NULL, 'evidence', 'manifests/T-0001/1/1.json')", role=R["ctl"])
+        man = lambda h, alias: psql(f"SELECT * FROM devplat.register_artifact({lit(self.project)}, {lit(sha(h))}, 10, "
+                                    f"'application/json', 'evidence_manifest', NULL, NULL, NULL, 'evidence', {lit(alias)})", role=R["ctl"])
+        # R6 re-check RC-1: one alias per (task, attempt, role, dispatch) or per gate; never the role-less form
+        man("m", "manifests/T-0001/1/backend-engineer-d1.json")
+        man("m2", "manifests/T-0001/1/verifier-d1.json")
+        man("m3", "manifests/T-0001/1/gate-G2.json")
+        self.refused(lambda: man("m4", "manifests/T-0001/1/1.json"), "artifacts_alias_key_check")
+        self.refused(lambda: man("m5", "manifests/T-0001/1/verifier-d1.json"), "already bound to another object")
+        man("m2", "manifests/T-0001/1/verifier-d1.json")      # same object again: idempotent
         self.assertEqual(psql("SELECT count(*) FROM devplat.expire_artifacts(100)", role=R["ctl"]), "0")
 
 

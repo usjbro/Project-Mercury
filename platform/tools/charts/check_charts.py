@@ -109,6 +109,8 @@ NEG = [
     ("model-gateway URL content source (RS-1)", DP + ["-f", V("devplat-test.yaml"), "--set", "modelGateway.policy.allowedContentSourceTypes[2]=url"], "schema"),
     ("model-gateway server tool type allowed (RS-1)", DP + ["-f", V("devplat-test.yaml"), "--set", "modelGateway.policy.allowedToolTypes[1]=web_fetch_20250910"], "schema"),
     ("model-gateway file references allowed (RS-1)", DP + ["-f", V("devplat-test.yaml"), "--set", "modelGateway.policy.rejectFileReferences=false"], "schema"),
+    ("model-gateway extra content block type (C-1)", DP + ["-f", V("devplat-test.yaml"), "--set", "modelGateway.policy.allowedContentBlockTypes[7]=container_upload"], "schema"),
+    ("model-gateway extra request field (C-1)", DP + ["-f", V("devplat-test.yaml"), "--set", "modelGateway.policy.allowedRequestFields[13]=mcp_servers"], "schema"),
     ("model-gateway second provider (RS-8)", DP + ["-f", V("devplat-test.yaml"), "--set", "modelGateway.providers[1].name=openai", "--set", "modelGateway.providers[1].host=api.openai.com"], "schema"),
     ("model-gateway project from path (D12)", DP + ["-f", V("devplat-test.yaml"), "--set", "modelGateway.policy.projectFrom=path"], "schema"),
     ("gitbroker caller auth other than projected token (S-23)", DP + ["-f", V("devplat-test.yaml"), "--set", "gitbroker.callerAuth.mode=none"], "schema"),
