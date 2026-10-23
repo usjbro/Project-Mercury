@@ -125,7 +125,7 @@
           "project_id": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9-]{1,22}[a-z0-9]$",
-            "description": "Only for a declared cross-project dependency; default = this contract's project."
+            "description": "Reserved for declared cross-project dependencies, which are NOT implemented: the DB refuses a value other than this contract's project (R6 re-check RA-3)."
           },
           "path": {
             "type": "string",

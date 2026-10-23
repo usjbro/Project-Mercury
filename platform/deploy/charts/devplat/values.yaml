@@ -13,7 +13,7 @@
 #   devplat-gitbroker-github-app        (keys: app-id, private-key.pem)               -> devplat-gitbroker
 #   devplat-model-gateway-llm-keys      (keys: <provider>-api-key, and <provider>-api-key-reduced for
 #                                        reduced-assurance projects, D16)              -> devplat-model-gateway
-#   devplat-db-controller | devplat-db-api | devplat-db-model-gateway (kubernetes.io/basic-auth)
+#   devplat-db-controller | devplat-db-api | devplat-db-model-gateway | devplat-db-artifact-gateway (kubernetes.io/basic-auth)
 #   devplat-db-migrator                 (basic-auth; the ONLY login that owns/changes the schema, D9) -> devplat-migrator
 #   devplat-artifacts-controller | -gitbroker | -gitbroker-fetch | -api | -artifact-gateway
 #                                       (keys: access-key-id, secret-access-key)      -> the named component
@@ -170,13 +170,16 @@ modelGateway:
   providers:
     - name: anthropic
       host: api.anthropic.com
-  # Request policy (D12). The endpoint list, the server-tool rejection and the token binding are fixed by the
-  # schema; only the beta-header allowlist is configurable (empty = no anthropic-beta header passes).
+  # Request policy (D12, R6 re-check RS-1). The endpoint list, the tool-type and content-source allowlists, the
+  # file-reference rejection and the token binding are fixed by the schema; only the beta-header allowlist is configurable (empty = no anthropic-beta header passes).
   policy:
     allowedEndpoints:
       - "POST /v1/messages"
       - "POST /v1/messages/count_tokens"
     rejectServerTools: true           # web_search, web_fetch, code_execution, computer use, any server-side tool type
+    allowedToolTypes: [custom]        # allowlist (RS-1): a tool without `type` or with type custom; anything else refused
+    allowedContentSourceTypes: [base64, text]   # image/document source types (RS-1): no url (provider-side fetch), no file
+    rejectFileReferences: true        # any file_id in the request (RS-1)
     rejectMcpServers: true            # request field mcp_servers
     rejectContainer: true             # request field container
     rejectFilesAndBatches: true       # Files and Message Batches APIs (not in allowedEndpoints anyway)

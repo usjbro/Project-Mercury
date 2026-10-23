@@ -201,7 +201,7 @@ environments:
   - id: k8s-exec
     kind: kubernetes_exec
     purpose: agent Jobs (all 12 roles + planner), no project secrets
-    task_kinds: [planning, design, implementation, test, review, integration]
+    task_kinds: [planning, plan_proposal, design, implementation, test, review, integration]
     ref: "doc 16; namespace proj-mercury-exec"
   - id: k8s-test
     kind: kubernetes_ephemeral_test
@@ -275,7 +275,8 @@ identities:
 security:
   # Development-time restrictions for agent tasks on this repository (devorch contracts, guard hook, CLAUDE.md).
   restricted_paths:
-    # docs/** and .github/** below are a RECOMMENDED default pending operator decision DOD-23 (not decided).
+    # docs/** below is a RECOMMENDED default pending operator decision DOD-23 (not decided); .github/** is required
+    # for every non-draft project by CI hardening H8 (R6 D13; validate_projects.py).
     - "docs/**"                      # design changes only by operator-approved amendment (CLAUDE.md; 08-… §2 D7–D8 note)
     - ".github/**"                   # CI, workflows, CODEOWNERS: restricted until the operator decides otherwise (open question Q-M3, 26-… §2.3)
     - ".claude/**"                   # Claude Code config (guard hook PATH_DENY; SEC-310)
@@ -316,7 +317,7 @@ agent_permissions:
     mdev-ai-integration-engineer: {enabled: true, writes: true, path_scopes: ["src/adapters/claude/**", "src/adapters/codex/**", "src/schemas/**", "scripts/gen-wire-schemas.ts", "test/fakes/agents/**", "test/**"], task_kinds: [implementation], ref: gen_agents.py 05}
     mdev-platform-integration-engineer: {enabled: true, writes: true, path_scopes: ["src/adapters/github/**", "src/adapters/linear/**", "src/app/inbox-processor.ts", "src/app/outbox-worker.ts", "test/mocks/**", "test/**"], task_kinds: [implementation], ref: gen_agents.py 06}
     mdev-security-engineer: {enabled: true, writes: true, path_scopes: ["src/adapters/process/**", "src/adapters/git/**", "src/adapters/keychain/**", "src/adapters/presence/**", "packaging/agent/**", "src/core/policies/redaction*", "test/**"], task_kinds: [implementation, security_review], ref: gen_agents.py 07}
-    mdev-devops-engineer: {enabled: true, writes: true, path_scopes: ["packaging/**", "package.json", "package-lock.json", "scripts/**"], task_kinds: [implementation, release], ref: "gen_agents.py 08 (image builds are BuildKit Jobs, not an agent kind; builds disabled by default, R6 D20) (excl. packaging/agent/**, scripts/gen-wire-schemas.ts — enforced by contracts). .github/workflows/** is in the v1 scope but restricted here until Q-M3 is answered"}
+    mdev-devops-engineer: {enabled: true, writes: true, path_scopes: ["packaging/**", "package.json", "package-lock.json", "scripts/**"], task_kinds: [implementation, release], ref: "gen_agents.py 08 (image builds run in devplat CI, not in the cluster, doc 22 O-5; in-cluster builds are disabled by default, R6 D20) (excl. packaging/agent/**, scripts/gen-wire-schemas.ts — enforced by contracts). .github/workflows/** is in the v1 scope but restricted here until Q-M3 is answered"}
     mdev-test-automation-engineer: {enabled: true, writes: true, path_scopes: ["test/**"], task_kinds: [test], ref: gen_agents.py 09}
     mdev-reliability-engineer: {enabled: true, writes: true, path_scopes: ["test/recovery/**", "test/fault/**"], task_kinds: [reliability, reliability_review], ref: "gen_agents.py 10 (Mac procedures are mac_validation tasks of the operator lane, not of this role)"}
     mdev-code-reviewer: {enabled: true, writes: false, path_scopes: [], task_kinds: [code_review], ref: gen_agents.py 11}

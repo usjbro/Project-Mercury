@@ -22,6 +22,7 @@ Ingress: uploads :8082 from exec, build and test pods; admin :9444 (admin channe
   value: "result.json,result.bundle,agent.stream.jsonl,runner.json,fetch.log"`
   (toString (int $l.resultJsonBytes)) (toString (int $l.resultBundleBytes)) (toString (int $l.logsBytes)) (toString (int $l.totalPerRunBytes)) -}}
 {{- $env = printf "%s\n%s" $env (include "devplat.artifactsEnv" (dict "root" . "component" "artifact-gateway")) -}}
+{{- $env = printf "%s\n%s" $env (include "devplat.dbEnv" (dict "root" . "role" "artifact-gateway")) -}}
 {{ include "devplat.workload" (dict "root" . "name" "devplat-artifact-gateway" "key" "artifactGateway" "comp" .Values.artifactGateway "replicas" .Values.artifactGateway.replicas
     "ports" (list (dict "name" "upload" "containerPort" 8082 "servicePort" 8082) (dict "name" "admin" "containerPort" 9444 "servicePort" 9444) (dict "name" "metrics" "containerPort" 9090 "servicePort" 9090))
     "probe" (dict "readyPath" "/readyz" "livePath" "/healthz" "port" "upload")

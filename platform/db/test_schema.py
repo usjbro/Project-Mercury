@@ -25,6 +25,9 @@ SCHEMA = os.environ.get("DEVPLAT_SCHEMA", os.path.join(HERE, "schema.sql"))   # 
 ROLES_SQL = os.path.join(HERE, "roles.sql")
 RULES = json.load(open(os.path.join(HERE, "devorch_v2_rules.json")))
 CATALOGUE = os.path.join(PLATFORM, "agents", "execution-profiles.yaml")
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.path.join(PLATFORM, "controller"))
+import jobspec as JOBSPEC  # noqa: E402
 DEFAULT_SOCK = "/tmp/claude-0/-home-user-Project-Mercury/16854e63-26a2-5af1-9adb-3e58b440561e/scratchpad/pg"
 PGBIN = "/usr/lib/postgresql/16/bin"
 
@@ -130,6 +133,7 @@ def setUpModule():
         raise RuntimeError("schema.sql failed to load:\n" + r.stderr)
     profiles, digest = load_catalogue()
     psql(f"SELECT devplat.load_role_catalogue('test-{digest[:12]}', {lit(digest)}, {lit(profiles)})", role=R["migrator"])
+    psql(f"SELECT devplat.set_mandatory_hard_preconditions({arr(HARD)})", role=R["migrator"])
     psql(f"SELECT devplat.set_operator_identities({lit(ISSUER)}, 'devplat-api', {lit([{'subject': OPERATOR}])})",
          role=R["migrator"])
     print(f"\n[test_schema] PostgreSQL: {CONN['mode']}; database {DB}", file=sys.stderr)
@@ -308,8 +312,12 @@ class Base(unittest.TestCase):
             dispatch_no = int(psql(f"SELECT coalesce(max(dispatch_no), 0) + 1 FROM devplat.job_runs WHERE project_id = {lit(p)} "
                                    f"AND task_id = {lit(tid)} AND attempt = {attempt} AND role = {lit(role)}"))
         adm = self.admit(tid, role, attempt, project=p)
-        key = key or sha(f"{p}|{tid}|{attempt}|{role}|{dispatch_no}|{secrets.token_hex(4)}")
-        name = f"dp-{p}-{tid.lower()}-a{attempt}-{role[:4]}{dispatch_no}-{secrets.token_hex(2)}"[:63].rstrip("-")
+        # the controller's own formulas (platform/controller/jobspec.py), so a name or key collision between the
+        # roles of one attempt (e.g. implementer and verifier, R6 re-check RA-1) fails here as it would in production
+        core = psql(f"SELECT c.core_sha256 FROM devplat.task_contracts c JOIN devplat.tasks t USING (project_id, task_id) "
+                    f"WHERE t.project_id = {lit(p)} AND t.task_id = {lit(tid)} AND c.contract_version = t.contract_version")
+        key = key or JOBSPEC.idempotency_key(p, tid, core, attempt, role, dispatch_no)
+        name = JOBSPEC.job_name(p, tid, attempt, role, dispatch_no)
         out = psql(f"SELECT r_job_id FROM devplat.dispatch_job({lit(p)}, {lit(tid)}, {attempt}, {lit(role)}, {dispatch_no}, "
                    f"{adm}, {lit(key)}, NULL, 'proj-{p}-exec', {lit(name)}, {lit(HOLDER)}, {TOKENS[(p, tid)]})", role=R["ctl"])
         return int(out)
@@ -663,6 +671,23 @@ class T06Execution(Base):
         self.assertEqual(psql(f"SELECT count(*) FROM devplat.admission_decisions WHERE project_id = {lit(p)} AND task_id = '{t}' "
                               f"AND decision = 'hold' AND reason = 'project_limit'"), "1")
 
+    def test_assigned_role_and_verifier_jobs_of_one_attempt(self):
+        # R6 re-check RA-1: the implementer's Job and the verifier's Job of the same attempt and dispatch ordinal are
+        # two job_runs rows; with role-less jobspec names/keys the second dispatch_job() hit an idempotency collision
+        t = "AD-0003"
+        self.new_task(t, "implementation")
+        self.to_running(t)
+        a = self.dispatch(t, "mdev-backend-engineer", dispatch_no=1)
+        h = head(t)
+        res = self.result(t, "implementation", head_commit=h, tests=[{"id": "unit", "exit_code": 0, "outcome": "passed"}])
+        self.ev(t, "implementation_completed", [self.fev("result_file")], head_commit=h, payload={"result": res})
+        self.verify_tests(t, h)                                   # verifier, dispatch_no 1 of its own role
+        self.assertEqual(self.ev(t, "tests_passed", [self.fev("test_run")], head_commit=h)["gate"], "G2")
+        rows = psql(f"SELECT count(DISTINCT idempotency_key) || ',' || count(DISTINCT k8s_job_name) || ',' || count(*) "
+                    f"FROM devplat.job_runs WHERE project_id = {lit(self.project)} AND task_id = '{t}' AND attempt = 1")
+        self.assertEqual(rows, "2,2,2")
+        self.assertNotEqual(a, 0)
+
     def test_admission_older_than_ten_minutes_is_refused(self):
         # 16-... step 6, 17-... §2 rule 5: dispatch_job() needs an admit decision at most 10 minutes old
         if psql("SELECT rolsuper FROM pg_roles WHERE rolname = current_user") != "t":
@@ -816,6 +841,25 @@ class T07SideEffects(Base):
         self.make_project(q, "onboarding")
         self.refused(lambda: psql(f"SELECT * FROM devplat.enqueue_outbox({lit(q)}, 'github', 'open_draft_pr', 'gh:{q}:pr', "
                                   f"'{{}}'::jsonb)", role=R["ctl"]), f"project {q} is onboarding")
+
+    def test_controller_cannot_drop_mandatory_hard_preconditions(self):
+        # R6 re-check RS-5: a compromised controller activating a project with a list of its choosing
+        q = "m" + secrets.token_hex(3)
+        self.make_project(q, "onboarding")
+        self.fact("note", "verified", project=q)
+        up = lambda hard, st="onboarding", wf=None: psql(
+            f"SELECT devplat.upsert_project({lit(q)}, 'M', NULL, NULL, 'cfg-2', 'r@2', {lit(st)}, 'standard', {arr(hard)}, "
+            f"'{{}}'::jsonb, 5, NULL, '{{}}'::jsonb, {lit(wf)})", role=R["ctl"])
+        self.refused(lambda: up(["note"], "active"), "must include the platform's mandatory keys {DOD-02,DOD-13}")
+        self.refused(lambda: up(["DOD-02", "note"]), "mandatory keys {DOD-13}")
+        self.refused(lambda: up(HARD, wf="DOD-02"), "Linear writes need their own fact")
+        self.refused(lambda: up(HARD, wf="REDUCED-ASSURANCE"), "reserved key")
+        self.refused(lambda: up(HARD + ["X-1"], wf="X-1"), "Linear writes need their own fact")
+        up(HARD + ["X-1"], wf="LINEAR-WRITE")
+        self.refused(lambda: psql("SELECT devplat.set_mandatory_hard_preconditions(ARRAY['note'])", role=R["ctl"]),
+                     "permission denied")
+        self.refused(lambda: psql("INSERT INTO devplat.mandatory_hard_preconditions VALUES ('x')", role=R["ctl"]),
+                     "permission denied")
 
     def test_linear_writes_need_configured_project_fact(self):
         q = "l" + secrets.token_hex(3)
@@ -1104,6 +1148,22 @@ class T10DevorchRulesPorted(Base):
         r = "CR-0002"
         self.refused(lambda: self.new_task(r, "planning", body=self.body(r, "planning", allowed_paths=["src/**"])),
                      "read-only kinds must have allowed_paths []")
+
+    def test_cross_project_dependency_refused(self):
+        # R6 re-check RA-3: contract v2 allows dependencies[].project_id; the DB does not implement it yet
+        other = "x" + secrets.token_hex(3)
+        self.make_project(other, "active")
+        self.new_task("XP-0001", "implementation", project=other)
+        self.new_task("XP-0001", "implementation")           # same id in this project
+        t = "XP-0002"
+        dep = {"task_id": "XP-0001", "required_state": "COMPLETED", "project_id": other}
+        self.refused(lambda: self.new_task(t, "implementation", body=self.body(t, "implementation", dependencies=[dep])),
+                     f"cross-project dependency on {other}/XP-0001 is not implemented")
+        self.refused(lambda: self.new_task("XP-0003", "implementation",
+                                           body=self.body("XP-0003", "implementation", dependencies=[{"task_id": "XP-0999"}])),
+                     "dependency XP-0999 is not a task of project")
+        self.new_task("XP-0004", "implementation", body=self.body("XP-0004", "implementation",
+                      dependencies=[{"task_id": "XP-0001", "required_state": "COMPLETED", "project_id": self.project}]))
 
     def test_path_ownership_conflict(self):
         # devorch test_path_ownership_conflict: an active owner of src/core/** blocks a contract for src/core/x/**

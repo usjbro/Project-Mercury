@@ -350,6 +350,10 @@ CREATE TABLE oidc_issuers (
   enabled            boolean NOT NULL DEFAULT true
 );
 -- Allowed operator subjects (chart operatorIdentity.allowedSubjects, minItems 1). project_id NULL = all projects. R6 D2.
+-- Platform invariant (R6 D1, re-check RS-5): fact keys every project's hard_preconditions must include. Set only
+-- by the migration Job (set_mandatory_hard_preconditions); the controller cannot narrow a project's list below it.
+CREATE TABLE mandatory_hard_preconditions (fact_key text PRIMARY KEY CHECK (fact_key ~ '^[A-Za-z0-9._:-]{1,64}$'));
+
 CREATE TABLE operator_identities (
   issuer     text NOT NULL REFERENCES oidc_issuers,
   subject    text NOT NULL,
@@ -1011,6 +1015,15 @@ BEGIN
   RETURN n;
 END $$;
 
+CREATE FUNCTION set_mandatory_hard_preconditions(p_keys text[]) RETURNS int
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = devplat, pg_catalog, pg_temp AS $$
+BEGIN
+  IF coalesce(cardinality(p_keys), 0) < 1 THEN PERFORM _refuse('at least one mandatory hard precondition is required'); END IF;
+  DELETE FROM mandatory_hard_preconditions;
+  INSERT INTO mandatory_hard_preconditions SELECT DISTINCT x FROM unnest(p_keys) x;
+  RETURN (SELECT count(*) FROM mandatory_hard_preconditions);
+END $$;
+
 -- =====================================================================================================
 -- 9. Controller API (SECURITY DEFINER; EXECUTE granted to the controller role only)
 -- =====================================================================================================
@@ -1024,6 +1037,19 @@ DECLARE v_role text; v_missing text[];
 BEGIN
   IF coalesce(cardinality(p_hard_preconditions), 0) < 1 THEN
     PERFORM _refuse('review_gates.hard_preconditions must list at least one fact key');
+  END IF;
+  -- R6 re-check RS-5: the controller supplies the list, so the platform's mandatory keys are enforced here
+  IF NOT EXISTS (SELECT 1 FROM mandatory_hard_preconditions) THEN
+    PERFORM _refuse('mandatory hard preconditions are not set (migration Job: set_mandatory_hard_preconditions)');
+  END IF;
+  v_missing := ARRAY(SELECT m.fact_key FROM mandatory_hard_preconditions m WHERE m.fact_key <> ALL (p_hard_preconditions)
+                     ORDER BY m.fact_key);
+  IF cardinality(v_missing) > 0 THEN
+    PERFORM _refuse(format('review_gates.hard_preconditions must include the platform''s mandatory keys %s', v_missing));
+  END IF;
+  IF p_linear_write_fact = ANY (p_hard_preconditions) OR p_linear_write_fact = 'REDUCED-ASSURANCE'
+     OR p_linear_write_fact IN (SELECT fact_key FROM mandatory_hard_preconditions) THEN
+    PERFORM _refuse(format('linear_write_fact %s is a hard precondition or reserved key; Linear writes need their own fact', p_linear_write_fact));
   END IF;
   INSERT INTO projects (project_id, display_name, github_repo, linear_team, config_version, registry_ref, status,
                         artifact_bucket, cost_usd_per_day, tokens_per_day, limits, linear_write_fact)
@@ -1262,6 +1288,13 @@ BEGIN
   VALUES (p_project_id, p_task_id, p_contract_version, p_core_sha256, p_body, p_max_attempts, p_origin,
           p_origin = 'planner' OR v_first IS NOT NULL, p_holder);
   FOR d IN SELECT x FROM jsonb_array_elements(coalesce(p_body->'dependencies', '[]')) x LOOP
+    -- R6 re-check RA-3: cross-project dependencies are designed only; refuse them rather than bind to a same-id task
+    IF d ? 'project_id' AND d->>'project_id' <> p_project_id THEN
+      PERFORM _refuse(format('cross-project dependency on %s/%s is not implemented', d->>'project_id', d->>'task_id'));
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM tasks WHERE project_id = p_project_id AND task_id = d->>'task_id') THEN
+      PERFORM _refuse(format('dependency %s is not a task of project %s', d->>'task_id', p_project_id));
+    END IF;
     INSERT INTO task_dependencies VALUES (p_project_id, p_task_id, p_contract_version, d->>'task_id',
       coalesce(d->>'required_state', 'COMPLETED'), d->>'path', d->>'sha256');
   END LOOP;
@@ -1678,7 +1711,7 @@ BEGIN
     IF t.attempt IS NOT NULL AND p_attempt <> t.attempt AND NOT (t.need_bump AND p_attempt = t.attempt + 1) THEN
       PERFORM _refuse(format('attempt %s is not dispatchable (current %s)', p_attempt, t.attempt));
     END IF;
-    IF p_role <> 'verifier' THEN PERFORM _check_dispatchable(p_project_id, t.kind, 'dispatch'); END IF;
+    PERFORM _check_dispatchable(p_project_id, t.kind, 'dispatch');   -- every role, the verifier included (re-check RA-8)
     SELECT * INTO a FROM admission_decisions WHERE decision_id = p_admission_id;
     IF NOT FOUND OR a.decision <> 'admit' OR a.project_id <> p_project_id OR a.task_id <> p_task_id
        OR a.attempt <> p_attempt OR a.role <> p_role OR a.decided_at < clock_timestamp() - interval '10 minutes' THEN
@@ -2119,7 +2152,8 @@ GRANT EXECUTE ON FUNCTION can_see(text), verify_chain(text, text), chain_digest(
   TO :"role_controller", :"role_api", :"role_readonly";
 
 -- migrator (deploy time): role catalogue and operator identities
-GRANT EXECUTE ON FUNCTION load_role_catalogue(text, text, jsonb), set_operator_identities(text, text, jsonb) TO :"role_migrator";
+GRANT EXECUTE ON FUNCTION load_role_catalogue(text, text, jsonb), set_operator_identities(text, text, jsonb),
+  set_mandatory_hard_preconditions(text[]) TO :"role_migrator";
 
 -- controller: functions only
 GRANT EXECUTE ON FUNCTION

@@ -29,20 +29,27 @@ def dns_label(s):
     return re.sub(r"[^a-z0-9-]+", "-", s.lower()).strip("-")
 
 
-def job_name(project_id, task_id, attempt, dispatch_no=1):
-    """Deterministic: the same (project, task, attempt, dispatch) always gives the same name, so a controller
+def role_code(role):
+    """Role segment of Job names: the catalogue role without the historical `mdev-` prefix ('verifier' as is)."""
+    return dns_label(role[5:] if role.startswith("mdev-") else role)
+
+
+def job_name(project_id, task_id, attempt, role, dispatch_no=1):
+    """Deterministic: the same (project, task, attempt, role, dispatch) always gives the same name, so a controller
     retry after a crash gets AlreadyExists and adopts the existing Job instead of starting a second run.
-    dispatch_no (job_runs.dispatch_no, 19-…) distinguishes environmental retries within one attempt, which must
-    get a NEW Job rather than adopt the failed one."""
-    base = f"dp-{dns_label(project_id)}-{dns_label(task_id)}-a{attempt}-d{dispatch_no}"
+    The role is part of the name because one attempt runs Jobs of several roles (the assigned role and the
+    verifier, R6 D8); the DB slot is UNIQUE (project, task, attempt, role, dispatch_no) (19-…, R6 re-check RA-1).
+    dispatch_no (job_runs.dispatch_no) distinguishes environmental retries of one role within one attempt, which
+    must get a NEW Job rather than adopt the failed one."""
+    base = f"dp-{dns_label(project_id)}-{dns_label(task_id)}-a{attempt}-{role_code(role)}-d{dispatch_no}"
     if len(base) <= NAME_MAX - 9:          # leave room for the "-contract" ConfigMap suffix
         return base
     h = hashlib.sha256(base.encode()).hexdigest()[:10]
     return f"{base[:NAME_MAX - 9 - 11].rstrip('-')}-{h}"
 
 
-def idempotency_key(project_id, task_id, contract_core_sha256, attempt, dispatch_no=1):
-    return hashlib.sha256(f"{project_id}|{task_id}|{contract_core_sha256}|{attempt}|{dispatch_no}".encode()).hexdigest()[:40]
+def idempotency_key(project_id, task_id, contract_core_sha256, attempt, role, dispatch_no=1):
+    return hashlib.sha256(f"{project_id}|{task_id}|{contract_core_sha256}|{attempt}|{role}|{dispatch_no}".encode()).hexdigest()[:40]
 
 
 def _hardened():
@@ -54,9 +61,9 @@ def build_job(contract, project, profile, defaults, run):
         if not DIGEST.fullmatch(img):
             raise ValueError(f"image must be pinned by digest: {img}")
     pid, tid, att, dno = project["project_id"], contract["task_id"], run["attempt"], run.get("dispatch_no", 1)
-    name = job_name(pid, tid, att, dno)
-    ns = project["execution_target"]["namespace_prefix"] + "-exec"
     role = profile["role"]
+    name = job_name(pid, tid, att, role, dno)
+    ns = project["execution_target"]["namespace_prefix"] + "-exec"
     net = profile["network_class"]
     wall_min = min(contract["budget"]["max_wall_minutes"], profile["max_wall_minutes"])
     turns = min(contract["budget"]["max_turns"], profile["max_turns"])
@@ -64,7 +71,7 @@ def build_job(contract, project, profile, defaults, run):
            f"{L}/dispatch": str(dno), f"{L}/role": role}
     labels = {"app.kubernetes.io/managed-by": "devplat-controller", **sel, f"{L}/kind": contract["kind"],
               f"{L}/network-class": net,
-              f"{L}/idempotency-key": idempotency_key(pid, tid, run["contract_core_sha256"], att, dno)}
+              f"{L}/idempotency-key": idempotency_key(pid, tid, run["contract_core_sha256"], att, role, dno)}
     annotations = {f"{L}/contract-core-sha256": run["contract_core_sha256"],
                    f"{L}/contract-version": str(contract["contract_version"]),
                    f"{L}/base-commit": contract["base_commit"],

@@ -44,7 +44,7 @@
     "schema_minor": {
       "type": "integer",
       "minimum": 0,
-      "description": "Additive changes (new optional fields) bump the minor. Readers ignore nothing: unknown fields are rejected, so a reader must support the file's minor. Minor 1 (R6): review_gates.hard_preconditions, security.reduced_assurance, statuses paused/archived, project id <= 24, catalogue role ids, bucket devplat-<project_id>. Minor 2: issue_tracker.write_fact (per-project Linear write fact)."
+      "description": "Additive changes (new optional fields) bump the minor. Readers ignore nothing: unknown fields are rejected, so a reader must support the file's minor. Minor 1 (R6): review_gates.hard_preconditions, security.reduced_assurance, statuses paused/archived, project id <= 24, catalogue role ids, bucket devplat-<project_id>. Minor 2: issue_tracker.write_fact (per-project Linear write fact). Minor 2 also: environments[].task_kinds value plan_proposal."
     },
     "project_id": {
       "$ref": "#/$defs/project_id"
@@ -514,9 +514,11 @@
                 "integration",
                 "build",
                 "planning",
-                "design"
+                "design",
+                "plan_proposal"
               ]
-            }
+            },
+            "description": "Work classes this environment runs, in a coarse vocabulary: catalogue kinds, except that `review` stands for every *_review kind and `build` for BuildKit image builds (not a task kind). Minor 2 adds plan_proposal (planner Jobs, R6 re-check RA-7)."
           },
           "requirements": {
             "type": "array",
@@ -1266,7 +1268,7 @@
           }
         }
       },
-      "description": "Declared dependencies on other projects, evaluated by the controller like contract dependencies[] (15-… §2, 17-… §9). No Job ever receives another project's code; only the dependency's completion fact or a published artifact digest crosses."
+      "description": "Declared dependencies on other projects. Designed, NOT implemented: the controller cannot evaluate them yet and register_contract() refuses a contract dependency on another project (R6 re-check RA-3). No Job ever receives another project's code."
     },
     "notes": {
       "type": "array",

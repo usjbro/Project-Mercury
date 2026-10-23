@@ -44,7 +44,7 @@ DEVPLAT_DNS = [{"to": [sys_peer("devplat-dns")], "ports": [{"protocol": "UDP", "
 
 default_deny(S); kube_dns(S); metrics(S)
 PROJECTS = ["mercury", "jupiter"]
-DB_CLIENTS = ["devplat-controller", "devplat-api", "devplat-model-gateway", "devplat-migrator"]
+DB_CLIENTS = ["devplat-controller", "devplat-api", "devplat-model-gateway", "devplat-artifact-gateway", "devplat-migrator"]
 np("controller", S, app("devplat-controller"), ["Egress"], egress=[
     {"to": [{"podSelector": PG}], "ports": tcp(5432)},
     {"to": [{"podSelector": app("devplat-gitbroker")}], "ports": tcp(8080)},
@@ -82,7 +82,7 @@ np("gitbroker-fetch", S, app("devplat-gitbroker-fetch"), ["Ingress", "Egress"],
 np("artifact-gateway", S, app("devplat-artifact-gateway"), ["Ingress", "Egress"],
    ingress=[{"from": [{"namespaceSelector": role_ns("exec", "build", "test")}], "ports": tcp(8082)},
             {"from": [{"podSelector": app("devplat-controller")}], "ports": tcp(9444)}],
-   egress=[*ART],
+   egress=[*ART, {"to": [{"podSelector": PG}], "ports": tcp(5432)}],
    comment="D10 artifact gateway: the ONLY artifact path of agent/build/test pods (per-Job one-time token, size caps per D11); writes runs/<job-uid>/ with its own S3 credential. Tokens are minted by the controller and authorized in PostgreSQL; 9444 is admin only.")
 np("model-gateway", S, app("devplat-model-gateway"), ["Ingress", "Egress"],
    ingress=[{"from": [{"namespaceSelector": role_ns("exec"), "podSelector": {"matchExpressions": wl("agent", "planner", "verifier")["matchExpressions"] + nc("model-only", "deps")["matchExpressions"]}}],
@@ -108,7 +108,7 @@ np("postgres", S, PG, ["Ingress", "Egress"],
    egress=[{"to": [{"podSelector": PG}], "ports": tcp(5432, 8000)},
            *ART,
            {"to": APISERVER, "ports": tcp(443, 6443)}],
-   comment="PostgreSQL (CloudNativePG Cluster devplat-pg): controller, api, model-gateway (budget role) and migrator; replication; operator status port; backups to the object store; instance manager to kube-apiserver.")
+   comment="PostgreSQL (CloudNativePG Cluster devplat-pg): controller, api, model-gateway (budget role), artifact-gateway (upload authorization) and migrator; replication; operator status port; backups to the object store; instance manager to kube-apiserver.")
 
 A = "devplat-artifacts"
 default_deny(A); kube_dns(A); metrics(A)

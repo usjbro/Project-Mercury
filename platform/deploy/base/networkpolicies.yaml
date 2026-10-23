@@ -194,6 +194,7 @@ spec:
       - devplat-controller
       - devplat-api
       - devplat-model-gateway
+      - devplat-artifact-gateway
       - devplat-migrator
   policyTypes:
   - Egress
@@ -481,6 +482,13 @@ spec:
     ports:
     - protocol: TCP
       port: 443
+  - to:
+    - podSelector:
+        matchLabels:
+          cnpg.io/cluster: devplat-pg
+    ports:
+    - protocol: TCP
+      port: 5432
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -751,8 +759,9 @@ metadata:
   namespace: devplat-system
   annotations:
     devplat.io/purpose: 'PostgreSQL (CloudNativePG Cluster devplat-pg): controller,
-      api, model-gateway (budget role) and migrator; replication; operator status
-      port; backups to the object store; instance manager to kube-apiserver.'
+      api, model-gateway (budget role), artifact-gateway (upload authorization) and
+      migrator; replication; operator status port; backups to the object store; instance
+      manager to kube-apiserver.'
 spec:
   podSelector: &id001
     matchLabels:
@@ -771,6 +780,9 @@ spec:
     - podSelector:
         matchLabels:
           app.kubernetes.io/name: devplat-model-gateway
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: devplat-artifact-gateway
     - podSelector:
         matchLabels:
           app.kubernetes.io/name: devplat-migrator

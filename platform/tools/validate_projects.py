@@ -237,6 +237,9 @@ def check(doc, file_stem, validator, cat=None):
     for g in doc["review_gates"].get("external_gates", []):
         if g["id"] in hp:
             errs.append(f"external_gates: '{g['id']}' is a hard precondition; list it only in review_gates.hard_preconditions")
+    rp = doc["security"]["restricted_paths"]
+    if status != "draft" and isinstance(rp, list) and ".github/**" not in rp:
+        errs.append("security.restricted_paths must include '.github/**' (CI hardening H8, R6 D13; re-check RS-7)")
     wf = doc["issue_tracker"].get("write_fact") if isinstance(doc["issue_tracker"], dict) else None
     if wf in hp:
         errs.append(f"issue_tracker.write_fact: '{wf}' is a hard precondition; Linear writes need their own fact (DOD-05)")
@@ -384,6 +387,7 @@ def self_test(validator):
         ("Linear writes without a write fact", "/issue_tracker", m(lambda d: d.update(issue_tracker={"kind": "linear", "team": "T", "project": "P", "write_mode": "comments"}))),
         ("write fact with read-only Linear", "/issue_tracker", m(lambda d: d.update(issue_tracker={"kind": "linear", "team": "T", "project": "P", "write_mode": "read_only", "write_fact": "LINEAR-WRITE"}))),
         ("write fact reuses a hard precondition", "Linear writes need their own fact", m(lambda d: d.update(issue_tracker={"kind": "linear", "team": "T", "project": "P", "write_mode": "comments", "write_fact": d["review_gates"]["hard_preconditions"][0]}))),
+        (".github/** not restricted", "must include '.github/**'", m(lambda d: d["security"].update(restricted_paths=[p for p in d["security"]["restricted_paths"] if p != ".github/**"]))),
         ("role not in the catalogue", "not a role of the platform catalogue", m(lambda d: d["agent_permissions"]["roles"].update({"mdev-rogue": {"enabled": False, "writes": False, "path_scopes": []}}))),
         ("task kind not given by the catalogue", "is not given to this role", m(lambda d: d["agent_permissions"]["roles"][first_role].update(task_kinds=["security_review"]))),
         ("read-only catalogue role made writable", "all read-only", m(lambda d: d["agent_permissions"]["roles"][first_ro].update(writes=True, path_scopes=[]))),

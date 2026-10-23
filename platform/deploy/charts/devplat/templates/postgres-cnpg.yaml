@@ -9,7 +9,7 @@ digest-pinned (S-22). No superuser access from applications.
 D9: the database owner (initdb.owner) is the migration login devplat_migrator (password from Secret
 devplat-db-migrator); devplat_owner is a NOLOGIN group role that owns the schema objects after migration.
 Runtime roles are managed roles whose passwords come from basic-auth Secrets the operator creates:
-devplat-db-controller, devplat-db-api, devplat-db-model-gateway. Their grants (controller = sole writer of task
+devplat-db-controller, devplat-db-api, devplat-db-model-gateway, devplat-db-artifact-gateway. Their grants (controller = sole writer of task
 state; none of them has DDL rights) are applied by the migrator Job (19-..., platform/db), not here.
 */}}
 apiVersion: postgresql.cnpg.io/v1
@@ -51,6 +51,12 @@ spec:
         login: true
         passwordSecret:
           name: devplat-db-model-gateway
+      # R6 re-check RS-4: uploads are authorized in PostgreSQL (authorize_upload(), complete_upload() only)
+      - name: devplat_artifact_gateway
+        ensure: present
+        login: true
+        passwordSecret:
+          name: devplat-db-artifact-gateway
   storage:
     size: {{ .Values.postgres.cnpg.storage.size }}
     {{- with .Values.postgres.cnpg.storage.storageClass }}
