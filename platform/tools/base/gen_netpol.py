@@ -83,7 +83,7 @@ np("artifact-gateway", S, app("devplat-artifact-gateway"), ["Ingress", "Egress"]
    ingress=[{"from": [{"namespaceSelector": role_ns("exec", "build", "test")}], "ports": tcp(8082)},
             {"from": [{"podSelector": app("devplat-controller")}], "ports": tcp(9444)}],
    egress=[*ART],
-   comment="D10 artifact gateway: the ONLY artifact path of agent/build/test pods (per-Job one-time token, size caps per D11); writes runs/<job-uid>/ with its own S3 credential. Controller mints/revokes tokens on 9444.")
+   comment="D10 artifact gateway: the ONLY artifact path of agent/build/test pods (per-Job one-time token, size caps per D11); writes runs/<job-uid>/ with its own S3 credential. Tokens are minted by the controller and authorized in PostgreSQL; 9444 is admin only.")
 np("model-gateway", S, app("devplat-model-gateway"), ["Ingress", "Egress"],
    ingress=[{"from": [{"namespaceSelector": role_ns("exec"), "podSelector": {"matchExpressions": wl("agent", "planner", "verifier")["matchExpressions"] + nc("model-only", "deps")["matchExpressions"]}}],
              "ports": tcp(8080)},

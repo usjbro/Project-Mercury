@@ -8,7 +8,7 @@
 # (the roles were first written for Mercury) and is kept for compatibility with the v1 contracts and definitions.
 # Role definition files (`agent_definition`) are read from the definition source repository at a pinned commit
 # (platform/tools/gen_role_configmap.py); they stay unchanged, and the generator prepends a fixed devplat runtime
-# preamble (R6 D23). Resource figures are PLANNING VALUES, not measurements: no agent Job has run on any cluster.
+# preamble (R6 D23) and a project section generated from the project configuration (R6 A-05). Resource figures are PLANNING VALUES, not measurements: no agent Job has run on any cluster.
 # Re-fit them from measured usage (17-... §10) before raising concurrency.
 schema: devplat.execution_profiles.v1
 status: Documented only

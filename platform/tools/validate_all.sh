@@ -16,8 +16,10 @@ run "project configs (schema + rules)"     python3 platform/tools/validate_proje
 run "project config validator self-test"   python3 platform/tools/validate_projects.py --self-test
 run "execution profiles schema"            python3 -c "import json,yaml,jsonschema;jsonschema.Draft202012Validator(json.load(open('platform/schemas/execution-profiles.schema.json'))).validate(yaml.safe_load(open('platform/agents/execution-profiles.yaml')))"
 run "task contract v2 example"             python3 -c "import json,jsonschema;jsonschema.Draft202012Validator(json.load(open('platform/schemas/task-contract.v2.schema.json'))).validate(json.load(open('platform/schemas/example-contract-v2.json')))"
+run "task contract v2 rules (schema == DB)" python3 platform/schemas/test_schemas.py
 run "base generated manifests up to date" bash -c 'T=$(mktemp -d); python3 platform/tools/base/gen_netpol.py $T/n.yaml >/dev/null && python3 platform/tools/base/gen_quotas.py $T/q.yaml >/dev/null && cmp -s $T/n.yaml platform/deploy/base/networkpolicies.yaml && cmp -s $T/q.yaml platform/deploy/base/quotas.yaml'
 run "base manifests (strict v1.33)"        python3 platform/tools/validate_k8s.py platform/deploy/base
+run "role ConfigMap generator tests"       python3 platform/tools/test_gen_role_configmap.py
 run "role ConfigMap generator output"      bash -c 'python3 platform/tools/gen_role_configmap.py --project mercury --namespace proj-mercury-exec --commit HEAD > /tmp/devplat-roles.yaml && python3 platform/tools/validate_k8s.py /tmp/devplat-roles.yaml'
 run "PostgreSQL state schema (real PG16)"  python3 platform/db/test_schema.py
 if [ -n "${GO:-}" ]; then run "admission policies (CEL compile + behavioural cases)" bash -c "GO=$GO platform/tools/admission/run.sh | tail -2 | grep -q '0 mismatches'"; else skip "admission CEL checks" "set GO"; fi

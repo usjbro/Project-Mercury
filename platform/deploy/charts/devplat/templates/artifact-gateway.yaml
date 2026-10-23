@@ -4,8 +4,10 @@ runs/<job-uid>/{result.json, result.bundle, agent.stream.jsonl, runner.json, fet
 one-time token from their <job>-io Secret (TTL = Job deadline + 15 min, D11). The gateway checks the token's
 (project, job uid), enforces the caps below and writes to bucket devplat-<project> with its own S3 credentials
 (Secret devplat-artifacts-artifact-gateway). Project pods never reach the object store; presigned URLs are used
-only between platform components. Ingress: uploads :8082 from exec, build and test pods; admin :9444 (the
-controller mints and revokes upload tokens) from the controller only (base NetworkPolicy).
+only between platform components. The controller mints the token and registers only its SHA-256
+(set_job_tokens()); every upload is authorized in PostgreSQL (authorize_upload()), never by gateway state.
+Ingress: uploads :8082 from exec, build and test pods; admin :9444 (admin channel only) from the controller only
+(base NetworkPolicy).
 */}}
 {{- $l := .Values.artifactGateway.limits -}}
 {{- $env := printf `- name: DEVPLAT_LIMIT_RESULT_JSON_BYTES

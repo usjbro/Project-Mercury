@@ -146,7 +146,7 @@ flowchart LR
 | Linear: read / write | ✓ | ✗ | ✗ | read; write ✗ until DOD-05 | ✗ | ✗ | ✗ | ✗ (files only) | ✗ | ✗ |
 | DB (PostgreSQL) | ✓ (break-glass) | own role (only writer of tasks and `task_events`) | ✗ | own role (facts, reads) | ✗ | ✗ | budget tables only | ✗ | ✗ | ✗ |
 | Object store (S3) | ✓ | read/write, evidence copy | ✗ | read evidence | write bundles | fetch: read `src/`; artifact-gateway: write `runs/` | ✗ | **✗ (no route, no URL; D10)** | ✗ | ✗ |
-| Artifact upload | — | mints tokens (9444) | ✗ | ✗ | ✗ | artifact-gateway receives | ✗ | per-Job token to artifact-gateway :8082, size caps D11 | same | same |
+| Artifact upload | — | mints tokens; registers only their SHA-256 (`set_job_tokens()`) | ✗ | ✗ | ✗ | artifact-gateway receives | ✗ | per-Job token to artifact-gateway :8082, size caps D11 | same | same |
 | LLM API | ✓ | gateway admin (budgets, tokens) | ✗ | ✗ | ✗ | ✗ | ✓ (keys) | via gateway, classes model-only/deps, D12 allowlist | ✗ | ✗ (never) |
 | Package registries | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | own project's read-only proxy, class deps | own project's proxy | own project's proxy, class deps |
 | Egress to internet | ✓ | ✗ | ✗ | 443 public (OIDC, Linear) | 443 public (GitHub) | object-store endpoint only | 443 public (provider) | ✗ | ✗ | ✗ |
@@ -197,8 +197,8 @@ Rules:
 | Capability | Minted by | Scope | Lifetime | In the pod |
 |---|---|---|---|---|
 | One-time bundle URL | gitbroker prepares `src/<project>/<sha>.bundle`; **gitbroker-fetch** serves it | One bundle, one download | ≤ 15 min after unsuspend | Secret `dp-<job>-io` |
-| Artifact upload token | controller, via artifact-gateway admin `:9444` | `runs/<job-uid>/{result.json, result.bundle, agent.stream.jsonl, runner.json, fetch.log}`; caps 1 MiB / 256 MiB / 64 MiB logs / 512 MiB total (D11) | Job deadline + 15 min | Secret `dp-<job>-io` |
-| Model-gateway token | model-gateway admin `:9443`, requested by the controller | `(project, job uid)`, token and cost budget; D12 endpoint allowlist | Revoked at Job end | Secret `dp-<job>-io` |
+| Artifact upload token | controller (random, per Job); only its SHA-256 is stored, by `set_job_tokens()`. Each upload is authorized in PostgreSQL by `authorize_upload()` (`20-…` §3), never by gateway state; artifact-gateway admin `:9444` is an admin channel only (run registration) and neither mints nor validates tokens | `runs/<job-uid>/{result.json, result.bundle, agent.stream.jsonl, runner.json, fetch.log}`; caps 1 MiB / 256 MiB / 64 MiB logs / 512 MiB total (D11) | Job deadline + 15 min | Secret `dp-<job>-io` |
+| Model-gateway token | controller (random, per Job), registered as a SHA-256 by the same `set_job_tokens()` call. Each request is authorized in PostgreSQL by `reserve_budget()` (token hash, Job phase, expiry, budgets); model-gateway admin `:9443` is an admin channel only | `(project, job uid)`, token and cost budget; D12 endpoint allowlist | Refused once the Job leaves `created`/`running` or at deadline + 15 min | Secret `dp-<job>-io` |
 
 The per-run Secret is type `Opaque`, `immutable`, owned by its Job and garbage-collected with it (VAP `devplat-controller-run-objects`). Pods may reference only `dp-*` Secrets (VAP `devplat-proj-pod-identity`). Presigned S3 URLs are used **only between platform components** (D10). Pods never see one, so they cannot be steered to PUT to an attacker's presigned URL (S-2).
 

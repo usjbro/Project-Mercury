@@ -69,6 +69,7 @@ INSERT INTO states VALUES ('NEW'), ('BLOCKED'), ('READY'), ('RUNNING'), ('AWAITI
   ('AWAITING_INTEGRATION'), ('AWAITING_HUMAN'), ('COMPLETED'), ('FAILED'), ('CANCELLED');
 
 -- devorch FULL_KINDS / SHORT_KINDS / READ_ONLY_KINDS / REVIEW_GATE; subtask id suffixes (check-contract rule).
+-- plan_proposal is the one devplat kind not in devorch (planner Jobs, doc 16 §10): SHORT, read-only, suffix p.
 CREATE TABLE task_kinds (
   kind              text PRIMARY KEY,
   lifecycle         text NOT NULL REFERENCES lifecycles,
@@ -76,7 +77,7 @@ CREATE TABLE task_kinds (
   needs_g4          boolean NOT NULL,          -- devorch needs_g4(): every FULL kind (TDD DoD D6)
   is_review         boolean NOT NULL,
   operator_evidence boolean NOT NULL,          -- completion needs an authenticated operator fact
-  subtask_suffix    text CHECK (subtask_suffix IN ('r', 's', 'i'))
+  subtask_suffix    text CHECK (subtask_suffix IN ('r', 's', 'i', 'p'))
 );
 INSERT INTO task_kinds VALUES
   ('implementation',     'FULL',  false, true,  false, false, NULL),
@@ -90,6 +91,7 @@ INSERT INTO task_kinds VALUES
   ('security_review',    'SHORT', true,  false, true,  false, 's'),
   ('integration',        'SHORT', false, false, false, false, 'i'),
   ('planning',           'SHORT', true,  false, false, false, NULL),
+  ('plan_proposal',      'SHORT', true,  false, false, false, 'p'),
   ('mac_validation',     'SHORT', true,  false, false, true,  NULL),
   ('operator_action',    'SHORT', true,  false, false, true,  NULL);
 
@@ -1135,7 +1137,8 @@ BEGIN
 END $$;
 
 -- Create a task (NEW) with the caller's first lease. devorch subtask id convention: reviews <parent>-rN,
--- security reviews <parent>-sN, integration <first covers_tasks entry>-iN. Projects in onboarding or active (R6 D4).
+-- security reviews <parent>-sN, integration <first covers_tasks entry>-iN, plan proposals <parent>-pN (task-bound)
+-- or PL-<nnnn> (project-level, no parent; doc 16 §10). Projects in onboarding or active (R6 D4).
 CREATE FUNCTION create_task(p_project_id text, p_task_id text, p_kind text, p_parent_task_id text,
                             p_covers_tasks text[], p_external_ref text, p_holder text, p_ttl_seconds int)
 RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path = devplat, pg_catalog, pg_temp AS $$
@@ -1166,6 +1169,18 @@ BEGIN
     END LOOP;
     IF p_task_id !~ ('^' || regexp_replace(p_covers_tasks[1], '([.\-])', '\\\1', 'g') || '-i[0-9]+$') THEN
       PERFORM _refuse(format('integration id must be %s-iN', p_covers_tasks[1]));
+    END IF;
+  ELSIF k.subtask_suffix = 'p' THEN
+    IF coalesce(cardinality(p_covers_tasks), 0) > 0 THEN PERFORM _refuse('a plan proposal has no covers_tasks'); END IF;
+    IF p_parent_task_id IS NULL THEN
+      IF p_task_id !~ '^PL-[0-9]{4,}$' THEN PERFORM _refuse('a project-level plan proposal id must be PL-<nnnn>'); END IF;
+    ELSE
+      IF NOT EXISTS (SELECT 1 FROM tasks WHERE project_id = p_project_id AND task_id = p_parent_task_id) THEN
+        PERFORM _refuse('a task-bound plan proposal needs a parent in the same project');
+      END IF;
+      IF p_task_id !~ ('^' || regexp_replace(p_parent_task_id, '([.\-])', '\\\1', 'g') || '-p[0-9]+$') THEN
+        PERFORM _refuse(format('plan proposal id must be %s-pN', p_parent_task_id));
+      END IF;
     END IF;
   ELSIF p_parent_task_id IS NOT NULL OR coalesce(cardinality(p_covers_tasks), 0) > 0 THEN
     PERFORM _refuse('only subtasks have a parent or covers_tasks');

@@ -10,7 +10,7 @@ display_name: Project MERCURY
 # onboarding, not active: the TDD is not approved (DOD-01), no package.json/source exists, the ruleset (DOD-02)
 # and dev bot (DOD-13) are not in place. Only planning/design/discovery tasks may run (26-… §1.4).
 status: onboarding
-config_version: 2                 # R6 fix round: hard_preconditions, bucket name, catalogue task kinds
+config_version: 3                 # 2: R6 fix round (hard_preconditions, bucket name, catalogue task kinds); 3: no in-cluster builds (doc 22 O-5)
 verified:
   date: "2026-10-17"
   by: devplat drafting agent (Amendment 001), checked by platform/tools/validate_projects.py
@@ -79,11 +79,11 @@ toolchains:
 container_images:
   - name: mercury-toolchain
     purpose: toolchain
-    image: {unresolved: "No image built yet. Needs the pinned Node 24 patch; built rootless in proj-mercury-build and pinned by digest (doc 22).", owner: devops, blocks: every Kubernetes test level}
+    image: {unresolved: "No image built yet. Needs the pinned Node 24 patch; built in devplat platform CI, not in the cluster (doc 22 §9.1, O-5; builds disabled by default, R6 D20), scanned and pinned by digest.", owner: devops, blocks: every Kubernetes test level}
     platforms: {unresolved: "amd64/arm64 support recorded only after a verified build."}
   - name: mercury-agent
     purpose: agent
-    image: {unresolved: "Agent runner image (Claude Code headless + toolchain) not built; digest recorded after build and scan.", owner: devops}
+    image: {unresolved: "Agent runner image (Claude Code headless + toolchain) not built; built in devplat platform CI (doc 22 O-5); digest recorded after build and scan.", owner: devops}
     platforms: {unresolved: "Recorded per verified build."}
 
 # Mercury test tiers T0–T5 (verification-plan §2.1). No package.json exists, so no command can run yet:
@@ -203,11 +203,6 @@ environments:
     purpose: agent Jobs (all 12 roles + planner), no project secrets
     task_kinds: [planning, design, implementation, test, review, integration]
     ref: "doc 16; namespace proj-mercury-exec"
-  - id: k8s-build
-    kind: kubernetes_build
-    purpose: rootless image builds of mercury-toolchain / mercury-agent
-    task_kinds: [build]
-    ref: "doc 22; namespace proj-mercury-build"
   - id: k8s-test
     kind: kubernetes_ephemeral_test
     purpose: T0–T2 in ephemeral proj-mercury-t-<runid> namespaces; no credentials; egress none

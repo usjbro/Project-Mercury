@@ -50,6 +50,7 @@ Rules:
 2. **No preemption of agent Jobs.** A running LLM Job is never evicted to make room (lost work costs money). Agent pods use PriorityClass `devplat-agent` with `preemptionPolicy: Never`; platform pods use `devplat-platform` (higher), so agents can never evict the platform.
 3. **Holds are visible.** Each held task shows its first failing check and since when, in the API and dashboard.
 4. **Admission is idempotent.** Reservations and `assigned` are written in one transaction; a crash before Job creation leaves a `job_runs` row without a Job, which reconciliation repairs (`21-…` §3, normative).
+5. **Admission decisions expire.** `dispatch_job()` (`19-…`) refuses unless it names an unconsumed `admit` decision for the same project, task, attempt and role that is **at most 10 minutes old**. A task whose Job was not created within 10 minutes of admission (image pull, target outage, controller restart) goes through a fresh admission round before dispatch, so a decision never authorizes a Job under a budget, capacity or ownership state it did not see. The `verifier` role is exempt only from the project-status and precondition checks (§2 checks 1–2), not from the admission requirement.
 
 ## 3. Concurrency limits
 

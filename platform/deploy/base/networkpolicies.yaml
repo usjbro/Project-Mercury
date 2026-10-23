@@ -435,7 +435,8 @@ metadata:
   annotations:
     devplat.io/purpose: 'D10 artifact gateway: the ONLY artifact path of agent/build/test
       pods (per-Job one-time token, size caps per D11); writes runs/<job-uid>/ with
-      its own S3 credential. Controller mints/revokes tokens on 9444.'
+      its own S3 credential. Tokens are minted by the controller and authorized in
+      PostgreSQL; 9444 is admin only.'
 spec:
   podSelector:
     matchLabels:

@@ -1,7 +1,8 @@
 {{- /*
 devplat-model-gateway: the only path from agent pods to LLM APIs (:8080, only for pods with network-class
-model-only or deps, base NetworkPolicy). Per-Job tokens are minted on the admin port :9443 by the controller; the
-project is bound to the token, never taken from the URL path (D12).
+model-only or deps, base NetworkPolicy). Per-Job tokens are minted by the controller and registered as SHA-256
+hashes (set_job_tokens()); each request is authorized in PostgreSQL (reserve_budget()), and :9443 is an admin
+channel only. The project is bound to the token, never taken from the URL path (D12).
 Request policy (D12, ConfigMap devplat-model-gateway-policy): only the allowlisted endpoints; requests carrying
 server-side tools (web_search, web_fetch, code_execution, computer use, any tool whose `type` is server-side),
 `mcp_servers` or `container`, Files/Batches APIs, or a non-allowlisted `anthropic-beta` header are rejected with

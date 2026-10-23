@@ -179,8 +179,10 @@ ROLE_FOR = {"implementation": "mdev-backend-engineer", "test": "mdev-test-automa
             "design": "mdev-lead-architect", "code_review": "mdev-code-reviewer", "design_review": "mdev-lead-architect",
             "reliability_review": "mdev-reliability-engineer", "security_review": "mdev-security-engineer",
             "integration": "mdev-integration-release-engineer", "planning": "mdev-tpm", "mac_validation": None,
-            "operator_action": None}
-READ_ONLY = set(RULES["read_only_kinds"])
+            "operator_action": None, "plan_proposal": "planner"}
+# Kinds devplat adds to the ported devorch vocabulary (SHORT, read-only); everything else must equal devorch.
+DEVPLAT_SHORT_RO_KINDS = ["plan_proposal"]
+READ_ONLY = set(RULES["read_only_kinds"]) | set(DEVPLAT_SHORT_RO_KINDS)
 TOKENS = {}
 
 
@@ -214,14 +216,15 @@ class Base(unittest.TestCase):
                         f"{lit(task)}, 'statement', {lit(subject)}, {lit(ISSUER)}, 'op@example.test', "
                         f"now() - interval '{auth_age_s} seconds', {lit(jti)}, NULL)", role=R["api"]))
 
-    def artifact(self, content, kind="result"):
+    def artifact(self, content, kind="result", project=None):
         h = sha(content)
-        psql(f"SELECT * FROM devplat.register_artifact({lit(self.project)}, {lit(h)}, {len(content)}, 'application/json', "
+        psql(f"SELECT * FROM devplat.register_artifact({lit(project or self.project)}, {lit(h)}, {len(content)}, 'application/json', "
              f"{lit(kind)}, NULL, NULL, NULL, 'evidence')", role=R["ctl"])
         return h
 
-    def fev(self, kind, content=None):
-        h = self.artifact(content or f"{kind}-{secrets.token_hex(6)}", "log" if kind in ("log", "test_run", "ci_run") else "result")
+    def fev(self, kind, content=None, project=None):
+        h = self.artifact(content or f"{kind}-{secrets.token_hex(6)}", "log" if kind in ("log", "test_run", "ci_run") else "result",
+                          project=project)
         return {"kind": kind, "ref": f"sha256/{h}", "sha256": h}
 
     def body(self, tid, kind, **kw):
@@ -360,10 +363,18 @@ class T01RulesPorted(Base):
         lim = dict(l.split("|") for l in psql("SELECT counter, coalesce(max_count::text,'') FROM devplat.loop_counters").splitlines())
         self.assertEqual({k: (int(v) if v else None) for k, v in lim.items()}, RULES["limits"])
         kinds = dict(l.split("|") for l in psql("SELECT kind, lifecycle FROM devplat.task_kinds").splitlines())
-        self.assertEqual(sorted(k for k, v in kinds.items() if v == "SHORT"), RULES["short_kinds"])
+        self.assertEqual(sorted(k for k, v in kinds.items() if v == "SHORT"), sorted(RULES["short_kinds"] + DEVPLAT_SHORT_RO_KINDS))
         self.assertEqual(sorted(k for k, v in kinds.items() if v == "FULL"), RULES["full_kinds"])
         ro = psql("SELECT string_agg(kind, ',' ORDER BY kind) FROM devplat.task_kinds WHERE read_only").split(",")
-        self.assertEqual(ro, RULES["read_only_kinds"])
+        self.assertEqual(ro, sorted(RULES["read_only_kinds"] + DEVPLAT_SHORT_RO_KINDS))
+        # every catalogue kind run by a Job is a DB kind with the same lifecycle, read-only flag and suffix
+        import yaml
+        cat = {k["kind"]: k for k in yaml.safe_load(open(CATALOGUE))["kind_catalogue"]}
+        db = {l.split("|")[0]: l.split("|")[1:] for l in
+              psql("SELECT kind, lifecycle, read_only, coalesce(subtask_suffix, '') FROM devplat.task_kinds").splitlines()}
+        self.assertEqual(set(cat), set(db))
+        for k, c in cat.items():
+            self.assertEqual(db[k], [c["lifecycle"].upper(), "t" if c["read_only"] else "f", c.get("subtask_suffix", "")], k)
 
     @unittest.skipUnless(os.path.isdir(os.path.join(REPO, "tools", "devorch")), "tools/devorch not present (optional cross-check)")
     def test_vendored_rules_still_equal_devorch_source(self):
@@ -652,6 +663,23 @@ class T06Execution(Base):
         self.assertEqual(psql(f"SELECT count(*) FROM devplat.admission_decisions WHERE project_id = {lit(p)} AND task_id = '{t}' "
                               f"AND decision = 'hold' AND reason = 'project_limit'"), "1")
 
+    def test_admission_older_than_ten_minutes_is_refused(self):
+        # 16-... step 6, 17-... §2 rule 5: dispatch_job() needs an admit decision at most 10 minutes old
+        if psql("SELECT rolsuper FROM pg_roles WHERE rolname = current_user") != "t":
+            self.skipTest("backdating an append-only admission row needs a superuser connection")
+        t = "AD-0002"
+        self.new_task(t, "implementation")
+        self.to_running(t)
+        p = self.project
+        call = lambda adm, key: psql(
+            f"SELECT r_job_id FROM devplat.dispatch_job({lit(p)}, '{t}', 1, 'mdev-backend-engineer', 1, {adm}, {lit(key)}, NULL, "
+            f"'proj-{p}-exec', 'dp-{p}-ad-0002-a1', {lit(HOLDER)}, {TOKENS[(p, t)]})", role=R["ctl"])
+        stale = self.admit(t, "mdev-backend-engineer")
+        psql(f"SET session_replication_role = replica; UPDATE devplat.admission_decisions "
+             f"SET decided_at = clock_timestamp() - interval '10 minutes 1 second' WHERE decision_id = {stale}")
+        self.refused(lambda: call(stale, sha("k-stale")), "needs a fresh admit decision")
+        call(self.admit(t, "mdev-backend-engineer"), sha("k-fresh"))
+
     def test_idempotent_dispatch_concurrent(self):
         t = "ID-0001"
         self.new_task(t, "implementation")
@@ -866,6 +894,30 @@ class T09IsolationAndStatus(Base):
         self.assertEqual(psql(f"SELECT count(*) FROM devplat.task_events WHERE task_id = '{mine}'", role=role), "1")
         self.assertEqual(psql(f"SELECT count(*) > 0 FROM devplat.projects WHERE project_id <> {lit(self.project)}", role=R["api"]), "t")
         self.refused(lambda: psql("SELECT * FROM devplat.leases", role=role), "permission denied")
+
+    def test_plan_proposal_ids_and_onboarding_dispatch(self):
+        # doc 16 §10: planner Jobs, kind plan_proposal; ids <task>-pN (task-bound) or PL-<nnnn> (project-level)
+        o = "q" + secrets.token_hex(3)
+        self.make_project(o, "onboarding")
+        create = lambda tid, parent=None, covers=None: psql(
+            f"SELECT devplat.create_task({lit(o)}, {lit(tid)}, 'plan_proposal', {lit(parent)}, {arr(covers)}, NULL, {lit(HOLDER)}, 60)",
+            role=R["ctl"])
+        self.refused(lambda: create("PLAN-1"), "project-level plan proposal id must be PL-<nnnn>")
+        self.refused(lambda: create("PL-1"), "PL-<nnnn>")
+        self.refused(lambda: create("PB-0001-p1", parent="PB-0001"), "needs a parent in the same project")
+        self.new_task("PB-0001", "planning", project=o)
+        self.refused(lambda: create("PB-0001-r1", parent="PB-0001"), "plan proposal id must be PB-0001-pN")
+        self.refused(lambda: create("PL-0002", covers=["PB-0001"]), "no covers_tasks")
+        self.new_task("PB-0001-p1", "plan_proposal", parent="PB-0001", project=o)
+        self.new_task("PL-0001", "plan_proposal", project=o)
+        self.to_running("PL-0001", project=o)          # SHORT read-only: dispatchable while onboarding
+        self.dispatch("PL-0001", "planner", project=o)
+        r = self.ev("PL-0001", "result_accepted", [self.fev("result_file", project=o)], project=o,
+                    payload={"result": self.result("PL-0001", "plan_proposal")})
+        self.assertEqual(r["to"], "COMPLETED")
+        # the planner role cannot be assigned another kind (role vs kind map from the catalogue)
+        self.refused(lambda: self.new_task("PL-0003", "plan_proposal", project=o,
+                                           body=dict(self.body("PL-0003", "plan_proposal"), assigned_agent="mdev-tpm")))
 
     def test_task_identity_is_project_scoped(self):
         other = "s" + secrets.token_hex(3)
