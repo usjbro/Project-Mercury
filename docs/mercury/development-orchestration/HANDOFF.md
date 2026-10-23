@@ -64,7 +64,7 @@ Last results reported by the fix groups (2026-10-22):
 
 ### 3.1 Latest full run
 
-`validate_all.sh --strict` at commit `b26ff34` on 2026-10-23: see §8. If §8 is empty, the run did not finish in the handoff session.
+`validate_all.sh --strict` at commit `b26ff34` on 2026-10-23 passed every check, with nothing skipped (§8).
 
 ## 4. Review status
 
@@ -116,4 +116,20 @@ The full list is in `12-amendments.md`. The ones that unblock the most:
 
 ## 8. Final validation log
 
-Filled in by the handoff session from `validate_all.sh --strict`.
+`GO=… HELM=… KUBECONFORM=… platform/tools/validate_all.sh --strict` at commit `b26ff34` on 2026-10-23: **ALL CHECKS PASSED (nothing skipped), exit 0.**
+
+| Check | Result |
+|---|---|
+| devorch v1 regression | 30 tests OK |
+| devorch examples drift | OK |
+| Job generator | 13 tests OK |
+| Project configs, plus validator self-test | pass |
+| Execution profiles schema; task contract v2 example | pass |
+| Generated base manifests up to date | pass |
+| Base manifests, strict Kubernetes 1.33 | pass |
+| Role ConfigMap output | pass |
+| PostgreSQL state schema (real PostgreSQL 16) | 47 tests OK |
+| Admission policies (CEL compile and behavioural cases) | 0 mismatches |
+| Charts | 51 passed, 0 failed, 0 skipped |
+
+All results are offline. No cluster or GitHub behaviour is covered (§3).
