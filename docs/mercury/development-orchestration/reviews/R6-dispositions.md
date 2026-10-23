@@ -104,7 +104,7 @@ Abbreviations. Tests: `db:` = `platform/db/test_schema.py`, `adm:` = `platform/t
 | R-3 | Fixed 2026-10-23: the `execution-profiles.yaml` header now says task kinds are seeded in `schema.sql` as platform vocabulary and must equal the catalogue's kinds (checked by `test_transitions_table_matches_vendored_devorch_rules`) | Closed — tested |
 | R-4 | Fixed 2026-10-23: `interface_contracts[].frozen_by` now uses the project-neutral task-id pattern (was the v1 form `DT-nnnn`) | Closed — tested (schema: `test_interface_frozen_by_any_project_task_id`) |
 | R-5 | Operator decisions S-3/S-14 (DOD-02, DOD-13), S-15 (DOD-24), A-15 signer (DOD-18) | Operator |
-| R-6 | Re-check RS-9: `dispatch_job()` with a NULL execution target does not tie the namespace to the project (mitigated by the `job-shape` VAP) | Agent work; low |
+| R-6 | Fixed 2026-10-23: `dispatch_job()` requires an enabled execution target of the task's project, so the namespace is always tied to it (re-check RS-9) | Closed — tested (`test_dispatch_needs_the_projects_execution_target`, mutation-checked) |
 | R-7 | Re-check: a cluster-scoped baseline deny for exec/build/test namespaces (BaselineAdminNetworkPolicy or CNI policy), so containment does not depend on per-namespace objects | DP4 |
 
 ## 5. Re-check

@@ -207,6 +207,8 @@ class Base(unittest.TestCase):
             f"SELECT devplat.upsert_project({lit(p)}, 'Test {p}', 'owner/{p}', NULL, 'cfg-1', 'projects/{p}.yaml@abc', "
             f"{lit(st)}, 'standard', {arr(hard)}, {lit(roles)}, {lit(cost)}, NULL, '{{}}'::jsonb)", role=R["ctl"])
         up("onboarding" if status in ("active", "onboarding") else status)
+        psql(f"SELECT devplat.upsert_execution_target({lit(p)}, 'main', 'local', 'proj-{p}', 'gvisor', 'model-only', "
+             f"'standard', true)", role=R["ctl"])
         if status == "active":
             for key in hard:
                 cls.fact(key, "verified", project=p)
@@ -301,6 +303,10 @@ class Base(unittest.TestCase):
         self.ev(tid, "assigned", [{"kind": "ledger", "ref": "assigned"}], project=project)
         self.ev(tid, "dispatched", [{"kind": "job", "ref": f"dp-{tid.lower()}-a1"}], project=project)
 
+    @staticmethod
+    def target(p):
+        return int(psql(f"SELECT target_id FROM devplat.execution_targets WHERE project_id = {lit(p)} AND name = 'main'"))
+
     def admit(self, tid, role, attempt=1, project=None):
         p = project or self.project
         return int(psql(f"SELECT devplat.record_admission({lit(p)}, {lit(tid)}, {attempt}, {lit(role)}, 'admit', 'admitted', "
@@ -319,7 +325,7 @@ class Base(unittest.TestCase):
         key = key or JOBSPEC.idempotency_key(p, tid, core, attempt, role, dispatch_no)
         name = JOBSPEC.job_name(p, tid, attempt, role, dispatch_no)
         out = psql(f"SELECT r_job_id FROM devplat.dispatch_job({lit(p)}, {lit(tid)}, {attempt}, {lit(role)}, {dispatch_no}, "
-                   f"{adm}, {lit(key)}, NULL, 'proj-{p}-exec', {lit(name)}, {lit(HOLDER)}, {TOKENS[(p, tid)]})", role=R["ctl"])
+                   f"{adm}, {lit(key)}, {self.target(p)}, 'proj-{p}-exec', {lit(name)}, {lit(HOLDER)}, {TOKENS[(p, tid)]})", role=R["ctl"])
         return int(out)
 
     def verify_tests(self, tid, h, attempt=1, tests=("unit",), outcome="passed"):
@@ -660,7 +666,7 @@ class T06Execution(Base):
         hold = int(psql(f"SELECT devplat.record_admission({lit(p)}, '{t}', 1, 'mdev-backend-engineer', 'hold', 'project_limit', "
                         f"'{{\"running\": 2}}'::jsonb, {lit(HOLDER)}, {TOKENS[(p, t)]})", role=R["ctl"]))
         call = lambda adm, key: psql(
-            f"SELECT r_job_id FROM devplat.dispatch_job({lit(p)}, '{t}', 1, 'mdev-backend-engineer', 1, {adm}, {lit(key)}, NULL, "
+            f"SELECT r_job_id FROM devplat.dispatch_job({lit(p)}, '{t}', 1, 'mdev-backend-engineer', 1, {adm}, {lit(key)}, {self.target(p)}, "
             f"'proj-{p}-exec', 'dp-{p}-ad-0001-a1', {lit(HOLDER)}, {TOKENS[(p, t)]})", role=R["ctl"])
         self.refused(lambda: call(hold, sha("k1")), "needs a fresh admit decision")
         adm = self.admit(t, "mdev-backend-engineer")
@@ -688,6 +694,24 @@ class T06Execution(Base):
         self.assertEqual(rows, "2,2,2")
         self.assertNotEqual(a, 0)
 
+    def test_dispatch_needs_the_projects_execution_target(self):
+        # R6 re-check RS-9: without a target the namespace was not tied to the task's project
+        t = "AD-0004"
+        self.new_task(t, "implementation")
+        self.to_running(t)
+        p = self.project
+        other = "e" + secrets.token_hex(3)
+        self.make_project(other, "onboarding")
+        call = lambda target, ns: psql(
+            f"SELECT r_job_id FROM devplat.dispatch_job({lit(p)}, '{t}', 1, 'mdev-backend-engineer', 1, "
+            f"{self.admit(t, 'mdev-backend-engineer')}, {lit(sha(secrets.token_hex(4)))}, {target}, {lit(ns)}, "
+            f"'dp-{p}-ad-0004', {lit(HOLDER)}, {TOKENS[(p, t)]})", role=R["ctl"])
+        msg = "namespace is not in an enabled execution target"
+        self.refused(lambda: call("NULL", f"proj-{other}-exec"), msg)
+        self.refused(lambda: call("NULL", f"proj-{p}-exec"), msg)
+        self.refused(lambda: call(self.target(other), f"proj-{other}-exec"), msg)
+        call(self.target(p), f"proj-{p}-exec")
+
     def test_admission_older_than_ten_minutes_is_refused(self):
         # 16-... step 6, 17-... §2 rule 5: dispatch_job() needs an admit decision at most 10 minutes old
         if psql("SELECT rolsuper FROM pg_roles WHERE rolname = current_user") != "t":
@@ -697,7 +721,7 @@ class T06Execution(Base):
         self.to_running(t)
         p = self.project
         call = lambda adm, key: psql(
-            f"SELECT r_job_id FROM devplat.dispatch_job({lit(p)}, '{t}', 1, 'mdev-backend-engineer', 1, {adm}, {lit(key)}, NULL, "
+            f"SELECT r_job_id FROM devplat.dispatch_job({lit(p)}, '{t}', 1, 'mdev-backend-engineer', 1, {adm}, {lit(key)}, {self.target(p)}, "
             f"'proj-{p}-exec', 'dp-{p}-ad-0002-a1', {lit(HOLDER)}, {TOKENS[(p, t)]})", role=R["ctl"])
         stale = self.admit(t, "mdev-backend-engineer")
         psql(f"SET session_replication_role = replica; UPDATE devplat.admission_decisions "
@@ -713,7 +737,7 @@ class T06Execution(Base):
         adm = self.admit(t, "mdev-backend-engineer")
         key = sha(f"{p}|core|1")
         sql = (f'SET ROLE "{R["ctl"]}"; BEGIN; SELECT r_job_id, r_created FROM devplat.dispatch_job({lit(p)}, {lit(t)}, 1, '
-               f"'mdev-backend-engineer', 1, {adm}, {lit(key)}, NULL, 'proj-{p}-exec', 'dp-{p}-id-0001-a1', "
+               f"'mdev-backend-engineer', 1, {adm}, {lit(key)}, {self.target(p)}, 'proj-{p}-exec', 'dp-{p}-id-0001-a1', "
                f"{lit(HOLDER)}, {TOKENS[(p, t)]}); SELECT pg_sleep(1.5); COMMIT;")
         t0 = time.time()
         procs = [subprocess.Popen(_psql_args(DB), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -734,7 +758,7 @@ class T06Execution(Base):
         self.assertEqual(psql(f"SELECT count(*) FROM devplat.job_runs WHERE project_id = {lit(p)} AND task_id = '{t}'"), "1")
         adm2 = self.admit(t, "mdev-backend-engineer")
         self.refused(lambda: psql(f"SELECT * FROM devplat.dispatch_job({lit(p)}, {lit(t)}, 1, 'mdev-backend-engineer', 1, {adm2}, "
-                                  f"{lit(sha('other'))}, NULL, 'proj-x-exec', 'dp-other-a1', {lit(HOLDER)}, {TOKENS[(p, t)]})",
+                                  f"{lit(sha('other'))}, {self.target(p)}, 'proj-{p}-exec', 'dp-other-a1', {lit(HOLDER)}, {TOKENS[(p, t)]})",
                                   role=R["ctl"]), "duplicate key")
         jid = ids.pop()
         uid1, uid2 = "11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222"

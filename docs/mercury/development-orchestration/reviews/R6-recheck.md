@@ -34,7 +34,7 @@ Status: **Closed offline** (2026-10-23). The re-check reviewed `ea13dd5`; the fi
 | RS-6 | Low | Config text inserted into prompts unescaped | Collapsed to one inert line, backticks replaced | roles: `test_config_text_cannot_inject_markdown` (mutation-checked) |
 | RS-7 | Low | H8 not checked | `validate_projects.py` requires `.github/**` in `restricted_paths` for non-draft projects (`docs/**` stays DOD-23) | cfg: ".github/** not restricted" (self-test 50/50) |
 | RS-8 | Low | `openai` provider allowed with any host | Chart schema: provider `anthropic` at `api.anthropic.com` only | chart: "model-gateway second provider (RS-8)" |
-| RS-9 | Low | `dispatch_job()` with a NULL target does not tie the namespace to the project | **Not fixed** (mitigated by the `job-shape` VAP project label check); residual R-6 | — |
+| RS-9 | Low | `dispatch_job()` with a NULL target does not tie the namespace to the project | Fixed after the confirmation pass: the target is required (the DB test fixtures now register one per project) | db: `test_dispatch_needs_the_projects_execution_target` (mutation-checked) |
 
 ## 3. Disposition corrections
 
@@ -46,7 +46,7 @@ Status: **Closed offline** (2026-10-23). The re-check reviewed `ea13dd5`; the fi
 
 ## 5. Remaining before operator review
 
-Residuals in `R6-dispositions.md` §4 (R-1 neutral role bodies, R-2 runtime, R-3, R-5 operator decisions, R-6 RS-9, R-7 cluster baseline deny).
+Open residuals in `R6-dispositions.md` §4 (R-1 neutral role bodies, R-2 runtime, R-5 operator decisions, R-7 cluster baseline deny).
 
 ## 6. Confirmation pass (same reviewers, read-only, at `c249c51`)
 

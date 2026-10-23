@@ -1719,7 +1719,8 @@ BEGIN
        OR a.attempt <> p_attempt OR a.role <> p_role OR a.decided_at < clock_timestamp() - interval '10 minutes' THEN
       PERFORM _refuse('dispatch needs a fresh admit decision for this task, attempt and role');
     END IF;
-    IF p_target_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM execution_targets et
+    -- R6 re-check RS-9: a target is required, so the namespace is always tied to the task's project
+    IF p_target_id IS NULL OR NOT EXISTS (SELECT 1 FROM execution_targets et
          WHERE et.target_id = p_target_id AND et.project_id = p_project_id AND et.enabled
            AND p_k8s_namespace LIKE et.namespace_prefix || '-%') THEN
       PERFORM _refuse('namespace is not in an enabled execution target of the task''s project');

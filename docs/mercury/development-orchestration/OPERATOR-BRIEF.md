@@ -5,7 +5,7 @@ Prepared 2026-10-23 for the repository owner. **Nothing here is decided until yo
 ## Where things stand
 
 - The design package (docs 14–29, ADR-022…030, `platform/`) is proposed and validated offline only: `platform/tools/validate_all.sh --strict` passes with nothing skipped. Nothing has run on a cluster, no component of devplat is built, nothing is merged, and no PR is open.
-- Review R6 is closed offline. Two independent read-only reviews found 2 High and 11 Medium issues after the fix round; all are fixed except one Low (`reviews/R6-recheck.md`). A confirmation pass by the same reviewers accepted, with two conditions that are now fixed.
+- Review R6 is closed offline. Two independent read-only reviews found 2 High and 11 Medium issues after the fix round; all are fixed (`reviews/R6-recheck.md`). A confirmation pass by the same reviewers accepted, with two conditions that are now fixed.
 - What only a cluster can show (NetworkPolicy enforcement, gVisor, typed admission, the gateways' request filtering, recovery) is listed as verification items in docs 16 and 29.
 
 ## 1. Decide first — these unblock DP1
