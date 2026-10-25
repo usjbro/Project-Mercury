@@ -729,33 +729,47 @@ class T06Execution(Base):
         self.refused(lambda: call(stale, sha("k-stale")), "needs a fresh admit decision")
         call(self.admit(t, "mdev-backend-engineer"), sha("k-fresh"))
 
-    def test_idempotent_dispatch_concurrent(self):
-        t = "ID-0001"
-        self.new_task(t, "implementation")
-        self.to_running(t)
-        p = self.project
-        adm = self.admit(t, "mdev-backend-engineer")
-        key = sha(f"{p}|core|1")
-        sql = (f'SET ROLE "{R["ctl"]}"; BEGIN; SELECT r_job_id, r_created FROM devplat.dispatch_job({lit(p)}, {lit(t)}, 1, '
-               f"'mdev-backend-engineer', 1, {adm}, {lit(key)}, {self.target(p)}, 'proj-{p}-exec', 'dp-{p}-id-0001-a1', "
-               f"{lit(HOLDER)}, {TOKENS[(p, t)]}); SELECT pg_sleep(1.5); COMMIT;")
-        t0 = time.time()
+    def race(self, sqls):
+        """Run each SQL text in its own session, released together: a gate session holds an ACCESS EXCLUSIVE lock on
+        devplat.job_runs until every racer is blocked on it, so the calls really overlap (R6 CI finding: without the
+        gate, the second call usually ran after the first had inserted and the race was never exercised)."""
+        gate = subprocess.Popen(_psql_args(DB), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        gate.stdin.write("BEGIN; LOCK TABLE devplat.job_runs IN ACCESS EXCLUSIVE MODE; SELECT 'locked';\n"); gate.stdin.flush()
+        deadline = time.time() + 10
+        while psql("SELECT count(*) FROM pg_locks WHERE relation = 'devplat.job_runs'::regclass AND mode = 'AccessExclusiveLock' "
+                   "AND granted") != "1":
+            self.assertLess(time.time(), deadline, "gate lock not taken"); time.sleep(0.05)
         procs = [subprocess.Popen(_psql_args(DB), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                  text=True) for _ in range(2)]
-        for pr in procs:
+                                  text=True) for _ in sqls]
+        for pr, sql in zip(procs, sqls):
             pr.stdin.write(sql); pr.stdin.close()
-        outs = []
-        for pr in procs:
-            so, se = pr.communicate()
-            outs.append((pr.returncode, so.strip(), se.strip()))
-        elapsed = time.time() - t0
-        self.assertEqual([o[0] for o in outs], [0, 0], outs)
-        rows = sorted(o[1].splitlines()[0] for o in outs)
-        ids = {r.split("|")[0] for r in rows}
-        self.assertEqual(len(ids), 1, rows)
-        self.assertEqual(sorted(r.split("|")[1] for r in rows), ["f", "t"])
-        self.assertGreater(elapsed, 2.5, "second session must have waited for the first (true concurrency)")
-        self.assertEqual(psql(f"SELECT count(*) FROM devplat.job_runs WHERE project_id = {lit(p)} AND task_id = '{t}'"), "1")
+        while psql("SELECT count(*) FROM pg_locks WHERE relation = 'devplat.job_runs'::regclass AND NOT granted") != str(len(sqls)):
+            self.assertLess(time.time(), deadline, "racers did not block on the gate"); time.sleep(0.05)
+        gate.stdin.write("COMMIT;\n"); gate.stdin.close(); gate.communicate()
+        outs = [tuple(x.strip() for x in pr.communicate()) for pr in procs]   # communicate() sets returncode
+        return [(pr.returncode, *o) for pr, o in zip(procs, outs)]
+
+    def test_idempotent_dispatch_concurrent(self):
+        # Stress: controller replicas (or retries) send the same dispatch at the same instant: one row, one created=t.
+        # The failure window is microseconds, so this alone is probabilistic (it caught the bug in CI and fails in
+        # about a third of local runs without the fix); test_dispatch_serialized_per_key below is deterministic.
+        p = self.project
+        for i in range(8):
+            t = f"ID-000{i + 1}"
+            self.new_task(t, "implementation")
+            self.to_running(t)
+            adm = self.admit(t, "mdev-backend-engineer")
+            key = sha(f"{p}|{t}|core|1")
+            sql = (f'SET ROLE "{R["ctl"]}"; BEGIN; SELECT r_job_id, r_created FROM devplat.dispatch_job({lit(p)}, {lit(t)}, 1, '
+                   f"'mdev-backend-engineer', 1, {adm}, {lit(key)}, {self.target(p)}, 'proj-{p}-exec', 'dp-{p}-{t.lower()}-a1', "
+                   f"{lit(HOLDER)}, {TOKENS[(p, t)]}); SELECT pg_sleep(0.2); COMMIT;")
+            outs = self.race([sql] * 4)
+            self.assertEqual([o[0] for o in outs], [0] * 4, (i, outs))
+            rows = sorted(o[1].splitlines()[0] for o in outs)
+            self.assertEqual(len({r.split("|")[0] for r in rows}), 1, rows)
+            self.assertEqual(sorted(r.split("|")[1] for r in rows), ["f", "f", "f", "t"])
+            self.assertEqual(psql(f"SELECT count(*) FROM devplat.job_runs WHERE project_id = {lit(p)} AND task_id = '{t}'"), "1")
+        ids = {rows[0].split("|")[0]}
         adm2 = self.admit(t, "mdev-backend-engineer")
         self.refused(lambda: psql(f"SELECT * FROM devplat.dispatch_job({lit(p)}, {lit(t)}, 1, 'mdev-backend-engineer', 1, {adm2}, "
                                   f"{lit(sha('other'))}, {self.target(p)}, 'proj-{p}-exec', 'dp-other-a1', {lit(HOLDER)}, {TOKENS[(p, t)]})",
@@ -768,6 +782,31 @@ class T06Execution(Base):
         self.assertEqual(psql(f"SELECT devplat.job_heartbeat({jid}, '{uid1}')", role=R["ctl"]), "t")
         self.refused(lambda: upd("running", f"'{uid2}'"), "duplicate execution")
         self.refused(lambda: upd("planned", "NULL"), "illegal job phase change created -> planned")
+
+    def test_dispatch_serialized_per_key(self):
+        # Deterministic: while one dispatch with key K is uncommitted, a second call with K waits on the per-key lock
+        # BEFORE its lookup, then returns the first call's row (created=f). Without the lock it would race to insert.
+        p, t = self.project, "SK-0001"
+        self.new_task(t, "implementation")
+        self.to_running(t)
+        adm, key = self.admit(t, "mdev-backend-engineer"), sha(f"{p}|sk|1")
+        call = (f"SELECT r_job_id, r_created FROM devplat.dispatch_job({lit(p)}, {lit(t)}, 1, 'mdev-backend-engineer', 1, "
+                f"{adm}, {lit(key)}, {self.target(p)}, 'proj-{p}-exec', 'dp-{p}-sk-0001-a1', {lit(HOLDER)}, {TOKENS[(p, t)]});")
+        opened = lambda: subprocess.Popen(_psql_args(DB), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        a = opened()
+        a.stdin.write(f'SET ROLE "{R["ctl"]}"; BEGIN; {call}\n'); a.stdin.flush()
+        deadline = time.time() + 10
+        while psql("SELECT count(*) FROM pg_stat_activity WHERE state = 'idle in transaction' AND query LIKE '%dispatch_job%'") != "1":
+            self.assertLess(time.time(), deadline, "first dispatch did not complete"); time.sleep(0.05)
+        b = opened()
+        b.stdin.write(f'SET ROLE "{R["ctl"]}"; {call}\n'); b.stdin.close()
+        while psql("SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted") != "1":
+            self.assertLess(time.time(), deadline, "second dispatch did not wait on the per-key lock"); time.sleep(0.05)
+        a.stdin.write("COMMIT;\n"); a.stdin.close()
+        (ao, ae), (bo, be) = a.communicate(), b.communicate()
+        self.assertEqual((a.returncode, b.returncode), (0, 0), (ae, be))
+        self.assertEqual(ao.strip().split("|")[1], "t")
+        self.assertEqual(bo.strip(), ao.strip().split("|")[0] + "|f")
 
     def test_env_classification_only_from_platform_signals(self):
         t = "EV-0001"

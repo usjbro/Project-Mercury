@@ -13,6 +13,8 @@ if [ "$(id -u)" = 0 ]; then echo "start_postgres.sh: run as a non-root user (ini
 command -v psql >/dev/null || { echo "start_postgres.sh: psql client not found" >&2; exit 2; }
 "$PG_BINDIR/postgres" --version | grep -q ' 16\.' || { echo "start_postgres.sh: not PostgreSQL 16: $("$PG_BINDIR/postgres" --version)" >&2; exit 2; }
 D=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/devplat-pg.XXXXXX"); chmod 700 "$D"
+on_exit() { local rc=$?; [ "$rc" = 0 ] || { echo "start_postgres.sh failed ($rc); logs:" >&2; cat "$D"/*.log >&2 2>/dev/null; }; }
+trap on_exit EXIT
 PORT=55432
 "$PG_BINDIR/initdb" -D "$D/data" -U devplat --auth=trust -E UTF8 --no-locale >"$D/initdb.log"
 "$PG_BINDIR/pg_ctl" -D "$D/data" -l "$D/server.log" -w -o "-k $D -p $PORT -c listen_addresses=" start >/dev/null

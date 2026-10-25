@@ -69,6 +69,7 @@ Helm v3.17.3 and kubeconform v0.6.7 were built from source into the session scra
 4. `reviews/R6-dispositions.md`; decisions that had never reached the files were applied (A-15 checkpoint anchoring; D13 CI hardening in the DOD-02 row; contract v2 `frozen_by`).
 5. Independent re-check run, its findings fixed, confirmation pass run and its two conditions fixed (`reviews/R6-recheck.md`); strict validation green.
 6. Operator decision brief: `OPERATOR-BRIEF.md`.
+7. CI: `.github/workflows/devplat-ci.yml` runs workflow lint and `validate_all.sh --strict` on PRs that touch the platform (`23-…` §5.4). Its first GitHub run found a real race in `dispatch_job()`, now fixed. An independent review found 3 Medium gaps that let `--strict` pass with skips, all fixed.
 
 **Open, in order:**
 1. Open residuals in `R6-dispositions.md` §4 (R-1 neutral role bodies after DOD-12; R-2 every runtime check; R-5 your decisions; R-7 a cluster-scoped baseline deny for project namespaces at DP4).
@@ -111,7 +112,7 @@ The full list is in `12-amendments.md`. The ones that unblock the most:
 | Generated base manifests up to date | pass |
 | Base manifests, strict Kubernetes 1.33 | 140 valid |
 | Role ConfigMap generator tests; output | 12 tests OK; output valid |
-| PostgreSQL state schema (real PostgreSQL 16) | 53 tests OK |
+| PostgreSQL state schema (real PostgreSQL 16) | 54 tests OK |
 | Admission policies (CEL compile and behavioural cases) | 131 expressions compiled; 125 cases / 143 decisions; 0 mismatches |
 | Charts | 58 passed, 0 failed, 0 skipped |
 

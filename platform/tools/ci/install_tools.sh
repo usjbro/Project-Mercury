@@ -12,8 +12,11 @@ declare -A MOD=(
   [actionlint]=github.com/rhysd/actionlint/cmd/actionlint@v1.7.11
 )
 mkdir -p "$BINDIR"
-export GOBIN BINDIR GOTOOLCHAIN=local GOFLAGS=-trimpath
-GOBIN=$(cd "$BINDIR" && pwd)
+# Enforce what the header promises, whatever the caller's environment says (R6 CI review CI-7).
+export GOTOOLCHAIN=local GOFLAGS=-trimpath GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org \
+       GONOSUMDB='' GONOSUMCHECK='' GOPRIVATE='' GOINSECURE='' GONOPROXY=''
+case "$(go env GOVERSION)" in go1.24.*) ;; *) echo "install_tools.sh: need Go 1.24.x, have $(go env GOVERSION)" >&2; exit 2;; esac
+GOBIN=$(cd "$BINDIR" && pwd); export GOBIN
 for t in "$@"; do
   [ -n "${MOD[$t]:-}" ] || { echo "unknown tool $t" >&2; exit 2; }
   go install "${MOD[$t]}"

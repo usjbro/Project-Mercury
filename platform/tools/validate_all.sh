@@ -4,11 +4,23 @@
 #   PG_BINDIR (PostgreSQL 16 server binaries for platform/db tests; default /usr/lib/postgresql/16/bin).
 # Nothing here touches a cluster, GitHub or Linear.
 set -uo pipefail
-# --strict: a skipped optional check counts as a failure (use for release evidence).
-ROOT=$(cd "$(dirname "$0")/../.." && pwd); cd "$ROOT"; FAIL=0; SKIPPED=0; STRICT=0
+# --strict: a skipped optional check, and any check whose output reports a skip (a unittest module or class
+# skipped for a missing server or schema, a SKIPPED manifest, a SKIP chart check), counts as a failure
+# (release and CI evidence; R6 CI review CI-1).
+ROOT=$(cd "$(dirname "$0")/../.." && pwd); cd "$ROOT" || exit 2; FAIL=0; SKIPPED=0; STRICT=0
 [ "${1:-}" = "--strict" ] && STRICT=1
 skip() { echo "== $1 SKIPPED ($2)"; SKIPPED=$((SKIPPED+1)); }
-run() { echo "== $1"; shift; if "$@"; then echo "   PASS"; else echo "   FAIL"; FAIL=1; fi; }
+SKIP_RE='skipped=[1-9]|^SKIPPED |^SKIP  |\b[1-9][0-9]* skipped\b|Skipped: [1-9]'
+run() {
+  echo "== $1"; shift
+  local log; log=$(mktemp)
+  if "$@" 2>&1 | tee "$log"; then
+    if [ $STRICT = 1 ] && grep -Eq "$SKIP_RE" "$log"; then
+      echo "   FAIL (reported a skip; not allowed with --strict)"; FAIL=1
+    else echo "   PASS"; fi
+  else echo "   FAIL"; FAIL=1; fi
+  rm -f "$log"
+}
 run "devorch v1 regression tests"          python3 tools/devorch/test_devorch.py
 run "devorch examples drift check"         python3 tools/devorch/gen_examples.py --check
 run "job spec generator (== doc 16, strict v1.33)" python3 platform/controller/test_jobspec.py
@@ -22,7 +34,7 @@ run "base manifests (strict v1.33)"        python3 platform/tools/validate_k8s.p
 run "role ConfigMap generator tests"       python3 platform/tools/test_gen_role_configmap.py
 run "role ConfigMap generator output"      bash -c 'T=$(mktemp --suffix=.yaml); python3 platform/tools/gen_role_configmap.py --project mercury --namespace proj-mercury-exec --commit HEAD > "$T" && python3 platform/tools/validate_k8s.py "$T"; rc=$?; rm -f "$T"; exit $rc'
 run "PostgreSQL state schema (real PG16)"  python3 platform/db/test_schema.py
-if [ -n "${GO:-}" ]; then run "admission policies (CEL compile + behavioural cases)" bash -c "GO=$GO platform/tools/admission/run.sh | tail -2 | grep -q '0 mismatches'"; else skip "admission CEL checks" "set GO"; fi
+if [ -n "${GO:-}" ]; then run "admission policies (CEL compile + behavioural cases)" bash -c "set -o pipefail; GO=$GO platform/tools/admission/run.sh | tail -2 | grep -qx 'eval: 0 mismatches'"; else skip "admission CEL checks" "set GO"; fi
 if [ -n "${HELM:-}" ] && [ -n "${KUBECONFORM:-}" ]; then
   # lint, strict renders, negative renders, values schemas, chart/base parity, secret pinning, chart CEL (doc 24 §10)
   run "charts (platform/tools/charts/run.sh)" env HELM="$HELM" KUBECONFORM="$KUBECONFORM" ${GO:+GO="$GO"} platform/tools/charts/run.sh

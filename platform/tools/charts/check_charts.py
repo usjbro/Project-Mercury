@@ -31,8 +31,16 @@ CH = os.path.join(ROOT, "platform", "deploy", "charts")
 BASE = os.path.join(ROOT, "platform", "deploy", "base")
 V = lambda f: os.path.join(HERE, "values", f)
 HELM, KC, GO = os.environ.get("HELM", "helm"), os.environ.get("KUBECONFORM", "kubeconform"), os.environ.get("GO")
-KCARGS = ["-strict", "-summary", "-kubernetes-version", "1.33.0", "-schema-location", "default", "-schema-location",
-          "https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"]
+sys.path.insert(0, os.path.join(ROOT, "platform", "tools"))
+from validate_k8s import SCHEMA_COMMIT  # noqa: E402  (one pin for both validators)
+# Schema sources pinned by commit (R6 CI review CI-2): the yannh commit is the one in platform/tools/validate_k8s.py
+# (kubeconform's "default" location with master replaced); datreeio/CRDs-catalog for the CloudNativePG Cluster CRD.
+KCARGS = ["-strict", "-summary", "-kubernetes-version", "1.33.0", "-schema-location",
+          f"https://raw.githubusercontent.com/yannh/kubernetes-json-schema/{SCHEMA_COMMIT}/"
+          "{{.NormalizedKubernetesVersion}}-standalone{{.StrictSuffix}}/{{.ResourceKind}}{{.KindSuffix}}.json",
+          "-schema-location",
+          "https://raw.githubusercontent.com/datreeio/CRDs-catalog/501527ab9c40c827144c8f45945b25a023e344ce/"
+          "{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"]
 DP = ["template", "t", os.path.join(CH, "devplat"), "-n", "devplat-system", "--kube-version", "1.33.0"]
 PJ = ["template", "m", os.path.join(CH, "devplat-project"), "--kube-version", "1.33.0"]
 RESULTS = []

@@ -101,7 +101,7 @@ Status: **Documented only (rejected for now).**
 
 ## 5. CI for the platform itself (devplat)
 
-### 5.1 Pipeline (proposed workflow `devplat-ci.yml`, path-filtered to `platform/**` while devplat lives in this repository)
+### 5.1 Pipeline (workflow `devplat-ci.yml`, path-filtered to the platform's paths while devplat lives in this repository; what is implemented: §5.4)
 
 | Stage | Job | Tools (pinned) | Gate |
 |---|---|---|---|
@@ -141,10 +141,10 @@ The runnable part of §5.1, in Project-Mercury until the platform repository exi
 
 | Job (check name) | What it does | §5.1 stages covered |
 |---|---|---|
-| `workflow lint (actionlint + shellcheck)` | Builds actionlint v1.7.11 from source; lints every workflow, including shellcheck on `run:` blocks | Lint (workflow lint only) |
-| `validate_all.sh --strict` | Python 3.13 with hash-locked wheels (`platform/tools/ci/requirements.txt`); Go 1.24.7; Helm v3.17.3 and kubeconform v0.6.7 built from source (`platform/tools/ci/install_tools.sh`, modules verified against `sum.golang.org`); a throwaway PostgreSQL 16 on a private Unix socket (`platform/tools/ci/start_postgres.sh`); then `platform/tools/validate_all.sh --strict`, which fails on any skipped check | Unit, DB, Schemas, Manifests, Charts, and the admission-policy CEL checks |
+| `workflow lint (actionlint + shellcheck)` | Builds actionlint v1.7.11 from source; lints `devplat-ci.yml` (not Mercury's workflows, §5.3), including shellcheck on its `run:` blocks | Lint (workflow lint only) |
+| `validate_all.sh --strict` | Python 3.13 with hash-locked wheels (`platform/tools/ci/requirements.txt`); Go 1.24.7; Helm v3.17.3 and kubeconform v0.6.7 built from source (`platform/tools/ci/install_tools.sh`, modules verified against `sum.golang.org`); a throwaway PostgreSQL 16 on a private Unix socket (`platform/tools/ci/start_postgres.sh`); then `platform/tools/validate_all.sh --strict`. Strict fails on a skipped tool group **and** on any check whose output reports a skip (unittest `skipped=N`, a `SKIPPED` manifest, a `SKIP` chart check); schema fetches fail on any error except a real 404, and both schema sources are pinned by commit | Unit, DB, Schemas, Manifests, Charts, and the admission-policy CEL checks |
 
-**Hardening (§2a H1–H4).** `permissions: {}` at the top and `contents: read` per job; no secrets, no `pull_request_target` or `workflow_run`; actions pinned by commit SHA (`actions/checkout` v7.0.1, `actions/setup-python` v7.0.0, `actions/setup-go` v7.0.0, each released more than three months before pinning); checkout without persisted credentials; no caches. Agent-written code in a pull request runs with a read-only token and nothing to steal.
+**Hardening (the workflow's share of §2a H3–H4; H1, H2 and H8 are repository settings and stay open operator actions).** `permissions: {}` at the top and `contents: read` per job; no secrets, no `pull_request_target` or `workflow_run`; actions pinned by commit SHA (`actions/checkout` v7.0.1, `actions/setup-python` v7.0.0, `actions/setup-go` v7.0.0, each released more than three months before pinning); checkout without persisted credentials; no caches. Agent-written code in a pull request runs with a read-only token and nothing to steal.
 
 **Evidence before the first push:**
 - actionlint and zizmor (default and pedantic personas) reported no findings.
@@ -152,9 +152,26 @@ The runnable part of §5.1, in Project-Mercury until the platform repository exi
 - The replay ran: devorch 30, jobspec 14, contract rules 7, self-test 50/50, base 140, roles 12, DB 53, admission 0 mismatches, charts 58/0/0.
 - The replay found two defects before GitHub did: actionlint v1.7.12 needs Go ≥ 1.25, and an unquoted `:all: -r` made a step invalid YAML.
 
+**Found on its first GitHub run.** `test_idempotent_dispatch_concurrent` failed. Two simultaneous `dispatch_job()` calls with one key both missed the lookup, and the second insert failed on the `admission_id` unique index, which `ON CONFLICT (idempotency_key)` does not arbitrate. The local runs had never hit the microsecond window.
+- Fix: a per-key advisory lock (`19-…`).
+- Tests: a deterministic test, `test_dispatch_serialized_per_key`, which fails without the lock every time, and a gated stress test.
+
+**Independent review of the pipeline** (read-only, `mdev-security-engineer` brief, 2026-10-25): accept_with_conditions; no Critical or High.
+- Fixed:
+  - CI-1: skips passed as PASS.
+  - CI-2: schema fetch errors read as "no schema", and the schema sources were unpinned.
+  - CI-3: the admission grep also matched "10 mismatches".
+  - CI-4: actionlint linted other workflows.
+  - CI-6: `main` runs could cancel each other.
+  - CI-7: `install_tools.sh` now forces sum.golang.org and Go 1.24.x; `start_postgres.sh` prints its logs on failure.
+- Open:
+  - CI-5: GitHub evaluates path filters against the first 300 changed files only. A larger PR may get no run, and a missing run looks like "not applicable". A reviewer must see a run on the head SHA.
+  - CI-8: Go 1.24 is past upstream support and Helm v3.17.4 exists. Refresh both pins together with a full re-validation.
+
 **Not implemented (nothing to run yet):** Python lint and format, YAML lint and repository-wide shell lint (the existing code has never been linted, so adopting them is its own change); Policy and E2E in kind; image build, scan and sign (no component or image exists); the §5.3 rule 2 run with `platform/projects/` reduced to synthetic fixtures (no synthetic projects exist yet, so CI validates the Mercury and Jupiter configurations as data).
 
 **For the operator (repository settings are yours, CLAUDE.md):**
+- A pull request runs its own copy of this workflow and scripts, so it could weaken them and still report the same check names. Human review of `.github/**` and `platform/tools/**` (CODEOWNERS, H8) is the control.
 - After this workflow is on `main`, the DOD-02 ruleset can require the two checks above.
 - Because the workflow is path-filtered, a required check would never report on a PR that touches none of those paths, and GitHub would wait for it indefinitely. Require it only once the platform has its own repository (DOD-12), or drop the path filter there.
 - H8 also needs a `CODEOWNERS` entry for `.github/**`. None exists yet.

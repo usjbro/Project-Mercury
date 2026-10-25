@@ -1706,6 +1706,10 @@ BEGIN
   SELECT * INTO t FROM tasks WHERE project_id = p_project_id AND task_id = p_task_id FOR SHARE;
   IF NOT FOUND THEN PERFORM _refuse(format('unknown task %s/%s', p_project_id, p_task_id)); END IF;
   PERFORM _check_lease(t, p_holder, p_token);
+  -- One caller per key at a time (CI found the race): two concurrent calls with one key would otherwise both miss
+  -- the lookup below, and the second insert then fails on the admission_id unique index, which ON CONFLICT
+  -- (idempotency_key) does not arbitrate. Transaction-scoped; a hash collision only serializes two dispatches.
+  PERFORM pg_advisory_xact_lock(hashtextextended('devplat.dispatch_job:' || p_idempotency_key, 0));
   -- an existing row for this key is returned before any other check (at-least-once controller)
   SELECT * INTO j FROM job_runs jr WHERE jr.idempotency_key = p_idempotency_key;
   IF NOT FOUND THEN

@@ -32,7 +32,8 @@ permissions: {}
 
 concurrency:
   group: devplat-ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # superseded PR pushes are cancelled; every main commit keeps a completed run (head-SHA correlation, §2)
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   workflow-lint:
@@ -51,10 +52,11 @@ jobs:
           cache: false
       - name: Build actionlint
         run: platform/tools/ci/install_tools.sh "$RUNNER_TEMP/bin" actionlint
-      - name: Lint workflows (shellcheck is preinstalled on the runner and used by actionlint)
+      - name: Lint this workflow (shellcheck is preinstalled on the runner and used by actionlint)
+        # only this file: other workflows (Mercury's) are not platform CI's to gate (§5.3)
         run: |
           command -v shellcheck
-          "$RUNNER_TEMP/bin/actionlint" -color
+          "$RUNNER_TEMP/bin/actionlint" -color .github/workflows/devplat-ci.yml
 
   validate:
     name: validate_all.sh --strict
