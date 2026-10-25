@@ -1,0 +1,21 @@
+{{- /*
+Operator identities (D2). Source for the DB table operator_identities(issuer, subject, project_id NULL = all),
+which record_operator_fact checks. Synced by the migrator hook Job on every install/upgrade, so changing who may
+record operator facts is a reviewed Helm change by the operator. Hook resource: not deleted by helm uninstall
+(teardown removes it explicitly, 24-... section 6). The api reads it only to reject unknown
+subjects early; the DB check is authoritative.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: devplat-operator-identities
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "devplat.labels" (dict "root" . "name" "devplat-api") | nindent 4 }}
+  annotations:
+    # hook resource: the migrator Job reads it before the release's normal resources exist (pre-install)
+    helm.sh/hook: {{ ternary "post-install,pre-upgrade" "pre-install,pre-upgrade" (eq .Values.postgres.mode "cnpg") }}
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation
+data:
+  identities.json: {{ toJson .Values.api.oidc.allowedSubjects | quote }}

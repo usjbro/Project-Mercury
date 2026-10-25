@@ -1,0 +1,15 @@
+apiVersion: v2
+name: devplat-project
+description: >-
+  Per-project namespace layer for devplat (same objects as platform/deploy/base renders statically for
+  proj-mercury-* / proj-jupiter-*): namespaces (PSA pinned v1.33), ResourceQuotas, LimitRanges, zero-RBAC
+  ServiceAccounts, the controller's RoleBindings, NetworkPolicies, per-namespace admission params (D15), the
+  read-only registry proxy (D14), the builder allowlist, the namespacer test profile (D19) and project settings
+  (D16). Values are generated from the project configuration (26-...). Proposed; never installed.
+type: application
+version: 0.1.0-alpha.0
+appVersion: "0.1.0-alpha.0"
+kubeVersion: ">=1.30.0-0"
+annotations:
+  devplat.io/status: "Implemented (untested) - rendered, validated and compared with platform/deploy/base by platform/tools/charts/run.sh, never installed"
+  devplat.io/requires: "devplat chart installed (platformNamespace) with a matching version"

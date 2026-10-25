@@ -1,0 +1,29 @@
+{{- /*
+devplat-model-gateway: the only path from agent pods to LLM APIs (:8080, only for pods with network-class
+model-only or deps, base NetworkPolicy). Per-Job tokens are minted on the admin port :9443 by the controller; the
+project is bound to the token, never taken from the URL path (D12).
+Request policy (D12, ConfigMap devplat-model-gateway-policy): only the allowlisted endpoints; requests carrying
+server-side tools (web_search, web_fetch, code_execution, computer use, any tool whose `type` is server-side),
+`mcp_servers` or `container`, Files/Batches APIs, or a non-allowlisted `anthropic-beta` header are rejected with
+403 before anything is forwarded. Per-token budgets.
+Provider keys: Secret devplat-model-gateway-llm-keys (key "<provider>-api-key"; "<provider>-api-key-reduced" is the
+separate spend-limited key used for reduced-assurance projects, D16). Budget tables: Secret devplat-db-model-gateway.
+*/}}
+{{- $env := "- name: DEVPLAT_POLICY_FILE\n  value: \"/etc/devplat/policy/policy.json\"\n- name: DEVPLAT_KEYS_DIR\n  value: \"/var/run/devplat/llm-keys\"\n" -}}
+{{- $env = printf "%s%s" $env (include "devplat.dbEnv" (dict "root" . "role" "model-gateway")) -}}
+{{- $vols := "- name: llm-keys\n  secret:\n    secretName: devplat-model-gateway-llm-keys\n    defaultMode: 0400\n- name: policy\n  configMap:\n    name: devplat-model-gateway-policy" -}}
+{{- $mounts := "- name: llm-keys\n  mountPath: /var/run/devplat/llm-keys\n  readOnly: true\n- name: policy\n  mountPath: /etc/devplat/policy\n  readOnly: true" -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: devplat-model-gateway-policy
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "devplat.labels" (dict "root" . "name" "devplat-model-gateway") | nindent 4 }}
+data:
+  policy.json: {{ dict "providers" .Values.modelGateway.providers "policy" .Values.modelGateway.policy "reducedAssuranceKeySuffix" "-reduced" | toJson | quote }}
+---
+{{ include "devplat.workload" (dict "root" . "name" "devplat-model-gateway" "key" "modelGateway" "comp" .Values.modelGateway "replicas" .Values.modelGateway.replicas
+    "ports" (list (dict "name" "http" "containerPort" 8080 "servicePort" 8080) (dict "name" "admin" "containerPort" 9443 "servicePort" 9443) (dict "name" "metrics" "containerPort" 9090 "servicePort" 9090))
+    "probe" (dict "readyPath" "/readyz" "livePath" "/healthz" "port" "http")
+    "env" $env "automount" false "volumes" $vols "volumeMounts" $mounts "args" "") }}

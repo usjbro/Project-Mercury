@@ -1,0 +1,166 @@
+# Vendored fixture (R6 A-04): the example Job of 16-agent-execution-and-job-lifecycle.md §4.1, byte-identical below this
+# header. test_jobspec.py checks build_job() == this file and, when the doc is present, doc block == this file.
+# Rendered by devplat-controller for task DT-0001 (MERC-101), attempt 2, role mdev-backend-engineer.
+# Placeholders: registry host, image digests and the role ConfigMap hash are illustrative.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: dp-mercury-dt-0001-a2-d1                 # dp-<project>-<task>-a<attempt>-d<dispatch>; deterministic => create is idempotent
+  namespace: proj-mercury-exec                # from the project's execution target {cluster_ref, namespace_prefix}
+  labels:
+    app.kubernetes.io/managed-by: devplat-controller
+    devplat.io/project: mercury
+    devplat.io/task: dt-0001
+    devplat.io/attempt: "2"
+    devplat.io/dispatch: "1"
+    devplat.io/role: mdev-backend-engineer
+    devplat.io/kind: implementation
+    devplat.io/network-class: deps            # selects the egress NetworkPolicy
+    devplat.io/idempotency-key: 236b93d0c657f40e8603a992840ceb18a8ec0978   # sha256(project|task|contract_core|attempt|dispatch)[:40]; computed by platform/controller/jobspec.py
+  annotations:
+    devplat.io/contract-core-sha256: 4b1e0c3a9d7f25e86c1b0a4f3e9d2c7b6a5f4e3d2c1b0a9f8e7d6c5b4a392817
+    devplat.io/contract-version: "1"
+    devplat.io/base-commit: a39b1550333e5e5b20003720a65afa27bad32f6c
+    devplat.io/role-definition-sha256: 0d3c5e7a9b1f2e4d6c8a0b2d4f6e8a0c2e4b6d8f0a2c4e6b8d0f2a4c6e8b0d2f
+    devplat.io/profile: mdev-backend-engineer@devplat.execution_profiles.v1
+spec:
+  suspend: true                               # created suspended; the controller adds ConfigMap+Secret owned by this Job, then unsuspends
+  backoffLimit: 0                             # no Kubernetes retries: attempts belong to the controller (budgets, attempt+1)
+  completions: 1
+  parallelism: 1
+  activeDeadlineSeconds: 2400                 # min(contract 30, profile 60) min * 60 + setup grace 600 s
+  ttlSecondsAfterFinished: 86400              # backstop; the controller deletes the Job after collection
+  podReplacementPolicy: Failed                # never two pods of one attempt at once
+  podFailurePolicy:                           # classification hint; the controller re-derives the class from pod status
+    rules:
+      - action: FailJob                       # node drain / eviction / preemption => environmental (env_retry)
+        onPodConditions:
+          - type: DisruptionTarget
+            status: "True"
+      - action: FailJob                       # fetch: bundle URL expired/used or base verify failed => environmental
+        onExitCodes:
+          containerName: fetch
+          operator: NotIn
+          values: [0]
+      - action: FailJob                       # agent runner exit codes, see 16-... §6
+        onExitCodes:
+          containerName: agent
+          operator: In
+          values: [64, 65, 75]
+  template:
+    metadata:
+      labels:
+        devplat.io/project: mercury
+        devplat.io/task: dt-0001
+        devplat.io/attempt: "2"
+        devplat.io/dispatch: "1"
+        devplat.io/role: mdev-backend-engineer
+        devplat.io/network-class: deps
+        devplat.io/workload: agent            # NetworkPolicy and admission policy selector
+    spec:
+      restartPolicy: Never                    # required by podFailurePolicy
+      serviceAccountName: mercury-agent       # <project>-agent; zero RBAC bindings (18-… §7)
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      dnsPolicy: "None"                       # devplat-dns only (no internet forwarding: no DNS exfiltration, 18-… §10)
+      dnsConfig:
+        nameservers: [10.96.100.53]           # ClusterIP of devplat-dns, looked up by the controller (placeholder)
+        searches: [proj-mercury-exec.svc.cluster.local, svc.cluster.local, cluster.local]
+        options:
+          - {name: ndots, value: "5"}
+      runtimeClassName: gvisor                # 'default' only in reduced-assurance workstation mode
+      priorityClassName: devplat-agent
+      terminationGracePeriodSeconds: 60
+      nodeSelector:
+        devplat.io/pool: exec
+      tolerations:
+        - key: devplat.io/exec
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: fetch                         # no LLM; fetches and verifies the workspace
+          image: registry.devplat.internal/devplat/fetch@sha256:1111111111111111111111111111111111111111111111111111111111111111
+          args: ["--io=/etc/devplat/io", "--contract=/etc/devplat/contract/contract.json", "--dest=/workspace/repo"]
+          resources:
+            requests: {cpu: 100m, memory: 128Mi, ephemeral-storage: 64Mi}
+            limits:   {cpu: 500m, memory: 512Mi, ephemeral-storage: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: workspace, mountPath: /workspace}
+            - {name: io, mountPath: /etc/devplat/io, readOnly: true}
+            - {name: contract, mountPath: /etc/devplat/contract, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+      containers:
+        - name: agent                         # devplat-runner (PID 1) -> claude -p --agent <role>; then bundle + upload
+          image: registry.devplat.internal/devplat/agent-node24@sha256:2222222222222222222222222222222222222222222222222222222222222222
+          workingDir: /workspace/repo
+          args:
+            - --contract=/etc/devplat/contract/contract.json
+            - --role=mdev-backend-engineer
+            - --io=/etc/devplat/io
+            - --out=/out
+            - --max-turns=10                  # min(contract budget.max_turns, profile max_turns)
+            - --wall-seconds=1800             # runner stops claude at the wall budget, keeping the grace for upload
+          env:
+            - {name: HOME, value: /home/agent}
+            - {name: ANTHROPIC_BASE_URL, value: "http://devplat-model-gateway.devplat-system.svc:8080"}   # project bound to the token, not the URL (R6 D12)
+            - name: ANTHROPIC_AUTH_TOKEN      # per-Job gateway token, not the API key; revoked when the Job ends
+              valueFrom:
+                secretKeyRef: {name: dp-mercury-dt-0001-a2-d1-io, key: gateway_token}
+            - {name: DEVPLAT_ARTIFACT_GATEWAY, value: "http://devplat-artifact-gateway.devplat-system.svc:8082"}   # uploads only here (R6 D10)
+            - {name: NPM_CONFIG_REGISTRY, value: "http://devplat-registry-proxy-mercury.devplat-system.svc:4873/"}   # this project's read-only proxy (R6 D14)
+            - {name: DISABLE_AUTOUPDATER, value: "1"}
+            - {name: CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, value: "1"}
+          resources:                          # from platform/agents/execution-profiles.yaml
+            requests: {cpu: "1", memory: 2Gi, ephemeral-storage: 4Gi}
+            limits:   {cpu: "2", memory: 4Gi, ephemeral-storage: 8Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: workspace, mountPath: /workspace}
+            - {name: home, mountPath: /home/agent}
+            - {name: role, mountPath: /home/agent/.claude/agents, readOnly: true}   # only this role's file
+            - {name: role-settings, mountPath: /etc/claude-code, readOnly: true}    # managed settings (allow/deny)
+            - {name: contract, mountPath: /etc/devplat/contract, readOnly: true}
+            - {name: io, mountPath: /etc/devplat/io, readOnly: true}
+            - {name: out, mountPath: /out}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: workspace
+          emptyDir: {sizeLimit: 8Gi}          # profile workspace_size; ephemeral PVC where node disk is short
+        - name: home
+          emptyDir: {sizeLimit: 512Mi}
+        - name: out
+          emptyDir: {sizeLimit: 256Mi}
+        - name: tmp
+          emptyDir: {sizeLimit: 1Gi}
+        - name: role
+          configMap:
+            name: devplat-roles-mercury-0d3c5e7a   # immutable, generated from .claude/agents/mdev-*.md at a pinned commit
+            items:
+              - {key: mdev-backend-engineer.md, path: mdev-backend-engineer.md}
+        - name: role-settings
+          configMap:
+            name: devplat-roles-mercury-0d3c5e7a
+            items:
+              - {key: managed-settings.mdev-backend-engineer.json, path: managed-settings.json}   # one settings key per role
+        - name: contract
+          configMap:
+            name: dp-mercury-dt-0001-a2-d1-contract   # ownerReference -> this Job
+        - name: io
+          secret:
+            secretName: dp-mercury-dt-0001-a2-d1-io   # one-time bundle URL, one-time upload token, gateway token; ownerReference -> this Job
+            defaultMode: 0400

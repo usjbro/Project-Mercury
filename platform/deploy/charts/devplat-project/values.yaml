@@ -1,0 +1,153 @@
+# devplat-project values. In use they are GENERATED from the project configuration (26-..., platform/projects/<id>.yaml)
+# by the platform's config renderer; hand edits are overwritten.
+# The defaults below describe a HYPOTHETICAL project `example-a` (the synthetic fixture of 23-... section 5.3).
+# Every number is a GENERIC EXAMPLE VALUE (same magnitudes as the reference rendering in platform/deploy/base),
+# not a decision for any real project:
+# - Mercury: quotas are `unresolved` in platform/projects/mercury.yaml (namespace_quota); its release is rendered
+#   only after the operator sizes them (cluster size per DOD-15, first measured tasks per 09-... section 4).
+# - Jupiter: every value is unresolved (no repository or specification exists); nothing is rendered for it.
+#
+# This chart renders the per-project namespace layer that platform/deploy/base shows statically for
+# proj-mercury-* / proj-jupiter-* (namespaces, quotas, limit ranges, ServiceAccounts, the controller's
+# RoleBindings to devplat-job-runner, NetworkPolicies), plus per-project parts that only exist per project:
+# the per-namespace admission params (image prefixes, D15), the read-only registry proxy (D14), the
+# builder policy (D20) and the test profile used by devplat-namespacer (D19). Generic hardening (VAPs),
+# ClusterRoles, RuntimeClasses and PriorityClasses are cluster prerequisites from base and are NOT rendered here.
+
+project:
+# - Mercury: quotas are `unresolved` in platform/projects/mercury.yaml (namespace_quota); its release is rendered
+#   only after the operator sizes them (cluster size per DOD-15, first measured tasks per 09-... section 4).
+# - Jupiter: every value is unresolved (no repository or specification exists); nothing is rendered for it.
+#
+# This chart renders the per-project namespace layer that platform/deploy/base shows statically for
+# proj-mercury-* / proj-jupiter-* (namespaces, quotas, limit ranges, ServiceAccounts, the controller's
+# RoleBindings to devplat-job-runner, NetworkPolicies). Generic hardening (VAPs), ClusterRoles, RuntimeClasses
+# and PriorityClasses are cluster prerequisites from base and are NOT rendered here.
+
+project:
+  id: example-a
+  namespacePrefix: proj-example-a      # = execution_target.namespace_prefix
+  # Execution target cluster (`default` = the platform's own cluster). Option C later = a different clusterRef;
+  # this chart is then installed in that cluster instead.
+  clusterRef: default
+
+platformNamespace: devplat-system
+
+# Registry (mirror) project images are pulled from. Project namespaces admit only
+# <imageRegistry>/devplat/ (platform runner and fetch images), <imageRegistry>/projects/<id>/ and
+# <imageRegistry>/mirror/ (D15). Rendered as the per-namespace params ConfigMap devplat-admission-params.
+imageRegistry: registry.devplat.internal
+
+# Assurance (D16). reduced requires the per-project operator fact REDUCED-ASSURANCE (with a reason) recorded through
+# devplat-api; the controller checks the DB fact, this value only declares intent. In reduced mode builds must be
+# disabled, the dev-bot App may be installed on a sandbox repository only, and the gateway uses the separate
+# spend-limited key <provider>-api-key-reduced.
+assurance:
+  mode: standard
+  reducedAssuranceFact: ""        # e.g. "REDUCED-ASSURANCE"; required when mode=reduced
+
+# Agent, build and test pods reach artifacts ONLY through devplat-artifact-gateway :8082 (D10). There is no
+# object-store egress from project namespaces, so there is nothing to configure here.
+
+# Read-only package-registry proxy for this project (D14): devplat-registry-proxy-<id> in devplat-system, publish
+# and adduser disabled, upstreams = the project's registries_allowlist. Only the npm part (Verdaccio, :4873) is
+# templated; the OCI pull-through on :5000 that base's NetworkPolicy allows is NOT templated yet, and other package
+# ecosystems are unresolved. Disabled = network class deps has no registry to reach.
+registryProxy:
+  enabled: false
+  image:
+    name: mirror/verdaccio/verdaccio
+    digest: ""
+  npmUplinks: []                  # e.g. ["https://registry.npmjs.org/"]; must be non-empty when enabled
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 512Mi}
+
+exec:
+  # Base VAP devplat-proj-runtime-placement already requires RuntimeClass gvisor or kata for every exec/test pod.
+  # Set this only to pin ONE of them for this project (project-specific rule); "" = generic base rule.
+  requiredRuntimeClassName: ""
+  quota:
+    requests.cpu: "8"
+    limits.cpu: "16"
+    requests.memory: 16Gi
+    limits.memory: 32Gi
+    requests.ephemeral-storage: 60Gi
+    limits.ephemeral-storage: 120Gi
+    pods: "8"
+    count/jobs.batch: "40"
+    persistentvolumeclaims: "8"
+    requests.storage: 160Gi
+    configmaps: "100"             # per-run <job>-contract ConfigMaps
+    secrets: "100"                # per-run <job>-io Secrets (bounded, never 0: doc 18 I-5)
+  limits:
+    max: {cpu: "4", memory: 8Gi, ephemeral-storage: 20Gi}
+    min: {cpu: 50m, memory: 64Mi}
+    default: {cpu: "2", memory: 4Gi, ephemeral-storage: 10Gi}
+    defaultRequest: {cpu: 500m, memory: 1Gi, ephemeral-storage: 2Gi}
+    pvcMaxStorage: 20Gi
+
+build:
+  # Builds are OFF by default (D20) and remain blocked on spike S-B1 (22-... section 9). The build namespace always
+  # exists (as in base); `enabled` sets the params switch buildsEnabled. When enabled, base VAP
+  # devplat-build-exceptions (per-namespace params rendered by this chart) requires for the container buildkitd:
+  # hostUsers: false, the image prefix, exactly the pinned args and the Localhost seccomp profile below. This chart
+  # adds only the project-specific allowlist of full image references for every container in the build namespace.
+  # Not allowed in reduced-assurance mode (D16).
+  enabled: false
+  allowedBuilderImages: []        # e.g. ["registry.devplat.internal/mirror/moby/buildkit@sha256:..."]
+  buildkit:
+    imagePrefix: "registry.devplat.internal/mirror/moby/buildkit@sha256:"
+    seccompLocalhostProfile: "profiles/devplat-buildkit.json"   # node-installed Localhost profile (as in base)
+    args:                         # pinned args (base params, space-joined), same default as platform/deploy/base
+      - "--oci-worker-no-process-sandbox"
+      - "--addr"
+      - "unix:///run/user/1000/buildkit/buildkitd.sock"
+  quota:
+    requests.cpu: "8"
+    limits.cpu: "16"
+    requests.memory: 16Gi
+    limits.memory: 32Gi
+    requests.ephemeral-storage: 100Gi
+    limits.ephemeral-storage: 200Gi
+    pods: "4"
+    count/jobs.batch: "20"
+    persistentvolumeclaims: "4"
+    requests.storage: 200Gi
+    configmaps: "50"
+    secrets: "50"
+  limits:
+    max: {cpu: "4", memory: 8Gi, ephemeral-storage: 50Gi}
+    min: {cpu: 50m, memory: 64Mi}
+    default: {cpu: "2", memory: 4Gi, ephemeral-storage: 20Gi}
+    defaultRequest: {cpu: "1", memory: 2Gi, ephemeral-storage: 5Gi}
+    pvcMaxStorage: 50Gi
+
+# Profile that devplat-namespacer applies to every ephemeral test namespace proj-<P>-t-<8 hex> (doc 18 section 9.3).
+test:
+  maxConcurrentNamespaces: 2
+  ttlSecondsAfterSuccess: 0
+  ttlSecondsAfterFailure: 3600
+  maxLifetimeSeconds: 14400
+  # Exactly the keys of doc 18 section 9.3, each within base devplat-cluster-params (defaults shown in comments).
+  # persistentvolumeclaims, services.loadbalancers and services.nodeports are always 0 and not configurable.
+  quota:
+    pods: "20"                        # <= maxPods 20
+    requests.cpu: "4"                 # <= maxRequestsCpu 8
+    limits.cpu: "8"                   # <= maxLimitsCpu 16
+    requests.memory: 8Gi              # <= maxRequestsMemory 16Gi
+    limits.memory: 16Gi               # <= maxLimitsMemory 32Gi
+    requests.ephemeral-storage: 20Gi  # <= maxRequestsEphemeralStorage 40Gi
+    limits.ephemeral-storage: 40Gi    # <= maxLimitsEphemeralStorage 80Gi
+    services: "20"                    # <= maxServices 20 (ClusterIP fixtures only; exec/build keep 0)
+    secrets: "50"                     # <= maxSecrets 50
+    configmaps: "50"                  # <= maxConfigMaps 50
+  limits:
+    maxCpu: "4"                       # <= maxContainerCpu 4
+    maxMemory: 8Gi                    # <= maxContainerMemory 8Gi
+  # Sandbox-integration suites (e.g. Mercury T3: sandbox repo + sandbox Apps) need HTTPS egress from a dedicated
+  # test class. Off by default; turning it on is an operator decision (22-... section 4.3). Sandbox credentials
+  # are never part of these values.
+  sandboxEgress:
+    enabled: false
+    egressCidrs: []

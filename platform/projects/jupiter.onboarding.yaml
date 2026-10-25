@@ -1,0 +1,155 @@
+# devplat project configuration — Project JUPITER (onboarding draft)
+# Discovery on 2026-10-17 found NO Jupiter repository (8 GitHub repositories visible to the account; none is Jupiter),
+# NO Linear project or issue, NO Notion page and NO document in this repository that describes Jupiter.
+# Therefore every project-specific value below is {unresolved: <question for the operator>}.
+# The only resolved values are PLATFORM invariants or platform naming conventions that the schema imposes on
+# every project (marked "platform"); they say nothing about Jupiter itself.
+# Questions are numbered Q-J01… and listed with their purpose in
+# docs/mercury/development-orchestration/26-project-configuration.md §3.1.
+schema: devplat.project.v1
+schema_minor: 1
+project_id: jupiter                 # the name the operator used; confirm (Q-J01)
+display_name: Project JUPITER (unconfirmed)
+status: draft                       # nothing may be scheduled for this project
+config_version: 2                   # R6 fix round (schema minor 1)
+verified:
+  date: "2026-10-17"
+  by: devplat drafting agent (Amendment 001)
+  sources:
+    - "GitHub repository list of the connected account (8 repositories, none named or describing Jupiter)"
+    - "Linear projects and issues search: no match for Jupiter"
+    - "Notion search: no match for Jupiter"
+    - "This repository, all branches: no Jupiter document"
+
+source_repository:
+  url: {unresolved: "Q-J02: Which GitHub repository holds Jupiter? It does not exist yet in the account — will the operator create it, and under a user or an organization?", owner: operator, blocks: everything}
+  default_branch: {unresolved: "Q-J03: Default branch name of the Jupiter repository.", owner: operator}
+  protected_branches: {unresolved: "Q-J03: Which branches are protected by a ruleset (at least the default branch)?", owner: operator}
+  visibility: {unresolved: "Q-J04: Public or private repository? (decides GitHub-hosted vs. self-hosted CI options and what review findings may be published)", owner: operator}
+  owner_kind: {unresolved: "Q-J02: User or organization owner? Organization enables preventive operator-only merge (G-ORG).", owner: operator}
+
+issue_tracker: {unresolved: "Q-J05: Which tracker holds Jupiter's backlog (a Linear team/project, or none)? No Linear project exists. May the platform write to it (default: read-only)?", owner: operator}
+
+documentation:
+  requirements: {unresolved: "Q-J06: Where are Jupiter's requirements? No document exists.", owner: operator, blocks: "G1 for every task"}
+  design: {unresolved: "Q-J06: Is there a design document (TDD equivalent)? Who approves it?", owner: operator, blocks: "G1"}
+  adr: {unresolved: "Q-J06: ADR location, if any.", owner: operator}
+  runbooks: {unresolved: "Q-J06: Runbook location, if any.", owner: operator}
+  test_plan: {unresolved: "Q-J10: Test plan / verification plan location, if any.", owner: operator}
+  design_approval: {unresolved: "Q-J06: Has the operator approved a Jupiter design commit that G1 may cite?", owner: operator}
+architecture_constraints: {unresolved: "Q-J07: Architecture constraints (platform, runtime, data stores, external services) Jupiter must respect.", owner: operator}
+coding_standards: {unresolved: "Q-J08: Coding standards / style guides / linters.", owner: operator}
+
+languages: {unresolved: "Q-J08: Programming languages and versions. Nothing is known; nothing is assumed.", owner: operator}
+toolchains: {unresolved: "Q-J08: Toolchains (compilers, package managers, build tools) and pinned versions.", owner: operator}
+container_images: {unresolved: "Q-J09: Toolchain/test images. Built in proj-jupiter-build and pinned by digest once the toolchain is known.", owner: devops}
+
+test_levels: {unresolved: "Q-J10: Test levels with build/lint/test/scan/deployment-validation commands; which need real external systems or non-Linux hosts?", owner: operator, blocks: "G2 for every task"}
+required_tooling: {unresolved: "Q-J08: Required tooling (CLIs, scanners) and versions.", owner: operator}
+environments:
+  - id: k8s-exec                    # platform: every project gets an exec namespace; nothing is scheduled while draft
+    kind: kubernetes_exec
+    purpose: "platform default only; Jupiter's environment needs (Q-J11) are unknown — e.g. a non-Kubernetes lane such as macOS, GPUs, devices, external services"
+    task_kinds: [planning]
+    ref: "26-… §3.1 Q-J11"
+
+resources:
+  default_job: {unresolved: "Q-J12: Expected build/test size (CPU, memory, disk) per Job.", owner: operator}
+  namespace_quota: {unresolved: "Q-J12: Share of the cluster Jupiter may use (ResourceQuota) relative to Mercury.", owner: operator}
+  max_concurrent:
+    jobs: {unresolved: "Q-J12: Maximum concurrent Jobs for Jupiter."}
+    implementation: {unresolved: "Q-J12: Maximum concurrent implementation agents."}
+    review: {unresolved: "Q-J12: Maximum concurrent review agents."}
+    external_lane: {unresolved: "Q-J11: Any external lane and its capacity."}
+    open_prs_awaiting_human: {unresolved: "Q-J13: How many open PRs can the operator review at once for Jupiter (in addition to Mercury)?"}
+  priority_weight: {unresolved: "Q-J12: Fair-share weight relative to Mercury."}
+
+network:
+  model_providers: []               # Q-J14: which model providers may Jupiter's agents use? none until answered
+  classes_allowed: [none]           # fail closed until Q-J14 is answered
+  registries_allowlist: {unresolved: "Q-J14: Package registries Jupiter's builds need (the deps class stays denied until answered).", owner: security}
+  extra_egress: []
+
+identities:
+  github_app:
+    name: devplat-github-app-jupiter   # platform naming convention; nothing exists
+    purpose: development bot for Jupiter (dev/* pushes, draft PRs)
+    holder: devplat-gitbroker
+    scope: "Q-J15: install on the Jupiter repository only, same restrictions as for Mercury (no merge, no approve, no admin)"
+    provisioning: not_created
+  secrets: []                       # Q-J15: which external credentials (names only) Jupiter's tests need — none known
+
+security:
+  restricted_paths: {unresolved: "Q-J16: Paths no agent may change (e.g. CI config, agent instruction files, release config).", owner: security}
+  security_sensitive_paths: {unresolved: "Q-J16: Security-sensitive code paths that need full-depth G4.", owner: security}
+  escalate_paths: {unresolved: "Q-J16: Paths allowed only with explicit contract naming.", owner: security}
+  runtime_class: gvisor             # recommended platform default for untrusted repository code (ADR-023 proposed, awaits DOD-11)
+  pod_security: restricted          # platform invariant
+  untrusted_inputs: [agent outputs, repository content, tracker text, PR comments and reviews, CI logs, dependency source]   # platform invariant
+
+agent_permissions:
+  roles:                            # Q-J17: which of the 12 roles apply to Jupiter, with which path scopes? All disabled until answered.
+    planner: {enabled: false, writes: false, path_scopes: []}
+    mdev-lead-architect: {enabled: false, writes: true, path_scopes: {unresolved: "Q-J17: path scope for this role in Jupiter."}}
+    mdev-tpm: {enabled: false, writes: false, path_scopes: []}
+    mdev-backend-engineer: {enabled: false, writes: true, path_scopes: {unresolved: "Q-J17: path scope for this role in Jupiter."}}
+    mdev-database-engineer: {enabled: false, writes: true, path_scopes: {unresolved: "Q-J17: does Jupiter have a database? path scope."}}
+    mdev-ai-integration-engineer: {enabled: false, writes: true, path_scopes: {unresolved: "Q-J17: does Jupiter integrate AI agents? path scope."}}
+    mdev-platform-integration-engineer: {enabled: false, writes: true, path_scopes: {unresolved: "Q-J17: external integrations and their path scope."}}
+    mdev-security-engineer: {enabled: false, writes: true, path_scopes: {unresolved: "Q-J17: security-owned code paths."}}
+    mdev-devops-engineer: {enabled: false, writes: true, path_scopes: {unresolved: "Q-J17: build/packaging path scope."}}
+    mdev-test-automation-engineer: {enabled: false, writes: true, path_scopes: {unresolved: "Q-J17: test path scope."}}
+    mdev-reliability-engineer: {enabled: false, writes: true, path_scopes: {unresolved: "Q-J17: is a reliability role needed?"}}
+    mdev-code-reviewer: {enabled: false, writes: false, path_scopes: []}
+    mdev-integration-release-engineer: {enabled: false, writes: true, path_scopes: {unresolved: "Q-J17: release/changelog path scope."}}
+
+review_gates:
+  gates:                            # platform invariant: G1–G7 apply to every full-lifecycle task of every project
+    G1: {required: true, verifier: devplat-controller}
+    G2: {required: true, verifier: devplat-controller re-run}
+    G3: {required: true, verifier: mdev-code-reviewer}
+    G4: {required: true, verifier: mdev-security-engineer, depth: "Q-J16 decides which paths need full depth"}
+    G5: {required: true, verifier: mdev-integration-release-engineer}
+    G6: {required: true, verifier: devplat-gitbroker draft PR + required CI}
+    G7: {required: true, verifier: "GitHub fact: merged_by = repository owner"}
+  required_reviewers:
+    default: [mdev-code-reviewer, mdev-security-engineer]          # platform minimum
+    security_sensitive: [mdev-code-reviewer, mdev-security-engineer]
+  human_approvers: {unresolved: "Q-J18: GitHub login(s) of the Jupiter repository owner who alone approves and merges.", owner: operator}
+  human_approver_rule: repository_owner                            # platform invariant
+  hard_preconditions: [DOD-02, DOD-13]   # platform minimum (R6 D1); facts must be recorded for project jupiter itself
+  external_gates: []                # Q-J19: project-specific gates (e.g. hardware or compliance sign-off)?
+
+github_policy:
+  pr_mode: draft                    # platform invariant
+  branch_prefix: dev/               # platform invariant
+  branch_pattern: "^dev/[a-z0-9][a-z0-9-]{1,50}$"   # platform default until the issue-key format is known (Q-J05)
+  base_branch: {unresolved: "Q-J03: PR base branch.", owner: operator}
+  merge_by: human                   # platform invariant
+  agent_may: [push_branch_prefix, open_draft_pr, comment]
+  ruleset: {unresolved: "Q-J20: Will the operator apply the same ruleset as Mercury's DOD-02 (PR, owner approval of last push, CODEOWNERS, no bypass) before any code task?", owner: operator}
+  codeowners: {unresolved: "Q-J20: CODEOWNERS = the repository owner only?", owner: operator}
+  required_ci_contexts: {unresolved: "Q-J10: Which CI checks are required?", owner: operator}
+
+artifacts:
+  bucket: devplat-jupiter           # devplat-<project_id> (R6 D11); bucket not created
+  retention_days:
+    evidence: {unresolved: "Q-J21: Evidence retention."}
+    logs: {unresolved: "Q-J21: Log retention."}
+    build_cache: {unresolved: "Q-J21: Build-cache retention."}
+
+budgets:
+  cost_usd_per_day: {unresolved: "Q-J22: Daily cost cap for Jupiter (separate from Mercury's).", owner: operator, blocks: "any Job"}
+  tokens_per_day: {unresolved: "Q-J22: Daily token cap (optional with a cost cap)."}
+  stop_dispatch_at_fraction: 0.8    # platform default (stop new dispatch at 80 % of the cap)
+  max_wall_minutes_per_job: {unresolved: "Q-J22: Per-Job wall-time ceiling."}
+
+deployment_targets: {unresolved: "Q-J23: Does Jupiter deploy anywhere? Which target may be used for deployment validation only? (production deployment is never automated)", owner: operator}
+
+execution_target:
+  cluster_ref: default              # platform default; Q-J24: own cluster (topology C) required?
+  namespace_prefix: proj-jupiter    # derived from project_id
+
+notes:
+  - "Draft: no Job, namespace, bucket, secret or GitHub App is created for Jupiter until the onboarding criteria in 26-… §3.4 hold."
+  - "If Jupiter turns out not to exist as a separate project, delete this file; the platform contains no other Jupiter reference outside platform/projects/ and tests."

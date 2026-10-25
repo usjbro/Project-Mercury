@@ -1,0 +1,6 @@
+{
+  "_comment": "Vendored, byte-identical copy of the v1 specialist guard hook (a TRIPWIRE, not a control; R5 N-01). Baked into the agent image at /opt/devplat/hooks/specialist_guard.py; gen_role_configmap.py points every role definition's hook there. Platform code and tests never import the v1 tree (R6 A-04). Re-vendor only by an operator-approved change; update sha256 and source_commit together.",
+  "files": {
+    "specialist_guard.py": {"source": "tools/devorch/hooks/specialist_guard.py", "source_commit": "a906f2c92a3b23f58a738648e2a8c7cfd204e0ad", "sha256": "d5a8eefe01e80162c6aaae0193db8ccf96d9524c3a6d15d0b3c29460c91431c3"}
+  }
+}

@@ -1,0 +1,23 @@
+# devplat base: PriorityClasses (scheduling.k8s.io/v1). Status: Documented only / not deployed.
+# Names and semantics as in 17-multi-project-scheduling.md §3 rule 2 / §7. Ordering of work is decided by the
+# controller's admission (critical path, downstream count, fair share); PriorityClasses only make sure that, under
+# node pressure, platform services win and that agent work never preempts other work mid-run.
+# Project namespaces cannot use devplat-platform (ResourceQuota devplat-no-platform-priority, quotas.yaml).
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: devplat-platform
+value: 1000000
+globalDefault: false
+preemptionPolicy: PreemptLowerPriority
+description: "devplat platform services: controller, api, gitbroker, gitbroker-fetch, model-gateway, registry-proxy, devplat-dns, postgres, artifact store."
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: devplat-agent
+value: 10000
+globalDefault: false
+preemptionPolicy: Never
+description: "Agent, planner, verifier, build and test Jobs. Never preempts running work (a lost LLM run costs money)."

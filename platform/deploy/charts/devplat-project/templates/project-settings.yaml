@@ -1,0 +1,15 @@
+{{- /*
+Per-project platform settings read by devplat-controller and devplat-model-gateway. Declarations only: the
+controller enforces reduced-assurance mode only when the DB also holds the per-project operator fact named here
+(D16), and never accepts a reduced declaration as a substitute for the D1 facts.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: devplat-project-settings-{{ .Values.project.id }}
+  namespace: {{ .Values.platformNamespace }}
+  labels:
+    {{- include "proj.labels" . | nindent 4 }}
+    devplat.io/config: project-settings
+data:
+  settings.json: {{ dict "project" .Values.project.id "assuranceMode" .Values.assurance.mode "reducedAssuranceFact" .Values.assurance.reducedAssuranceFact "buildsEnabled" .Values.build.enabled "registryProxy" (ternary (printf "devplat-registry-proxy-%s" .Values.project.id) "" .Values.registryProxy.enabled) "llmKeyVariant" (ternary "reduced" "standard" (eq .Values.assurance.mode "reduced")) | toJson | quote }}

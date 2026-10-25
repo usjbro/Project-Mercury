@@ -1,0 +1,849 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "devplat chart values",
+  "description": "Values contract for the devplat control-plane chart (proposed, Amendment 001, R6 fix round). Unknown keys are rejected so that typos cannot silently disable a control.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "platform",
+    "imageRegistry",
+    "placement",
+    "image",
+    "controller",
+    "migrator",
+    "api",
+    "gitbroker",
+    "gitbrokerFetch",
+    "artifactGateway",
+    "namespacer",
+    "modelGateway",
+    "dns",
+    "postgres",
+    "artifacts",
+    "ingress"
+  ],
+  "definitions": {
+    "digest": {
+      "type": "string",
+      "pattern": "^(sha256:[a-f0-9]{64})?$",
+      "description": "Empty until an image exists; templates fail on empty."
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "digest"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^(devplat|mirror)/[a-z0-9]([a-z0-9._/-]*[a-z0-9])?$",
+          "description": "Path under imageRegistry. Platform namespaces admit only devplat/ and mirror/ (D15)."
+        },
+        "digest": {
+          "$ref": "#/definitions/digest"
+        }
+      }
+    },
+    "quantity": {
+      "type": [
+        "string",
+        "number"
+      ],
+      "pattern": "^[0-9]+(\\.[0-9]+)?(m|Ki|Mi|Gi|Ti|k|M|G|T)?$"
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requests",
+        "limits"
+      ],
+      "properties": {
+        "requests": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "cpu",
+            "memory"
+          ],
+          "properties": {
+            "cpu": {
+              "$ref": "#/definitions/quantity"
+            },
+            "memory": {
+              "$ref": "#/definitions/quantity"
+            }
+          }
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "cpu",
+            "memory"
+          ],
+          "properties": {
+            "cpu": {
+              "$ref": "#/definitions/quantity"
+            },
+            "memory": {
+              "$ref": "#/definitions/quantity"
+            }
+          }
+        }
+      }
+    },
+    "replicas": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5
+    },
+    "saAnnotations": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "propertyNames": {
+        "pattern": "^[a-z0-9.-]+/[A-Za-z0-9._-]+$"
+      },
+      "description": "Per-component ServiceAccount annotations (S-24). Identical non-empty maps on two components fail the render."
+    },
+    "projectId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{1,22}[a-z0-9]$"
+    }
+  },
+  "properties": {
+    "platform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "clusterRef",
+        "assuranceMode"
+      ],
+      "properties": {
+        "clusterRef": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]{0,30}[a-z0-9])?$"
+        },
+        "assuranceMode": {
+          "enum": [
+            "standard",
+            "reduced"
+          ]
+        }
+      }
+    },
+    "imageRegistry": {
+      "type": "string",
+      "pattern": "^[a-z0-9.-]+(:[0-9]+)?(/[a-z0-9._-]+)*$"
+    },
+    "placement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "control"
+      ],
+      "properties": {
+        "control": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "nodeSelector",
+            "tolerations"
+          ],
+          "properties": {
+            "nodeSelector": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "tolerations": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pullPolicy"
+      ],
+      "properties": {
+        "pullPolicy": {
+          "enum": [
+            "IfNotPresent",
+            "Always"
+          ]
+        }
+      },
+      "description": "No imagePullSecrets: nodes pull from the authenticated mirror."
+    },
+    "controller": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "replicas",
+        "image",
+        "serviceAccountAnnotations",
+        "leaderElection",
+        "admission",
+        "resources"
+      ],
+      "properties": {
+        "replicas": {
+          "$ref": "#/definitions/replicas"
+        },
+        "image": {
+          "$ref": "#/definitions/image"
+        },
+        "serviceAccountAnnotations": {
+          "$ref": "#/definitions/saAnnotations"
+        },
+        "leaderElection": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "leaseDurationSeconds",
+            "renewDeadlineSeconds",
+            "retryPeriodSeconds"
+          ],
+          "properties": {
+            "leaseDurationSeconds": {
+              "type": "integer",
+              "minimum": 5,
+              "maximum": 120
+            },
+            "renewDeadlineSeconds": {
+              "type": "integer",
+              "minimum": 2,
+              "maximum": 100
+            },
+            "retryPeriodSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 30
+            }
+          },
+          "description": "The Lease name is fixed (devplat-controller)."
+        },
+        "admission": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "globalMaxConcurrentJobs",
+            "defaultPerProjectMaxConcurrentJobs",
+            "testNamespaceTtlSeconds",
+            "maxTestNamespacesPerProject"
+          ],
+          "properties": {
+            "globalMaxConcurrentJobs": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            },
+            "defaultPerProjectMaxConcurrentJobs": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50
+            },
+            "testNamespaceTtlSeconds": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 86400
+            },
+            "maxTestNamespacesPerProject": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 20
+            }
+          }
+        },
+        "resources": {
+          "$ref": "#/definitions/resources"
+        }
+      }
+    },
+    "migrator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "image",
+        "serviceAccountAnnotations",
+        "activeDeadlineSeconds",
+        "resources"
+      ],
+      "properties": {
+        "image": {
+          "$ref": "#/definitions/image"
+        },
+        "serviceAccountAnnotations": {
+          "$ref": "#/definitions/saAnnotations"
+        },
+        "activeDeadlineSeconds": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 7200
+        },
+        "resources": {
+          "$ref": "#/definitions/resources"
+        }
+      }
+    },
+    "api": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "replicas",
+        "image",
+        "serviceAccountAnnotations",
+        "oidc",
+        "resources"
+      ],
+      "properties": {
+        "replicas": {
+          "$ref": "#/definitions/replicas"
+        },
+        "image": {
+          "$ref": "#/definitions/image"
+        },
+        "serviceAccountAnnotations": {
+          "$ref": "#/definitions/saAnnotations"
+        },
+        "oidc": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "issuerUrl",
+            "clientId",
+            "allowedSubjects"
+          ],
+          "properties": {
+            "issuerUrl": {
+              "type": "string",
+              "pattern": "^(https://.+)?$"
+            },
+            "clientId": {
+              "type": "string"
+            },
+            "allowedSubjects": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "description": "D2: at least one operator identity; synced into operator_identities.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "issuer",
+                  "subject",
+                  "project"
+                ],
+                "properties": {
+                  "issuer": {
+                    "type": "string",
+                    "pattern": "^https://.+"
+                  },
+                  "subject": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "project": {
+                    "anyOf": [
+                      {
+                        "const": ""
+                      },
+                      {
+                        "$ref": "#/definitions/projectId"
+                      }
+                    ],
+                    "description": "\"\" = all projects"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "resources": {
+          "$ref": "#/definitions/resources"
+        }
+      }
+    },
+    "gitbroker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "image",
+        "serviceAccountAnnotations",
+        "pushRefPrefix",
+        "draftPullRequestsOnly",
+        "resources",
+        "callerAuth"
+      ],
+      "properties": {
+        "image": {
+          "$ref": "#/definitions/image"
+        },
+        "serviceAccountAnnotations": {
+          "$ref": "#/definitions/saAnnotations"
+        },
+        "pushRefPrefix": {
+          "const": "dev/"
+        },
+        "draftPullRequestsOnly": {
+          "const": true
+        },
+        "resources": {
+          "$ref": "#/definitions/resources"
+        },
+        "callerAuth": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "audience"
+          ],
+          "properties": {
+            "mode": {
+              "const": "projected-token",
+              "description": "S-23; mTLS not templated yet"
+            },
+            "audience": {
+              "type": "string",
+              "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"
+            }
+          }
+        }
+      },
+      "description": "Exactly one replica (no concurrent pushes)."
+    },
+    "gitbrokerFetch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "replicas",
+        "image",
+        "serviceAccountAnnotations",
+        "resources"
+      ],
+      "properties": {
+        "replicas": {
+          "$ref": "#/definitions/replicas"
+        },
+        "image": {
+          "$ref": "#/definitions/image"
+        },
+        "serviceAccountAnnotations": {
+          "$ref": "#/definitions/saAnnotations"
+        },
+        "resources": {
+          "$ref": "#/definitions/resources"
+        }
+      }
+    },
+    "artifactGateway": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "replicas",
+        "image",
+        "serviceAccountAnnotations",
+        "limits",
+        "resources"
+      ],
+      "properties": {
+        "replicas": {
+          "$ref": "#/definitions/replicas"
+        },
+        "image": {
+          "$ref": "#/definitions/image"
+        },
+        "serviceAccountAnnotations": {
+          "$ref": "#/definitions/saAnnotations"
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "resultJsonBytes",
+            "resultBundleBytes",
+            "logsBytes",
+            "totalPerRunBytes"
+          ],
+          "properties": {
+            "resultJsonBytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1048576
+            },
+            "resultBundleBytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 268435456
+            },
+            "logsBytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 67108864
+            },
+            "totalPerRunBytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 536870912
+            }
+          },
+          "description": "D11 caps; values may only be lowered."
+        },
+        "resources": {
+          "$ref": "#/definitions/resources"
+        }
+      }
+    },
+    "namespacer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "replicas",
+        "image",
+        "resources"
+      ],
+      "properties": {
+        "replicas": {
+          "const": 1
+        },
+        "image": {
+          "$ref": "#/definitions/image"
+        },
+        "resources": {
+          "$ref": "#/definitions/resources"
+        }
+      }
+    },
+    "modelGateway": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "replicas",
+        "image",
+        "serviceAccountAnnotations",
+        "providers",
+        "policy",
+        "resources"
+      ],
+      "properties": {
+        "replicas": {
+          "$ref": "#/definitions/replicas"
+        },
+        "image": {
+          "$ref": "#/definitions/image"
+        },
+        "serviceAccountAnnotations": {
+          "$ref": "#/definitions/saAnnotations"
+        },
+        "providers": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "host"
+            ],
+            "properties": {
+              "name": {
+                "enum": [
+                  "anthropic",
+                  "openai"
+                ]
+              },
+              "host": {
+                "type": "string",
+                "pattern": "^[a-z0-9.-]+\\.[a-z]{2,}$"
+              }
+            }
+          }
+        },
+        "policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "allowedEndpoints",
+            "rejectServerTools",
+            "rejectMcpServers",
+            "rejectContainer",
+            "rejectFilesAndBatches",
+            "allowedBetaHeaders",
+            "projectFrom"
+          ],
+          "properties": {
+            "allowedEndpoints": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "enum": [
+                  "POST /v1/messages",
+                  "POST /v1/messages/count_tokens"
+                ]
+              },
+              "description": "D12: only these two endpoints can ever be allowed."
+            },
+            "rejectServerTools": {
+              "const": true
+            },
+            "rejectMcpServers": {
+              "const": true
+            },
+            "rejectContainer": {
+              "const": true
+            },
+            "rejectFilesAndBatches": {
+              "const": true
+            },
+            "allowedBetaHeaders": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+-[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+              }
+            },
+            "projectFrom": {
+              "const": "token"
+            }
+          }
+        },
+        "resources": {
+          "$ref": "#/definitions/resources"
+        }
+      }
+    },
+    "dns": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "replicas",
+        "image",
+        "clusterDomain",
+        "resources"
+      ],
+      "properties": {
+        "replicas": {
+          "$ref": "#/definitions/replicas"
+        },
+        "image": {
+          "$ref": "#/definitions/image"
+        },
+        "clusterDomain": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"
+        },
+        "resources": {
+          "$ref": "#/definitions/resources"
+        }
+      }
+    },
+    "postgres": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "cnpg",
+        "external"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "cnpg",
+            "external"
+          ]
+        },
+        "cnpg": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "instances",
+            "image",
+            "storage",
+            "backup"
+          ],
+          "properties": {
+            "instances": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 5
+            },
+            "image": {
+              "$ref": "#/definitions/image"
+            },
+            "storage": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "size",
+                "storageClass"
+              ],
+              "properties": {
+                "size": {
+                  "$ref": "#/definitions/quantity"
+                },
+                "storageClass": {
+                  "type": "string"
+                }
+              }
+            },
+            "backup": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "enabled"
+              ],
+              "properties": {
+                "enabled": {
+                  "const": false,
+                  "description": "Backups are not templated yet (24-... section 7)."
+                }
+              }
+            }
+          }
+        },
+        "external": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "host",
+            "port",
+            "database",
+            "sslmode"
+          ],
+          "properties": {
+            "host": {
+              "type": "string"
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "database": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sslmode": {
+              "enum": [
+                "require",
+                "verify-ca",
+                "verify-full"
+              ]
+            }
+          }
+        }
+      },
+      "if": {
+        "properties": {
+          "mode": {
+            "const": "external"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "external": {
+            "properties": {
+              "host": {
+                "minLength": 1
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "cnpg": {
+            "properties": {
+              "image": {
+                "properties": {
+                  "digest": {
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "endpoint",
+        "region",
+        "bucketPrefix"
+      ],
+      "properties": {
+        "endpoint": {
+          "type": "string",
+          "pattern": "^(https?://.+)?$"
+        },
+        "region": {
+          "type": "string"
+        },
+        "bucketPrefix": {
+          "const": "devplat-",
+          "description": "D11: buckets are devplat-<project> and devplat-platform."
+        }
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "className",
+        "host",
+        "tlsSecretName"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "className": {
+          "type": "string"
+        },
+        "host": {
+          "type": "string"
+        },
+        "tlsSecretName": {
+          "type": "string"
+        }
+      },
+      "if": {
+        "properties": {
+          "enabled": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "host": {
+            "minLength": 1
+          },
+          "tlsSecretName": {
+            "minLength": 1
+          }
+        }
+      }
+    }
+  }
+}

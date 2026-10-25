@@ -1,0 +1,13 @@
+# Intended differences between devplat-project (rendered for mercury) and platform/deploy/base.
+# check_charts.py fails on any difference NOT listed here, and on any line here that no longer occurs.
+# Base re-declares the auto-created `default` ServiceAccounts with automount off; Helm cannot own them, and base VAP
+# devplat-proj-pod-identity enforces pod-level automountServiceAccountToken: false instead.
+ONLY-BASE ServiceAccount/proj-mercury-build/default
+ONLY-BASE ServiceAccount/proj-mercury-exec/default
+# Base contains no workloads or per-project runtime ConfigMaps; the chart renders them (registry proxy D14,
+# namespacer test profile D19, per-project settings D16).
+ONLY-CHART ConfigMap/devplat-system/devplat-project-settings-mercury
+ONLY-CHART ConfigMap/devplat-system/devplat-registry-proxy-mercury
+ONLY-CHART ConfigMap/devplat-system/devplat-test-profile-mercury
+ONLY-CHART Deployment/devplat-system/devplat-registry-proxy-mercury
+ONLY-CHART Service/devplat-system/devplat-registry-proxy-mercury

@@ -1,0 +1,79 @@
+{{- /*
+Schema migrations (D9). A Helm hook Job, not the controller, applies the forward-only migrations as the dedicated
+login devplat_migrator (Secret devplat-db-migrator, pinned to ServiceAccount devplat-migrator). The schema owner
+role devplat_owner is NOLOGIN; the migrator owns the database and grants the runtime roles. It then syncs
+operator_identities from ConfigMap devplat-operator-identities.
+Hooks: pre-install + pre-upgrade for postgres.mode=external; post-install + pre-upgrade for cnpg, because the
+Cluster devplat-pg is created by this release (the Job waits for it, bounded by activeDeadlineSeconds).
+backoffLimit 0: a failed migration fails the Helm operation and is kept for inspection.
+*/}}
+{{- $hooks := ternary "post-install,pre-upgrade" "pre-install,pre-upgrade" (eq .Values.postgres.mode "cnpg") }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: devplat-migrator
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "devplat.labels" (dict "root" . "name" "devplat-migrator") | nindent 4 }}
+  annotations:
+    helm.sh/hook: {{ $hooks }}
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation
+    {{- with .Values.migrator.serviceAccountAnnotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+automountServiceAccountToken: false
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: devplat-migrate-r{{ .Release.Revision }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "devplat.labels" (dict "root" . "name" "devplat-migrator") | nindent 4 }}
+  annotations:
+    helm.sh/hook: {{ $hooks }}
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: {{ .Values.migrator.activeDeadlineSeconds }}
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        {{- include "devplat.labels" (dict "root" . "name" "devplat-migrator") | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: devplat-migrator
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      priorityClassName: devplat-platform
+      securityContext:
+        {{- include "devplat.podSecurityContext" . | nindent 8 }}
+      {{- include "devplat.placement" . | nindent 6 }}
+      containers:
+        - name: devplat-migrator
+          image: {{ include "devplat.image" (dict "root" . "image" .Values.migrator.image "key" "migrator") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["migrate", "--wait-for-db", "--sync-operator-identities", "/etc/devplat/identities/identities.json"]
+          securityContext:
+            {{- include "devplat.containerSecurityContext" . | nindent 12 }}
+          env:
+            {{- include "devplat.commonEnv" . | nindent 12 }}
+            {{- include "devplat.dbEnv" (dict "root" . "role" "migrator") | nindent 12 }}
+          resources:
+            {{- toYaml .Values.migrator.resources | nindent 12 }}
+          volumeMounts:
+            - name: identities
+              mountPath: /etc/devplat/identities
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: identities
+          configMap:
+            name: devplat-operator-identities
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
