@@ -1308,6 +1308,38 @@ class T11Gateways(Base):
         finally:
             type(self).project = old
 
+    def test_duplicate_budget_request_serialized_per_request(self):
+        # Codex review on PR #5: while one reservation of (job, request) is uncommitted, a second call with the same ids
+        # waits on the per-request lock BEFORE its lookup and then returns the first's reservation: one row, charged once.
+        # Without the lock it blocks on the project-day row instead and fails on the unique constraint.
+        q = "b" + secrets.token_hex(3)
+        self.make_project(q, "active", cost=10)
+        old, type(self).project = self.project, q
+        try:
+            t = "BD-0001"
+            self.new_task(t, "implementation")
+            self.to_running(t)
+            jid, g, _, _ = self.job_with_tokens(t)
+            call = f"SELECT devplat.reserve_budget({lit(g)}, 'dup', 4, 1000);"
+            opened = lambda: subprocess.Popen(_psql_args(DB), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            a = opened()
+            a.stdin.write(f'SET ROLE "{R["mg"]}"; BEGIN; {call}\n'); a.stdin.flush()
+            deadline = time.time() + 10
+            while psql("SELECT count(*) FROM pg_stat_activity WHERE state = 'idle in transaction' AND query LIKE '%reserve_budget%'") != "1":
+                self.assertLess(time.time(), deadline, "first reservation did not complete"); time.sleep(0.05)
+            b = opened()
+            b.stdin.write(f'SET ROLE "{R["mg"]}"; {call}\n'); b.stdin.close()
+            while psql("SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted") != "1":
+                self.assertLess(time.time(), deadline, "second reservation did not wait on the per-request lock"); time.sleep(0.05)
+            a.stdin.write("COMMIT;\n"); a.stdin.close()
+            (ao, ae), (bo, be) = a.communicate(), b.communicate()
+            self.assertEqual((a.returncode, b.returncode), (0, 0), (ae, be))
+            self.assertEqual(ao.strip(), bo.strip(), "the retry returns the existing reservation")
+            self.assertEqual(psql(f"SELECT count(*) FROM devplat.budget_reservations WHERE job_id = {jid}"), "1")
+            self.assertEqual(psql(f"SELECT reserved_usd::text FROM devplat.budget_days WHERE project_id = {lit(q)}"), "4.0000")
+        finally:
+            type(self).project = old
+
     def test_artifact_gateway_authorizes_layout_caps_once(self):
         t = "UP-0001"
         self.new_task(t, "implementation")

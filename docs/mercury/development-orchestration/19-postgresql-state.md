@@ -117,7 +117,7 @@ erDiagram
 | Event append | `UNIQUE(project_id, task_id, idempotency_key)` | Returns the committed record |
 | Admission | `job_runs.admission_id` unique | An admit is consumed by exactly one Job |
 | Job dispatch | `job_runs.idempotency_key` unique; `UNIQUE(project_id, task_id, attempt, role, dispatch_no)`; `UNIQUE(namespace, job_name)` | Same row returned; a different key for the same slot is a duplicate execution |
-| Budget reservation | `UNIQUE(job_id, request_id)` | Same reservation returned |
+| Budget reservation | `UNIQUE(job_id, request_id)`; a per-request advisory lock serializes concurrent calls before the lookup | Same reservation returned |
 | Run upload | `run_uploads` PK `(job_id, name)` | Second upload of a name refused (one-time) |
 | Side effect | `outbox.dedup_key` | One row; the external call does lookup-before-create (`21-…` §8) |
 | Artifact | `UNIQUE(project_id, sha256)` | One row; retention can only grow |

@@ -1935,6 +1935,9 @@ BEGIN
   IF NOT FOUND OR j.phase NOT IN ('created', 'running') OR j.tokens_expire_at <= clock_timestamp() THEN
     PERFORM _refuse('unknown, finished or expired gateway token');
   END IF;
+  -- Two calls with one (job, request) id must not both pass the lookup below: the second waits here and then returns the
+  -- first's reservation (Codex review on PR #5). Not the project-day lock: a retry across midnight UTC takes another day's.
+  PERFORM pg_advisory_xact_lock(hashtextextended('devplat.reserve_budget:' || j.job_id || ':' || p_request_id, 0));
   SELECT reservation_id INTO v_id FROM budget_reservations WHERE job_id = j.job_id AND request_id = p_request_id;
   IF v_id IS NOT NULL THEN RETURN v_id; END IF;
   SELECT * INTO p FROM projects WHERE project_id = j.project_id;

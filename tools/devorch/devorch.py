@@ -416,6 +416,40 @@ def load_contract(task_id):
     return load(p) if os.path.exists(p) else None
 
 
+def snapshot_path(task_id, core_sha):
+    return hpath("contracts", task_id, core_sha + ".json")
+
+
+def snapshot_contract(task_id, contract):
+    """Keep the contract a record was judged by, addressed by its core hash. Replay applies each record's own
+    contract, not the latest one, so a revision cannot reinterpret the records it supersedes (Codex review on PR #5)."""
+    p = snapshot_path(task_id, contract_core_sha(contract))
+    if os.path.exists(p):
+        return
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    tmp = p + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(contract, f, sort_keys=True, ensure_ascii=False, indent=1)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, p)
+
+
+def contract_of_record(task_id, rec, current):
+    core = rec.get("contract_core_sha256")
+    if current is None or not core:
+        return current   # check_transition refuses both
+    p = snapshot_path(task_id, core)
+    if os.path.exists(p):
+        c = load(p)
+        if contract_core_sha(c) != core:
+            raise Refused(f"contract snapshot {core[:12]} was edited")
+        return c
+    if contract_core_sha(current) == core:
+        return current   # written before snapshots existed and never revised: the file is that contract
+    raise Refused(f"contract snapshot {core[:12]} is missing (deleted, or the ledger predates snapshots and was revised)")
+
+
 def lifecycle(contract):
     return T_SHORT if contract and contract["kind"] in SHORT_KINDS else T_FULL
 
@@ -617,7 +651,8 @@ def verify_file_evidence(rec):
 
 def replay(task_id, live=True, contract_file_check=True):
     """Re-apply every rule `record` applies (R5 N2/N-05): transitions, gates, subtask bindings,
-    required reviewers, evidence file hashes, and the contract file against the last record."""
+    required reviewers, evidence file hashes, and the contract file against the last record. Each record is judged
+    by the contract it was recorded under (`contracts/<task>/<core sha>.json`); only the last is compared with the file."""
     ctx = Ctx(task_id)
     contract = load_contract(task_id)
     for i, r in enumerate(read_ledger(task_id), 1):
@@ -626,7 +661,7 @@ def replay(task_id, live=True, contract_file_check=True):
         if hashlib.sha256(canon(r).encode()).hexdigest() != r["hash"]:
             raise Refused(f"{task_id} seq {i}: hash mismatch")
         try:
-            to, gate = check_transition(ctx, r, contract, live)
+            to, gate = check_transition(ctx, r, contract_of_record(task_id, r, contract), live)
             verify_file_evidence(r)
         except Refused as e:
             raise Refused(f"{task_id} seq {i} ({r['event']}): {e}")
@@ -790,6 +825,7 @@ def cmd_record(a):
     errs, _ = validate(rec, "handoff-record")
     if errs:
         die("record invalid: " + "; ".join(errs))
+    snapshot_contract(a.task, contract)   # before the append: a snapshot without a record is harmless, the reverse is not
     os.makedirs(hpath("ledger"), exist_ok=True)
     with open(hpath("ledger", a.task + ".jsonl"), "a", encoding="utf-8") as f:
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
