@@ -1,6 +1,6 @@
 # 23 — CI/CD Integration
 
-Status: **Proposed** (Architecture Amendment 001, 2026-10-17; R6 fix round 2026-10-22: D13, S-3, S-14, overclaim 7). Documented only. No workflow in this document exists yet; the Project-Mercury repository has no CI and no ruleset today (`14-…` §1).
+Status: **Proposed** (Architecture Amendment 001, 2026-10-17; R6 fix round 2026-10-22: D13, S-3, S-14, overclaim 7). Documented only, except the devplat CI workflow of §5.4 (implemented 2026-10-25, unmerged, in draft PR #4). The Project-Mercury repository has no ruleset today (`14-…` §1).
 Reuses / supersedes: keeps v1 `08-…` §1 G6 ("required CI green on that head"), §5 (identity and merge authority), `10-…` §2 (PR template) and §3 (Mercury releases) unchanged. It adds head-SHA correlation for in-cluster evidence, an evaluation of in-cluster runners, and the platform's own CI and release process. RA-D2 (`12-…`: MERC-030 split, macOS runners in Mercury CI) is kept as is.
 
 ## 1. Rules
@@ -135,6 +135,30 @@ The chart checks are one reproducible runner: `platform/tools/charts/run.sh`. `2
 3. No platform workflow is triggered by Mercury paths, and Mercury's workflows ignore `platform/**`.
 4. **Repository location** (ADR-030, operator decision DOD-12). devplat lives in `Project-Mercury/platform/` today, on an unmerged branch. ADR-030 recommends a dedicated operator-created repository with its own ruleset and CODEOWNERS. Then a Mercury PR can never change the system that gates it. Until the move, `platform/**` is a restricted path for every Mercury task contract. The same principle is v1 `11-…` rule 2 ("tasks that modify the development-orchestration configuration stay with Stage A").
 
+### 5.4 Implemented: `.github/workflows/devplat-ci.yml` (2026-10-25)
+
+The runnable part of §5.1, in Project-Mercury until the platform repository exists (DOD-12). It runs on pull requests and pushes to `main` that touch `platform/**`, `tools/devorch/**`, this package, `.claude/agents/**`, `.claude/settings.json` or the workflow itself, and on manual dispatch.
+
+| Job (check name) | What it does | §5.1 stages covered |
+|---|---|---|
+| `workflow lint (actionlint + shellcheck)` | Builds actionlint v1.7.11 from source; lints every workflow, including shellcheck on `run:` blocks | Lint (workflow lint only) |
+| `validate_all.sh --strict` | Python 3.13 with hash-locked wheels (`platform/tools/ci/requirements.txt`); Go 1.24.7; Helm v3.17.3 and kubeconform v0.6.7 built from source (`platform/tools/ci/install_tools.sh`, modules verified against `sum.golang.org`); a throwaway PostgreSQL 16 on a private Unix socket (`platform/tools/ci/start_postgres.sh`); then `platform/tools/validate_all.sh --strict`, which fails on any skipped check | Unit, DB, Schemas, Manifests, Charts, and the admission-policy CEL checks |
+
+**Hardening (§2a H1–H4).** `permissions: {}` at the top and `contents: read` per job; no secrets, no `pull_request_target` or `workflow_run`; actions pinned by commit SHA (`actions/checkout` v7.0.1, `actions/setup-python` v7.0.0, `actions/setup-go` v7.0.0, each released more than three months before pinning); checkout without persisted credentials; no caches. Agent-written code in a pull request runs with a read-only token and nothing to steal.
+
+**Evidence before the first push:**
+- actionlint and zizmor (default and pedantic personas) reported no findings.
+- The `validate` job was replayed step by step as an unprivileged user (`nobody`) from a clean clone of the commit: exit 0, every check run.
+- The replay ran: devorch 30, jobspec 14, contract rules 7, self-test 50/50, base 140, roles 12, DB 53, admission 0 mismatches, charts 58/0/0.
+- The replay found two defects before GitHub did: actionlint v1.7.12 needs Go ≥ 1.25, and an unquoted `:all: -r` made a step invalid YAML.
+
+**Not implemented (nothing to run yet):** Python lint and format, YAML lint and repository-wide shell lint (the existing code has never been linted, so adopting them is its own change); Policy and E2E in kind; image build, scan and sign (no component or image exists); the §5.3 rule 2 run with `platform/projects/` reduced to synthetic fixtures (no synthetic projects exist yet, so CI validates the Mercury and Jupiter configurations as data).
+
+**For the operator (repository settings are yours, CLAUDE.md):**
+- After this workflow is on `main`, the DOD-02 ruleset can require the two checks above.
+- Because the workflow is path-filtered, a required check would never report on a PR that touches none of those paths, and GitHub would wait for it indefinitely. Require it only once the platform has its own repository (DOD-12), or drop the path filter there.
+- H8 also needs a `CODEOWNERS` entry for `.github/**`. None exists yet.
+
 ## 6. Release and versioning of the platform
 
 | Item | Scheme |
@@ -154,8 +178,8 @@ The chart checks are one reproducible runner: `platform/tools/charts/run.sh`. `2
 |---|---|
 | Repository CI of record (Mercury) | **Awaiting operator approval** (MERC-030 / RA-D2; DOD-02 ruleset) |
 | Head-SHA correlation and G6 rule | **Documented only** (the v1 equivalent is implemented in `devorch.py` `pr_prepared` requiring `ci_run` evidence) |
-| devplat CI workflow | **Documented only** |
-| Offline chart validation runner (`platform/tools/charts/run.sh`) | **Implemented+tested** in the authoring environment (`24-…` §10); not yet wired into CI |
+| devplat CI workflow | **Implemented, replayed locally; not yet run on GitHub** (§5.4; draft PR #4, unmerged) |
+| Offline chart validation runner (`platform/tools/charts/run.sh`) | **Implemented+tested** in the authoring environment (`24-…` §10); wired into CI through `validate_all.sh` (§5.4) |
 | Per-repository CI hardening H1–H8 (D13) | **Awaiting operator approval/action** (part of each project's `DOD-02` fact) |
 | Image build, scan, sign pipeline | **Documented only.** No images exist |
 | ARC in-cluster runners | **Documented only; not recommended** |
