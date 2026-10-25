@@ -1,0 +1,1573 @@
+{
+ "source": "docs/mercury/planning/issue-breakdown.md",
+ "generated_at": "2026-10-15T03:03:12Z",
+ "issue_count": 82,
+ "base_count": 79,
+ "conditional": [
+  "MERC-1K1",
+  "MERC-3A1",
+  "MERC-807b"
+ ],
+ "cycles": [],
+ "critical_path": [
+  "MERC-020",
+  "MERC-021",
+  "MERC-030",
+  "MERC-101",
+  "MERC-102",
+  "MERC-103",
+  "MERC-104",
+  "MERC-106",
+  "MERC-202",
+  "MERC-306",
+  "MERC-304",
+  "MERC-404",
+  "MERC-501",
+  "MERC-502",
+  "MERC-507",
+  "MERC-601",
+  "MERC-602",
+  "MERC-604",
+  "MERC-701",
+  "MERC-702",
+  "MERC-705",
+  "MERC-805",
+  "MERC-901",
+  "MERC-904",
+  "MERC-905",
+  "MERC-906"
+ ],
+ "critical_path_p50": 51.0,
+ "issues": {
+  "MERC-001": {
+   "id": "MERC-001",
+   "title": "Mac read-only facts",
+   "epic": "E0a",
+   "deps": [],
+   "p50": 0.5,
+   "p90": 1.0,
+   "env": "T4",
+   "gates": "—",
+   "security": false,
+   "conditional": false,
+   "needs_mac_or_operator": true,
+   "root": false,
+   "longest_path_p50": 39.0,
+   "downstream": 43
+  },
+  "MERC-002": {
+   "id": "MERC-002",
+   "title": "Mac experiments (non-destructive)",
+   "epic": "E0a",
+   "deps": [
+    "MERC-001"
+   ],
+   "p50": 1.5,
+   "p90": 2.5,
+   "env": "T4 ⓗ",
+   "gates": "—",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": true,
+   "root": false,
+   "longest_path_p50": 2.0,
+   "downstream": 1
+  },
+  "MERC-003": {
+   "id": "MERC-003",
+   "title": "Agent CLI checks (B)",
+   "epic": "E0a",
+   "deps": [
+    "MERC-001"
+   ],
+   "p50": 1.5,
+   "p90": 2.5,
+   "env": "T4",
+   "gates": "—",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": true,
+   "root": false,
+   "longest_path_p50": 23.5,
+   "downstream": 21
+  },
+  "MERC-004": {
+   "id": "MERC-004",
+   "title": "MIG-0 legacy inventory",
+   "epic": "E0a",
+   "deps": [],
+   "p50": 0.5,
+   "p90": 1.0,
+   "env": "read-only",
+   "gates": "—",
+   "security": false,
+   "conditional": false,
+   "needs_mac_or_operator": true,
+   "root": false,
+   "longest_path_p50": 6.0,
+   "downstream": 4
+  },
+  "MERC-005": {
+   "id": "MERC-005",
+   "title": "Phase 0 closure report and re-estimate",
+   "epic": "E0a",
+   "deps": [
+    "MERC-002",
+    "MERC-003",
+    "MERC-011",
+    "MERC-024"
+   ],
+   "p50": 0.5,
+   "p90": 1.0,
+   "env": "—",
+   "gates": "all P0",
+   "security": false,
+   "conditional": false,
+   "needs_mac_or_operator": true,
+   "root": false,
+   "longest_path_p50": 0.5,
+   "downstream": 0
+  },
+  "MERC-010": {
+   "id": "MERC-010",
+   "title": "Agent-uid system install (spike)",
+   "epic": "E0b",
+   "deps": [
+    "MERC-001"
+   ],
+   "p50": 2.0,
+   "p90": 3.5,
+   "env": "T4 ⓗ [ROOT]",
+   "gates": "—",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": true,
+   "root": true,
+   "longest_path_p50": 38.5,
+   "downstream": 40
+  },
+  "MERC-011": {
+   "id": "MERC-011",
+   "title": "Agent-uid verification and canaries",
+   "epic": "E0b",
+   "deps": [
+    "MERC-010"
+   ],
+   "p50": 1.0,
+   "p90": 2.0,
+   "env": "T4 ⓗ [ROOT]",
+   "gates": "ASM-E-04/15/16/20…24",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": true,
+   "root": true,
+   "longest_path_p50": 36.5,
+   "downstream": 35
+  },
+  "MERC-012": {
+   "id": "MERC-012",
+   "title": "Helper and spawn feasibility",
+   "epic": "E0b",
+   "deps": [
+    "MERC-010"
+   ],
+   "p50": 1.5,
+   "p90": 3.0,
+   "env": "T4 ⓗ",
+   "gates": "ASM-D-29/33/34/35, ASM-E-10/19",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": true,
+   "root": false,
+   "longest_path_p50": 29.5,
+   "downstream": 27
+  },
+  "MERC-020": {
+   "id": "MERC-020",
+   "title": "Operator decision session",
+   "epic": "E0c",
+   "deps": [],
+   "p50": 0.5,
+   "p90": 1.0,
+   "env": "—",
+   "gates": "—",
+   "security": false,
+   "conditional": false,
+   "needs_mac_or_operator": true,
+   "root": false,
+   "longest_path_p50": 51.0,
+   "downstream": 70
+  },
+  "MERC-021": {
+   "id": "MERC-021",
+   "title": "GitHub Apps and keys",
+   "epic": "E0c",
+   "deps": [
+    "MERC-020"
+   ],
+   "p50": 1.0,
+   "p90": 1.5,
+   "env": "T3 ⓗ",
+   "gates": "—",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": true,
+   "root": false,
+   "longest_path_p50": 50.5,
+   "downstream": 68
+  },
+  "MERC-022": {
+   "id": "MERC-022",
+   "title": "Linear app and sandbox team",
+   "epic": "E0c",
+   "deps": [
+    "MERC-020"
+   ],
+   "p50": 0.5,
+   "p90": 1.0,
+   "env": "T3 ⓗ",
+   "gates": "ASM-B-30, ASM-E-05",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": true,
+   "root": false,
+   "longest_path_p50": 34.0,
+   "downstream": 30
+  },
+  "MERC-023": {
+   "id": "MERC-023",
+   "title": "Sandbox repo and rulesets",
+   "epic": "E0c",
+   "deps": [
+    "MERC-021"
+   ],
+   "p50": 1.5,
+   "p90": 2.5,
+   "env": "T3 ⓗ",
+   "gates": "ASM-B-51…68",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": true,
+   "root": false,
+   "longest_path_p50": 12.5,
+   "downstream": 10
+  },
+  "MERC-024": {
+   "id": "MERC-024",
+   "title": "Sandbox merge-attack suite and policy evidence",
+   "epic": "E0c",
+   "deps": [
+    "MERC-023"
+   ],
+   "p50": 1.0,
+   "p90": 1.5,
+   "env": "T3 ⓗ",
+   "gates": "—",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": true,
+   "root": false,
+   "longest_path_p50": 1.5,
+   "downstream": 1
+  },
+  "MERC-030": {
+   "id": "MERC-030",
+   "title": "MERCURY repo bootstrap",
+   "epic": "E0d",
+   "deps": [
+    "MERC-021"
+   ],
+   "p50": 1.0,
+   "p90": 1.5,
+   "env": "CI",
+   "gates": "ASM-F-07",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": false,
+   "root": false,
+   "longest_path_p50": 49.5,
+   "downstream": 64
+  },
+  "MERC-101": {
+   "id": "MERC-101",
+   "title": "Skeleton, config, paths, parameters, logging",
+   "epic": "E1",
+   "deps": [
+    "MERC-030"
+   ],
+   "p50": 2.5,
+   "p90": 4.0,
+   "env": "T0/T1",
+   "gates": "—",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": false,
+   "root": false,
+   "longest_path_p50": 48.5,
+   "downstream": 63
+  },
+  "MERC-102": {
+   "id": "MERC-102",
+   "title": "Store and durability",
+   "epic": "E1",
+   "deps": [
+    "MERC-101"
+   ],
+   "p50": 3.0,
+   "p90": 5.0,
+   "env": "T1",
+   "gates": "P0-012/013",
+   "security": false,
+   "conditional": false,
+   "needs_mac_or_operator": false,
+   "root": false,
+   "longest_path_p50": 46.0,
+   "downstream": 56
+  },
+  "MERC-103": {
+   "id": "MERC-103",
+   "title": "DDL, invariant triggers, audit chain",
+   "epic": "E1",
+   "deps": [
+    "MERC-102"
+   ],
+   "p50": 3.5,
+   "p90": 5.5,
+   "env": "T1",
+   "gates": "—",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": false,
+   "root": false,
+   "longest_path_p50": 43.0,
+   "downstream": 46
+  },
+  "MERC-104": {
+   "id": "MERC-104",
+   "title": "Transition engine",
+   "epic": "E1",
+   "deps": [
+    "MERC-103"
+   ],
+   "p50": 3.0,
+   "p90": 5.0,
+   "env": "T0",
+   "gates": "—",
+   "security": false,
+   "conditional": false,
+   "needs_mac_or_operator": false,
+   "root": false,
+   "longest_path_p50": 39.5,
+   "downstream": 44
+  },
+  "MERC-105": {
+   "id": "MERC-105",
+   "title": "Holds, halts and timers",
+   "epic": "E1",
+   "deps": [
+    "MERC-104"
+   ],
+   "p50": 2.5,
+   "p90": 4.0,
+   "env": "T0",
+   "gates": "—",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": false,
+   "root": false,
+   "longest_path_p50": 36.0,
+   "downstream": 32
+  },
+  "MERC-106": {
+   "id": "MERC-106",
+   "title": "Derived queue, claims, outbox/inbox",
+   "epic": "E1",
+   "deps": [
+    "MERC-104"
+   ],
+   "p50": 3.0,
+   "p90": 5.0,
+   "env": "T1",
+   "gates": "—",
+   "security": false,
+   "conditional": false,
+   "needs_mac_or_operator": false,
+   "root": false,
+   "longest_path_p50": 36.5,
+   "downstream": 40
+  },
+  "MERC-107": {
+   "id": "MERC-107",
+   "title": "Process broker: agent-exec/agent-ctl production",
+   "epic": "E1",
+   "deps": [
+    "MERC-101",
+    "MERC-011"
+   ],
+   "p50": 5.0,
+   "p90": 8.5,
+   "env": "T1 + T4 [ROOT]",
+   "gates": "P0-026…031",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": true,
+   "root": true,
+   "longest_path_p50": 35.5,
+   "downstream": 33
+  },
+  "MERC-1K1": {
+   "id": "MERC-1K1",
+   "title": "Signed Keychain helper (conditional)",
+   "epic": "E1",
+   "deps": [
+    "MERC-011"
+   ],
+   "p50": 2.0,
+   "p90": 4.0,
+   "env": "T4",
+   "gates": "P0-036",
+   "security": true,
+   "conditional": true,
+   "needs_mac_or_operator": true,
+   "root": false,
+   "longest_path_p50": 0,
+   "downstream": 0
+  },
+  "MERC-108": {
+   "id": "MERC-108",
+   "title": "Run outcomes, adoption, lost_by_host",
+   "epic": "E1",
+   "deps": [
+    "MERC-106",
+    "MERC-107"
+   ],
+   "p50": 2.0,
+   "p90": 3.5,
+   "env": "T1/T2",
+   "gates": "—",
+   "security": false,
+   "conditional": false,
+   "needs_mac_or_operator": false,
+   "root": false,
+   "longest_path_p50": 11.5,
+   "downstream": 3
+  },
+  "MERC-109": {
+   "id": "MERC-109",
+   "title": "Scheduler and limits",
+   "epic": "E1",
+   "deps": [
+    "MERC-106"
+   ],
+   "p50": 1.5,
+   "p90": 2.5,
+   "env": "T0",
+   "gates": "—",
+   "security": false,
+   "conditional": false,
+   "needs_mac_or_operator": false,
+   "root": false,
+   "longest_path_p50": 1.5,
+   "downstream": 0
+  },
+  "MERC-110": {
+   "id": "MERC-110",
+   "title": "Daemon lifecycle and host model",
+   "epic": "E1",
+   "deps": [
+    "MERC-102",
+    "MERC-105"
+   ],
+   "p50": 3.0,
+   "p90": 5.0,
+   "env": "T1/T2",
+   "gates": "P0-033/034",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": false,
+   "root": false,
+   "longest_path_p50": 33.5,
+   "downstream": 25
+  },
+  "MERC-111": {
+   "id": "MERC-111",
+   "title": "Control socket, principals, CLI v1",
+   "epic": "E1",
+   "deps": [
+    "MERC-104",
+    "MERC-110"
+   ],
+   "p50": 2.5,
+   "p90": 4.0,
+   "env": "T1",
+   "gates": "—",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": false,
+   "root": false,
+   "longest_path_p50": 30.5,
+   "downstream": 24
+  },
+  "MERC-112": {
+   "id": "MERC-112",
+   "title": "Fakes and scenario runner",
+   "epic": "E1",
+   "deps": [
+    "MERC-101"
+   ],
+   "p50": 3.5,
+   "p90": 5.5,
+   "env": "T0/T1",
+   "gates": "—",
+   "security": false,
+   "conditional": false,
+   "needs_mac_or_operator": false,
+   "root": false,
+   "longest_path_p50": 36.0,
+   "downstream": 32
+  },
+  "MERC-113": {
+   "id": "MERC-113",
+   "title": "PROP suite and crash harness v1",
+   "epic": "E1",
+   "deps": [
+    "MERC-108",
+    "MERC-112"
+   ],
+   "p50": 3.0,
+   "p90": 5.0,
+   "env": "T0/T2",
+   "gates": "—",
+   "security": false,
+   "conditional": false,
+   "needs_mac_or_operator": false,
+   "root": false,
+   "longest_path_p50": 9.5,
+   "downstream": 2
+  },
+  "MERC-201": {
+   "id": "MERC-201",
+   "title": "GitHub client",
+   "epic": "E2",
+   "deps": [
+    "MERC-106",
+    "MERC-021"
+   ],
+   "p50": 2.5,
+   "p90": 4.0,
+   "env": "T1/T3",
+   "gates": "P0-231, P0-239",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": false,
+   "root": false,
+   "longest_path_p50": 30.5,
+   "downstream": 30
+  },
+  "MERC-202": {
+   "id": "MERC-202",
+   "title": "Linear client and poller",
+   "epic": "E2",
+   "deps": [
+    "MERC-106",
+    "MERC-022"
+   ],
+   "p50": 2.0,
+   "p90": 3.0,
+   "env": "T1/T3",
+   "gates": "P0-221/222",
+   "security": false,
+   "conditional": false,
+   "needs_mac_or_operator": false,
+   "root": false,
+   "longest_path_p50": 33.5,
+   "downstream": 29
+  },
+  "MERC-203": {
+   "id": "MERC-203",
+   "title": "PR, check and review poller",
+   "epic": "E2",
+   "deps": [
+    "MERC-201"
+   ],
+   "p50": 2.0,
+   "p90": 3.0,
+   "env": "T1/T3",
+   "gates": "P0-236",
+   "security": false,
+   "conditional": false,
+   "needs_mac_or_operator": false,
+   "root": false,
+   "longest_path_p50": 23.0,
+   "downstream": 21
+  },
+  "MERC-204": {
+   "id": "MERC-204",
+   "title": "Eligibility, discovery status, dependency guard",
+   "epic": "E2",
+   "deps": [
+    "MERC-202"
+   ],
+   "p50": 2.0,
+   "p90": 3.0,
+   "env": "T0/T2",
+   "gates": "—",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": false,
+   "root": false,
+   "longest_path_p50": 3.5,
+   "downstream": 1
+  },
+  "MERC-205": {
+   "id": "MERC-205",
+   "title": "Drift monitor (read and alert)",
+   "epic": "E2",
+   "deps": [
+    "MERC-201",
+    "MERC-023"
+   ],
+   "p50": 1.5,
+   "p90": 2.5,
+   "env": "T3",
+   "gates": "P0-231, P0-241",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": false,
+   "root": false,
+   "longest_path_p50": 11.0,
+   "downstream": 7
+  },
+  "MERC-206": {
+   "id": "MERC-206",
+   "title": "Shadow status and fixtures",
+   "epic": "E2",
+   "deps": [
+    "MERC-203",
+    "MERC-204"
+   ],
+   "p50": 1.5,
+   "p90": 2.5,
+   "env": "T3",
+   "gates": "—",
+   "security": false,
+   "conditional": false,
+   "needs_mac_or_operator": false,
+   "root": false,
+   "longest_path_p50": 1.5,
+   "downstream": 0
+  },
+  "MERC-402a": {
+   "id": "MERC-402a",
+   "title": "Mirror and hardened read-only git invocation",
+   "epic": "E3",
+   "deps": [
+    "MERC-102"
+   ],
+   "p50": 1.5,
+   "p90": 2.5,
+   "env": "T1",
+   "gates": "P0-043, P0-030",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": false,
+   "root": false,
+   "longest_path_p50": 36.0,
+   "downstream": 34
+  },
+  "MERC-301": {
+   "id": "MERC-301",
+   "title": "Snapshot builder",
+   "epic": "E3",
+   "deps": [
+    "MERC-102",
+    "MERC-402a"
+   ],
+   "p50": 2.0,
+   "p90": 3.0,
+   "env": "T1",
+   "gates": "—",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": false,
+   "root": false,
+   "longest_path_p50": 29.5,
+   "downstream": 27
+  },
+  "MERC-302": {
+   "id": "MERC-302",
+   "title": "Claude adapter under agent uid",
+   "epic": "E3",
+   "deps": [
+    "MERC-107",
+    "MERC-301",
+    "MERC-402a",
+    "MERC-003"
+   ],
+   "p50": 3.0,
+   "p90": 5.0,
+   "env": "T1 + T4",
+   "gates": "P0-213/214, P0-201, P0-042, P0-048",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": true,
+   "root": false,
+   "longest_path_p50": 22.0,
+   "downstream": 19
+  },
+  "MERC-3A1": {
+   "id": "MERC-3A1",
+   "title": "ALT-B-1 fallback (contingency)",
+   "epic": "E3",
+   "deps": [
+    "MERC-301"
+   ],
+   "p50": 4.0,
+   "p90": 7.0,
+   "env": "T1 + T4",
+   "gates": "P0-213 failed",
+   "security": true,
+   "conditional": true,
+   "needs_mac_or_operator": true,
+   "root": false,
+   "longest_path_p50": 0,
+   "downstream": 0
+  },
+  "MERC-303": {
+   "id": "MERC-303",
+   "title": "Decision schemas, prompts and wire copies",
+   "epic": "E3",
+   "deps": [
+    "MERC-112"
+   ],
+   "p50": 2.0,
+   "p90": 3.0,
+   "env": "T0",
+   "gates": "P0-211/214",
+   "security": false,
+   "conditional": false,
+   "needs_mac_or_operator": false,
+   "root": false,
+   "longest_path_p50": 32.5,
+   "downstream": 30
+  },
+  "MERC-304": {
+   "id": "MERC-304",
+   "title": "Authorization records and guards",
+   "epic": "E3",
+   "deps": [
+    "MERC-103",
+    "MERC-105",
+    "MERC-303",
+    "MERC-306"
+   ],
+   "p50": 2.5,
+   "p90": 4.0,
+   "env": "T0/T2",
+   "gates": "—",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": false,
+   "root": false,
+   "longest_path_p50": 30.0,
+   "downstream": 25
+  },
+  "MERC-305": {
+   "id": "MERC-305",
+   "title": "Isolation and injection guard tests",
+   "epic": "E3",
+   "deps": [
+    "MERC-302",
+    "MERC-304"
+   ],
+   "p50": 2.0,
+   "p90": 3.0,
+   "env": "T1/T4",
+   "gates": "—",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": true,
+   "root": false,
+   "longest_path_p50": 2.0,
+   "downstream": 0
+  },
+  "MERC-306": {
+   "id": "MERC-306",
+   "title": "Linear write handlers (comments, labels, In Progress)",
+   "epic": "E3",
+   "deps": [
+    "MERC-106",
+    "MERC-202"
+   ],
+   "p50": 1.5,
+   "p90": 2.5,
+   "env": "T2/T3",
+   "gates": "P0-220, P0-221",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": false,
+   "root": false,
+   "longest_path_p50": 31.5,
+   "downstream": 26
+  },
+  "MERC-401": {
+   "id": "MERC-401",
+   "title": "Codex adapter",
+   "epic": "E4",
+   "deps": [
+    "MERC-107",
+    "MERC-303"
+   ],
+   "p50": 3.0,
+   "p90": 5.0,
+   "env": "T1/T4",
+   "gates": "P0-204…211, P0-048",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": true,
+   "root": false,
+   "longest_path_p50": 30.5,
+   "downstream": 27
+  },
+  "MERC-402b": {
+   "id": "MERC-402b",
+   "title": "Task worktrees, naming and reset policy",
+   "epic": "E4",
+   "deps": [
+    "MERC-402a"
+   ],
+   "p50": 1.0,
+   "p90": 2.0,
+   "env": "T1",
+   "gates": "P0-030",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": false,
+   "root": false,
+   "longest_path_p50": 34.5,
+   "downstream": 29
+  },
+  "MERC-403": {
+   "id": "MERC-403",
+   "title": "Instruction integrity and sandbox-violation counting",
+   "epic": "E4",
+   "deps": [
+    "MERC-401"
+   ],
+   "p50": 1.0,
+   "p90": 2.0,
+   "env": "T1",
+   "gates": "—",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": false,
+   "root": false,
+   "longest_path_p50": 1.0,
+   "downstream": 0
+  },
+  "MERC-404": {
+   "id": "MERC-404",
+   "title": "Plan review loop",
+   "epic": "E4",
+   "deps": [
+    "MERC-304",
+    "MERC-401",
+    "MERC-301",
+    "MERC-402b"
+   ],
+   "p50": 2.5,
+   "p90": 4.0,
+   "env": "T2",
+   "gates": "—",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": false,
+   "root": false,
+   "longest_path_p50": 27.5,
+   "downstream": 23
+  },
+  "MERC-405": {
+   "id": "MERC-405",
+   "title": "Stall detection and failure sims",
+   "epic": "E4",
+   "deps": [
+    "MERC-401"
+   ],
+   "p50": 1.5,
+   "p90": 2.5,
+   "env": "T1/T2",
+   "gates": "—",
+   "security": false,
+   "conditional": false,
+   "needs_mac_or_operator": false,
+   "root": false,
+   "longest_path_p50": 26.5,
+   "downstream": 23
+  },
+  "MERC-406": {
+   "id": "MERC-406",
+   "title": "G-S2 evidence run",
+   "epic": "E4",
+   "deps": [
+    "MERC-401",
+    "MERC-302",
+    "MERC-011"
+   ],
+   "p50": 1.5,
+   "p90": 3.0,
+   "env": "T4",
+   "gates": "P0-026…032",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": true,
+   "root": false,
+   "longest_path_p50": 9.5,
+   "downstream": 5
+  },
+  "MERC-501": {
+   "id": "MERC-501",
+   "title": "Implementation run",
+   "epic": "E5",
+   "deps": [
+    "MERC-404",
+    "MERC-405",
+    "MERC-504",
+    "MERC-505",
+    "MERC-506"
+   ],
+   "p50": 1.5,
+   "p90": 2.5,
+   "env": "T2",
+   "gates": "—",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": false,
+   "root": false,
+   "longest_path_p50": 25.0,
+   "downstream": 22
+  },
+  "MERC-502": {
+   "id": "MERC-502",
+   "title": "verify under agent uid",
+   "epic": "E5",
+   "deps": [
+    "MERC-501",
+    "MERC-107"
+   ],
+   "p50": 2.5,
+   "p90": 4.0,
+   "env": "T1/T4",
+   "gates": "P0-037, P0-032",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": true,
+   "root": false,
+   "longest_path_p50": 23.5,
+   "downstream": 21
+  },
+  "MERC-503": {
+   "id": "MERC-503",
+   "title": "deps_install",
+   "epic": "E5",
+   "deps": [
+    "MERC-502"
+   ],
+   "p50": 2.0,
+   "p90": 3.5,
+   "env": "T1/T4",
+   "gates": "P0-049",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": true,
+   "root": false,
+   "longest_path_p50": 2.0,
+   "downstream": 0
+  },
+  "MERC-504": {
+   "id": "MERC-504",
+   "title": "Git hardening and mirror push",
+   "epic": "E5",
+   "deps": [
+    "MERC-402a",
+    "MERC-402b"
+   ],
+   "p50": 3.0,
+   "p90": 5.0,
+   "env": "T1",
+   "gates": "P0-043",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": false,
+   "root": false,
+   "longest_path_p50": 33.5,
+   "downstream": 26
+  },
+  "MERC-505": {
+   "id": "MERC-505",
+   "title": "Pre-push gates",
+   "epic": "E5",
+   "deps": [
+    "MERC-504"
+   ],
+   "p50": 2.5,
+   "p90": 4.0,
+   "env": "T0/T1",
+   "gates": "—",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": false,
+   "root": false,
+   "longest_path_p50": 30.5,
+   "downstream": 24
+  },
+  "MERC-506": {
+   "id": "MERC-506",
+   "title": "MERCURY / policy and presence tier",
+   "epic": "E5",
+   "deps": [
+    "MERC-505",
+    "MERC-111",
+    "MERC-201",
+    "MERC-012"
+   ],
+   "p50": 3.0,
+   "p90": 5.0,
+   "env": "T1/T3/T4",
+   "gates": "P0-045",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": true,
+   "root": false,
+   "longest_path_p50": 28.0,
+   "downstream": 23
+  },
+  "MERC-507": {
+   "id": "MERC-507",
+   "title": "PR creation (draft)",
+   "epic": "E5",
+   "deps": [
+    "MERC-504",
+    "MERC-203",
+    "MERC-502"
+   ],
+   "p50": 2.0,
+   "p90": 3.0,
+   "env": "T2/T3",
+   "gates": "—",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": false,
+   "root": false,
+   "longest_path_p50": 21.0,
+   "downstream": 19
+  },
+  "MERC-508": {
+   "id": "MERC-508",
+   "title": "Drift halt and G-S3 gate",
+   "epic": "E5",
+   "deps": [
+    "MERC-205",
+    "MERC-506",
+    "MERC-507"
+   ],
+   "p50": 1.5,
+   "p90": 2.5,
+   "env": "T3 ⓗ",
+   "gates": "P0-072",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": true,
+   "root": false,
+   "longest_path_p50": 9.5,
+   "downstream": 6
+  },
+  "MERC-601": {
+   "id": "MERC-601",
+   "title": "Code and security review runs",
+   "epic": "E6",
+   "deps": [
+    "MERC-302",
+    "MERC-301",
+    "MERC-507"
+   ],
+   "p50": 2.0,
+   "p90": 3.0,
+   "env": "T2",
+   "gates": "—",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": false,
+   "root": false,
+   "longest_path_p50": 19.0,
+   "downstream": 16
+  },
+  "MERC-602": {
+   "id": "MERC-602",
+   "title": "COMMENT reviews and claude-review check",
+   "epic": "E6",
+   "deps": [
+    "MERC-601",
+    "MERC-506"
+   ],
+   "p50": 1.5,
+   "p90": 2.5,
+   "env": "T3",
+   "gates": "P0-235…237",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": false,
+   "root": false,
+   "longest_path_p50": 17.0,
+   "downstream": 15
+  },
+  "MERC-603": {
+   "id": "MERC-603",
+   "title": "Revision loops",
+   "epic": "E6",
+   "deps": [
+    "MERC-602"
+   ],
+   "p50": 3.0,
+   "p90": 4.5,
+   "env": "T2",
+   "gates": "—",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": false,
+   "root": false,
+   "longest_path_p50": 6.0,
+   "downstream": 1
+  },
+  "MERC-604": {
+   "id": "MERC-604",
+   "title": "Pre-review re-check, ready, review request",
+   "epic": "E6",
+   "deps": [
+    "MERC-602"
+   ],
+   "p50": 1.0,
+   "p90": 1.5,
+   "env": "T2/T3",
+   "gates": "—",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": false,
+   "root": false,
+   "longest_path_p50": 15.5,
+   "downstream": 12
+  },
+  "MERC-701": {
+   "id": "MERC-701",
+   "title": "Merge verification",
+   "epic": "E7",
+   "deps": [
+    "MERC-604"
+   ],
+   "p50": 2.5,
+   "p90": 4.0,
+   "env": "T2/T3 ⓗ",
+   "gates": "—",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": true,
+   "root": false,
+   "longest_path_p50": 14.5,
+   "downstream": 11
+  },
+  "MERC-702": {
+   "id": "MERC-702",
+   "title": "Linear projection, both modes",
+   "epic": "E7",
+   "deps": [
+    "MERC-701",
+    "MERC-306"
+   ],
+   "p50": 1.5,
+   "p90": 2.5,
+   "env": "T2/T3",
+   "gates": "P0-224",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": false,
+   "root": false,
+   "longest_path_p50": 12.0,
+   "downstream": 10
+  },
+  "MERC-703": {
+   "id": "MERC-703",
+   "title": "Notifications and ops channel",
+   "epic": "E7",
+   "deps": [
+    "MERC-105",
+    "MERC-201"
+   ],
+   "p50": 2.5,
+   "p90": 4.0,
+   "env": "T2/T3",
+   "gates": "—",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": false,
+   "root": false,
+   "longest_path_p50": 15.5,
+   "downstream": 11
+  },
+  "MERC-704": {
+   "id": "MERC-704",
+   "title": "Audit trace and verification",
+   "epic": "E7",
+   "deps": [
+    "MERC-103"
+   ],
+   "p50": 2.0,
+   "p90": 3.0,
+   "env": "T2",
+   "gates": "—",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": false,
+   "root": false,
+   "longest_path_p50": 12.5,
+   "downstream": 6
+  },
+  "MERC-705": {
+   "id": "MERC-705",
+   "title": "Anchoring and restore epoch",
+   "epic": "E7",
+   "deps": [
+    "MERC-704",
+    "MERC-702",
+    "MERC-506"
+   ],
+   "p50": 2.5,
+   "p90": 4.0,
+   "env": "T1/T3",
+   "gates": "—",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": false,
+   "root": false,
+   "longest_path_p50": 10.5,
+   "downstream": 5
+  },
+  "MERC-706": {
+   "id": "MERC-706",
+   "title": "Watchdog and power helper",
+   "epic": "E7",
+   "deps": [
+    "MERC-703",
+    "MERC-012"
+   ],
+   "p50": 2.0,
+   "p90": 3.5,
+   "env": "T3/T4",
+   "gates": "P0-046",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": true,
+   "root": false,
+   "longest_path_p50": 13.0,
+   "downstream": 7
+  },
+  "MERC-707": {
+   "id": "MERC-707",
+   "title": "Cleanup",
+   "epic": "E7",
+   "deps": [
+    "MERC-402b"
+   ],
+   "p50": 1.0,
+   "p90": 1.5,
+   "env": "T1/T4",
+   "gates": "—",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": true,
+   "root": false,
+   "longest_path_p50": 1.0,
+   "downstream": 0
+  },
+  "MERC-708": {
+   "id": "MERC-708",
+   "title": "Live-agent sandbox smoke",
+   "epic": "E7",
+   "deps": [
+    "MERC-701",
+    "MERC-702",
+    "MERC-703"
+   ],
+   "p50": 1.0,
+   "p90": 2.0,
+   "env": "T3 + T4",
+   "gates": "G-S3",
+   "security": false,
+   "conditional": false,
+   "needs_mac_or_operator": true,
+   "root": false,
+   "longest_path_p50": 7.5,
+   "downstream": 3
+  },
+  "MERC-801": {
+   "id": "MERC-801",
+   "title": "Crash injection at scale",
+   "epic": "E8",
+   "deps": [
+    "MERC-113",
+    "MERC-708"
+   ],
+   "p50": 3.0,
+   "p90": 5.0,
+   "env": "T2",
+   "gates": "—",
+   "security": false,
+   "conditional": false,
+   "needs_mac_or_operator": false,
+   "root": false,
+   "longest_path_p50": 6.5,
+   "downstream": 1
+  },
+  "MERC-802": {
+   "id": "MERC-802",
+   "title": "Power-loss VM rig",
+   "epic": "E8",
+   "deps": [
+    "MERC-504",
+    "MERC-012"
+   ],
+   "p50": 2.0,
+   "p90": 4.0,
+   "env": "T4v",
+   "gates": "P0-047",
+   "security": false,
+   "conditional": false,
+   "needs_mac_or_operator": true,
+   "root": false,
+   "longest_path_p50": 2.0,
+   "downstream": 0
+  },
+  "MERC-803": {
+   "id": "MERC-803",
+   "title": "Real-Mac recovery suite",
+   "epic": "E8",
+   "deps": [
+    "MERC-706",
+    "MERC-801"
+   ],
+   "p50": 3.5,
+   "p90": 6.0,
+   "env": "T4 ⓗ",
+   "gates": "—",
+   "security": false,
+   "conditional": false,
+   "needs_mac_or_operator": true,
+   "root": false,
+   "longest_path_p50": 3.5,
+   "downstream": 0
+  },
+  "MERC-804": {
+   "id": "MERC-804",
+   "title": "Prompt-injection corpus at scale",
+   "epic": "E8",
+   "deps": [
+    "MERC-603"
+   ],
+   "p50": 3.0,
+   "p90": 6.0,
+   "env": "T3/T4",
+   "gates": "G-S1",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": true,
+   "root": false,
+   "longest_path_p50": 3.0,
+   "downstream": 0
+  },
+  "MERC-805": {
+   "id": "MERC-805",
+   "title": "Security suite on the Mac and SAC evidence",
+   "epic": "E8",
+   "deps": [
+    "MERC-406",
+    "MERC-508",
+    "MERC-705"
+   ],
+   "p50": 2.0,
+   "p90": 4.0,
+   "env": "T4",
+   "gates": "—",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": true,
+   "root": false,
+   "longest_path_p50": 8.0,
+   "downstream": 4
+  },
+  "MERC-806": {
+   "id": "MERC-806",
+   "title": "Performance, budgets and measurement",
+   "epic": "E8",
+   "deps": [
+    "MERC-708"
+   ],
+   "p50": 2.0,
+   "p90": 3.0,
+   "env": "T3/T4",
+   "gates": "—",
+   "security": false,
+   "conditional": false,
+   "needs_mac_or_operator": true,
+   "root": false,
+   "longest_path_p50": 2.0,
+   "downstream": 0
+  },
+  "MERC-807": {
+   "id": "MERC-807",
+   "title": "Operations packaging",
+   "epic": "E8",
+   "deps": [
+    "MERC-107",
+    "MERC-706"
+   ],
+   "p50": 3.5,
+   "p90": 5.5,
+   "env": "T4",
+   "gates": "—",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": true,
+   "root": false,
+   "longest_path_p50": 11.0,
+   "downstream": 5
+  },
+  "MERC-807b": {
+   "id": "MERC-807b",
+   "title": "Coordinator account U2 (conditional)",
+   "epic": "E8",
+   "deps": [
+    "MERC-807"
+   ],
+   "p50": 6.0,
+   "p90": 11.0,
+   "env": "T4 [ROOT]",
+   "gates": "—",
+   "security": true,
+   "conditional": true,
+   "needs_mac_or_operator": true,
+   "root": true,
+   "longest_path_p50": 0,
+   "downstream": 0
+  },
+  "MERC-901": {
+   "id": "MERC-901",
+   "title": "Shadow mode (MIG-1)",
+   "epic": "E9",
+   "deps": [
+    "MERC-805",
+    "MERC-903"
+   ],
+   "p50": 1.5,
+   "p90": 2.5,
+   "env": "T5",
+   "gates": "G-S1",
+   "security": false,
+   "conditional": false,
+   "needs_mac_or_operator": true,
+   "root": false,
+   "longest_path_p50": 6.0,
+   "downstream": 3
+  },
+  "MERC-902": {
+   "id": "MERC-902",
+   "title": "Coexistence",
+   "epic": "E9",
+   "deps": [
+    "MERC-004"
+   ],
+   "p50": 1.0,
+   "p90": 2.0,
+   "env": "T5",
+   "gates": "P0-073",
+   "security": false,
+   "conditional": false,
+   "needs_mac_or_operator": true,
+   "root": false,
+   "longest_path_p50": 5.5,
+   "downstream": 3
+  },
+  "MERC-903": {
+   "id": "MERC-903",
+   "title": "Target onboarding",
+   "epic": "E9",
+   "deps": [
+    "MERC-508",
+    "MERC-807"
+   ],
+   "p50": 1.5,
+   "p90": 2.5,
+   "env": "T5 ⓗ",
+   "gates": "P0-240",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": true,
+   "root": false,
+   "longest_path_p50": 7.5,
+   "downstream": 4
+  },
+  "MERC-904": {
+   "id": "MERC-904",
+   "title": "Supervised pilot (MIG-2)",
+   "epic": "E9",
+   "deps": [
+    "MERC-901",
+    "MERC-902"
+   ],
+   "p50": 2.5,
+   "p90": 4.0,
+   "env": "T5",
+   "gates": "G-S4",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": true,
+   "root": false,
+   "longest_path_p50": 4.5,
+   "downstream": 2
+  },
+  "MERC-905": {
+   "id": "MERC-905",
+   "title": "Unattended readiness (G-S5)",
+   "epic": "E9",
+   "deps": [
+    "MERC-904",
+    "MERC-805"
+   ],
+   "p50": 1.0,
+   "p90": 2.0,
+   "env": "T5 ⓗ",
+   "gates": "G-S5",
+   "security": true,
+   "conditional": false,
+   "needs_mac_or_operator": true,
+   "root": false,
+   "longest_path_p50": 2.0,
+   "downstream": 1
+  },
+  "MERC-906": {
+   "id": "MERC-906",
+   "title": "Cutover and watch (MIG-3/4)",
+   "epic": "E9",
+   "deps": [
+    "MERC-905"
+   ],
+   "p50": 1.0,
+   "p90": 2.0,
+   "env": "T5",
+   "gates": "—",
+   "security": false,
+   "conditional": false,
+   "needs_mac_or_operator": true,
+   "root": false,
+   "longest_path_p50": 1.0,
+   "downstream": 0
+  }
+ }
+}

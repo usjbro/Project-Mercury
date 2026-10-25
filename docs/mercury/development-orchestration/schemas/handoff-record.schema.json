@@ -1,0 +1,198 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/usjbro/Project-Mercury/docs/mercury/development-orchestration/schemas/handoff-record.schema.json",
+  "title": "MERCURY development ledger record (devorch.handoff.v1)",
+  "description": "One append-only line in DEVORCH_HOME/ledger/<task_id>.jsonl, hash-chained per task. Written only by tools/devorch/devorch.py record.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "actor",
+    "at",
+    "contract_core_sha256",
+    "event",
+    "evidence",
+    "from_state",
+    "hash",
+    "prev_hash",
+    "schema",
+    "seq",
+    "task_id",
+    "to_state"
+  ],
+  "properties": {
+    "schema": {
+      "const": "devorch.handoff.v1"
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "task_id": {
+      "type": "string",
+      "pattern": "^DT-[0-9]{4}(-[a-z0-9]+)?$"
+    },
+    "at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "event": {
+      "enum": [
+        "assigned",
+        "attempt_failed",
+        "awaiting_human",
+        "cancelled",
+        "closed",
+        "code_review_changes_required",
+        "code_review_passed",
+        "contract_revised",
+        "created",
+        "dispatched",
+        "env_retry",
+        "escalated",
+        "failed",
+        "human_changes_requested",
+        "human_merged",
+        "implementation_completed",
+        "integration_failed",
+        "integration_verified",
+        "interface_frozen",
+        "pr_prepared",
+        "reclaimed",
+        "result_accepted",
+        "resumed",
+        "security_review_blocked",
+        "security_review_passed",
+        "stale_detected",
+        "started",
+        "tests_failed",
+        "tests_passed",
+        "unblocked"
+      ]
+    },
+    "from_state": {
+      "enum": [
+        "NEW",
+        "READY",
+        "BLOCKED",
+        "RUNNING",
+        "AWAITING_REVIEW",
+        "AWAITING_INTEGRATION",
+        "AWAITING_HUMAN",
+        "COMPLETED",
+        "FAILED",
+        "CANCELLED"
+      ]
+    },
+    "to_state": {
+      "enum": [
+        "READY",
+        "BLOCKED",
+        "RUNNING",
+        "AWAITING_REVIEW",
+        "AWAITING_INTEGRATION",
+        "AWAITING_HUMAN",
+        "COMPLETED",
+        "FAILED",
+        "CANCELLED"
+      ]
+    },
+    "actor": {
+      "enum": [
+        "principal-orchestrator",
+        "operator"
+      ],
+      "description": "agents never write ledger records"
+    },
+    "contract_version": {
+      "type": "integer"
+    },
+    "attempt": {
+      "type": "integer"
+    },
+    "gate": {
+      "enum": [
+        "G1",
+        "G2",
+        "G3",
+        "G4",
+        "G5",
+        "G6",
+        "G7"
+      ]
+    },
+    "evidence": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "ref"
+        ],
+        "properties": {
+          "kind": {
+            "enum": [
+              "ci_run",
+              "commit",
+              "design_ref",
+              "github_merge",
+              "ledger",
+              "log",
+              "operator_statement",
+              "pr",
+              "result_file",
+              "review_file",
+              "subtask",
+              "test_run"
+            ]
+          },
+          "ref": {
+            "type": "string",
+            "description": " For file evidence: the copy under DEVORCH_HOME (evidence/<task>/records/...), verified by sha256 on replay."
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "source": {
+            "type": "string",
+            "description": "absolute path the evidence was copied from at record time (provenance only; the ledger trusts the copy at ref)"
+          }
+        }
+      }
+    },
+    "note": {
+      "type": "string",
+      "maxLength": 2000
+    },
+    "prev_hash": {
+      "type": "string",
+      "pattern": "^([0-9a-f]{64}|GENESIS)$"
+    },
+    "hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "contract_core_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "sha256 of the contract without status/attempt; may change only via contract_revised"
+    },
+    "head_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "session": {
+      "type": "string",
+      "maxLength": 200
+    },
+    "frozen_files": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$"
+      }
+    }
+  }
+}

@@ -1,0 +1,5 @@
+# Claude Code built-in worktrees (not used by devorch, but never commit them)
+.claude/worktrees/
+.claude/settings.local.json
+# Python caches from tools/devorch
+__pycache__/

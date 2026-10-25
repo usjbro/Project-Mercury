@@ -1,0 +1,345 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/usjbro/Project-Mercury/docs/mercury/development-orchestration/schemas/task-result.schema.json",
+  "title": "MERCURY development task result (devorch.task_result.v1)",
+  "description": "Returned by a specialist as the final fenced JSON block. Claims are re-checked by the orchestrator; nothing here advances state by itself.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "task_id",
+    "contract_version",
+    "attempt",
+    "agent",
+    "status",
+    "summary",
+    "modified_files",
+    "commits",
+    "tests",
+    "defects",
+    "findings",
+    "outstanding_dependencies",
+    "blocking_conditions",
+    "recommended_next_action",
+    "evidence_refs"
+  ],
+  "properties": {
+    "schema": {
+      "const": "devorch.task_result.v1"
+    },
+    "task_id": {
+      "type": "string",
+      "pattern": "^DT-[0-9]{4}(-[a-z0-9]+)?$"
+    },
+    "contract_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "attempt": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 50
+    },
+    "agent": {
+      "enum": [
+        "mdev-lead-architect",
+        "mdev-tpm",
+        "mdev-backend-engineer",
+        "mdev-database-engineer",
+        "mdev-ai-integration-engineer",
+        "mdev-platform-integration-engineer",
+        "mdev-security-engineer",
+        "mdev-devops-engineer",
+        "mdev-test-automation-engineer",
+        "mdev-reliability-engineer",
+        "mdev-code-reviewer",
+        "mdev-integration-release-engineer",
+        "operator",
+        "mac-validation-queue"
+      ]
+    },
+    "status": {
+      "enum": [
+        "completed",
+        "partial",
+        "failed",
+        "escalated"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 10,
+      "maxLength": 3000
+    },
+    "branch": {
+      "type": "string"
+    },
+    "head_commit": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "modified_files": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "commits": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{40}$"
+      }
+    },
+    "tests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "command",
+          "exit_code",
+          "outcome"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "command": {
+            "type": "string"
+          },
+          "exit_code": {
+            "type": "integer"
+          },
+          "outcome": {
+            "enum": [
+              "passed",
+              "failed",
+              "skipped",
+              "flaky",
+              "not_run"
+            ]
+          },
+          "log_ref": {
+            "type": "string"
+          },
+          "runs": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      }
+    },
+    "defects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "title",
+          "severity",
+          "location"
+        ],
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "critical",
+              "high",
+              "medium",
+              "low"
+            ]
+          },
+          "location": {
+            "type": "string"
+          },
+          "owner_hint": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "severity",
+          "blocking",
+          "location",
+          "description",
+          "required_correction"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "critical",
+              "high",
+              "medium",
+              "low"
+            ]
+          },
+          "blocking": {
+            "type": "boolean"
+          },
+          "location": {
+            "type": "string"
+          },
+          "design_ref": {
+            "type": "string"
+          },
+          "sec_ref": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "required_correction": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "recommendation": {
+      "enum": [
+        "accept",
+        "accept_with_conditions",
+        "changes_required",
+        "reject",
+        "escalate"
+      ]
+    },
+    "gate_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "gate",
+        "result"
+      ],
+      "properties": {
+        "gate": {
+          "enum": [
+            "G1",
+            "G3",
+            "G4",
+            "G5",
+            "G6"
+          ]
+        },
+        "result": {
+          "enum": [
+            "pass",
+            "fail"
+          ]
+        }
+      }
+    },
+    "outstanding_dependencies": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "blocking_conditions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "escalation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "question",
+        "options"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "design_change",
+            "security",
+            "operator_decision",
+            "credentials_or_permissions",
+            "mac_validation",
+            "cannot_continue"
+          ]
+        },
+        "question": {
+          "type": "string"
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "recommended_option": {
+          "type": "string"
+        }
+      }
+    },
+    "recommended_next_action": {
+      "type": "string"
+    },
+    "evidence_refs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "turns": {
+          "type": "integer"
+        },
+        "wall_minutes": {
+          "type": "number"
+        },
+        "tokens": {
+          "type": "integer"
+        },
+        "cost_usd": {
+          "type": "number"
+        }
+      }
+    },
+    "reviewed_head_commit": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "review kinds: the exact head reviewed (must equal review_target.head_commit)"
+    },
+    "integrated_heads": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^DT-[0-9]{4}(-[a-z0-9]+)?@[0-9a-f]{40}$"
+      },
+      "description": "integration: task@reviewed_head for each covered task"
+    }
+  }
+}

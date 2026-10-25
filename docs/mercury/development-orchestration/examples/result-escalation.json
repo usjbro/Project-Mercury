@@ -1,0 +1,32 @@
+{
+  "schema": "devorch.task_result.v1",
+  "task_id": "DT-0007",
+  "contract_version": 1,
+  "attempt": 1,
+  "agent": "mdev-database-engineer",
+  "status": "escalated",
+  "summary": "INV-13 append-only trigger for findings conflicts with finding_resolutions needing a resolution timestamp on the finding row.",
+  "head_commit": null,
+  "modified_files": [],
+  "commits": [],
+  "tests": [],
+  "defects": [],
+  "findings": [],
+  "outstanding_dependencies": [],
+  "blocking_conditions": [
+    "Design ambiguity in components.md \u00a76.3 findings vs finding_resolutions"
+  ],
+  "escalation": {
+    "kind": "design_change",
+    "question": "Should resolution state live only in finding_resolutions (findings stay append-only) or may findings.resolved_at be updated?",
+    "options": [
+      "(a) resolution only in finding_resolutions (no design change)",
+      "(b) allow single UPDATE of resolved_at (changes INV-13)"
+    ],
+    "recommended_option": "(a)"
+  },
+  "recommended_next_action": "Lead Architect assessment; operator decision only if (b).",
+  "evidence_refs": [
+    "evidence/DT-0007/attempt-1/notes.md"
+  ]
+}
