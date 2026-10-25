@@ -195,7 +195,7 @@ The runnable part of §5.1, in Project-Mercury until the platform repository exi
 |---|---|
 | Repository CI of record (Mercury) | **Awaiting operator approval** (MERC-030 / RA-D2; DOD-02 ruleset) |
 | Head-SHA correlation and G6 rule | **Documented only** (the v1 equivalent is implemented in `devorch.py` `pr_prepared` requiring `ci_run` evidence) |
-| devplat CI workflow | **Implemented, replayed locally; not yet run on GitHub** (§5.4; draft PR #4, unmerged) |
+| devplat CI workflow | **Implemented; green on GitHub** (both jobs, run 40160980037 on `83aad9f`, 2026-10-25; `validate_all.sh --strict` reported nothing skipped). Draft PR #4, unmerged; not a required check (§5.4) |
 | Offline chart validation runner (`platform/tools/charts/run.sh`) | **Implemented+tested** in the authoring environment (`24-…` §10); wired into CI through `validate_all.sh` (§5.4) |
 | Per-repository CI hardening H1–H8 (D13) | **Awaiting operator approval/action** (part of each project's `DOD-02` fact) |
 | Image build, scan, sign pipeline | **Documented only.** No images exist |
