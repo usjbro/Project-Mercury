@@ -25,6 +25,9 @@ SCHEMA = os.environ.get("DEVPLAT_SCHEMA", os.path.join(HERE, "schema.sql"))   # 
 ROLES_SQL = os.path.join(HERE, "roles.sql")
 RULES = json.load(open(os.path.join(HERE, "devorch_v2_rules.json")))
 CATALOGUE = os.path.join(PLATFORM, "agents", "execution-profiles.yaml")
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.path.join(PLATFORM, "controller"))
+import jobspec as JOBSPEC  # noqa: E402
 DEFAULT_SOCK = "/tmp/claude-0/-home-user-Project-Mercury/16854e63-26a2-5af1-9adb-3e58b440561e/scratchpad/pg"
 PGBIN = "/usr/lib/postgresql/16/bin"
 
@@ -130,6 +133,7 @@ def setUpModule():
         raise RuntimeError("schema.sql failed to load:\n" + r.stderr)
     profiles, digest = load_catalogue()
     psql(f"SELECT devplat.load_role_catalogue('test-{digest[:12]}', {lit(digest)}, {lit(profiles)})", role=R["migrator"])
+    psql(f"SELECT devplat.set_mandatory_hard_preconditions({arr(HARD)})", role=R["migrator"])
     psql(f"SELECT devplat.set_operator_identities({lit(ISSUER)}, 'devplat-api', {lit([{'subject': OPERATOR}])})",
          role=R["migrator"])
     print(f"\n[test_schema] PostgreSQL: {CONN['mode']}; database {DB}", file=sys.stderr)
@@ -179,8 +183,10 @@ ROLE_FOR = {"implementation": "mdev-backend-engineer", "test": "mdev-test-automa
             "design": "mdev-lead-architect", "code_review": "mdev-code-reviewer", "design_review": "mdev-lead-architect",
             "reliability_review": "mdev-reliability-engineer", "security_review": "mdev-security-engineer",
             "integration": "mdev-integration-release-engineer", "planning": "mdev-tpm", "mac_validation": None,
-            "operator_action": None}
-READ_ONLY = set(RULES["read_only_kinds"])
+            "operator_action": None, "plan_proposal": "planner"}
+# Kinds devplat adds to the ported devorch vocabulary (SHORT, read-only); everything else must equal devorch.
+DEVPLAT_SHORT_RO_KINDS = ["plan_proposal"]
+READ_ONLY = set(RULES["read_only_kinds"]) | set(DEVPLAT_SHORT_RO_KINDS)
 TOKENS = {}
 
 
@@ -201,6 +207,8 @@ class Base(unittest.TestCase):
             f"SELECT devplat.upsert_project({lit(p)}, 'Test {p}', 'owner/{p}', NULL, 'cfg-1', 'projects/{p}.yaml@abc', "
             f"{lit(st)}, 'standard', {arr(hard)}, {lit(roles)}, {lit(cost)}, NULL, '{{}}'::jsonb)", role=R["ctl"])
         up("onboarding" if status in ("active", "onboarding") else status)
+        psql(f"SELECT devplat.upsert_execution_target({lit(p)}, 'main', 'local', 'proj-{p}', 'gvisor', 'model-only', "
+             f"'standard', true)", role=R["ctl"])
         if status == "active":
             for key in hard:
                 cls.fact(key, "verified", project=p)
@@ -214,14 +222,15 @@ class Base(unittest.TestCase):
                         f"{lit(task)}, 'statement', {lit(subject)}, {lit(ISSUER)}, 'op@example.test', "
                         f"now() - interval '{auth_age_s} seconds', {lit(jti)}, NULL)", role=R["api"]))
 
-    def artifact(self, content, kind="result"):
+    def artifact(self, content, kind="result", project=None):
         h = sha(content)
-        psql(f"SELECT * FROM devplat.register_artifact({lit(self.project)}, {lit(h)}, {len(content)}, 'application/json', "
+        psql(f"SELECT * FROM devplat.register_artifact({lit(project or self.project)}, {lit(h)}, {len(content)}, 'application/json', "
              f"{lit(kind)}, NULL, NULL, NULL, 'evidence')", role=R["ctl"])
         return h
 
-    def fev(self, kind, content=None):
-        h = self.artifact(content or f"{kind}-{secrets.token_hex(6)}", "log" if kind in ("log", "test_run", "ci_run") else "result")
+    def fev(self, kind, content=None, project=None):
+        h = self.artifact(content or f"{kind}-{secrets.token_hex(6)}", "log" if kind in ("log", "test_run", "ci_run") else "result",
+                          project=project)
         return {"kind": kind, "ref": f"sha256/{h}", "sha256": h}
 
     def body(self, tid, kind, **kw):
@@ -294,6 +303,10 @@ class Base(unittest.TestCase):
         self.ev(tid, "assigned", [{"kind": "ledger", "ref": "assigned"}], project=project)
         self.ev(tid, "dispatched", [{"kind": "job", "ref": f"dp-{tid.lower()}-a1"}], project=project)
 
+    @staticmethod
+    def target(p):
+        return int(psql(f"SELECT target_id FROM devplat.execution_targets WHERE project_id = {lit(p)} AND name = 'main'"))
+
     def admit(self, tid, role, attempt=1, project=None):
         p = project or self.project
         return int(psql(f"SELECT devplat.record_admission({lit(p)}, {lit(tid)}, {attempt}, {lit(role)}, 'admit', 'admitted', "
@@ -305,10 +318,14 @@ class Base(unittest.TestCase):
             dispatch_no = int(psql(f"SELECT coalesce(max(dispatch_no), 0) + 1 FROM devplat.job_runs WHERE project_id = {lit(p)} "
                                    f"AND task_id = {lit(tid)} AND attempt = {attempt} AND role = {lit(role)}"))
         adm = self.admit(tid, role, attempt, project=p)
-        key = key or sha(f"{p}|{tid}|{attempt}|{role}|{dispatch_no}|{secrets.token_hex(4)}")
-        name = f"dp-{p}-{tid.lower()}-a{attempt}-{role[:4]}{dispatch_no}-{secrets.token_hex(2)}"[:63].rstrip("-")
+        # the controller's own formulas (platform/controller/jobspec.py), so a name or key collision between the
+        # roles of one attempt (e.g. implementer and verifier, R6 re-check RA-1) fails here as it would in production
+        core = psql(f"SELECT c.core_sha256 FROM devplat.task_contracts c JOIN devplat.tasks t USING (project_id, task_id) "
+                    f"WHERE t.project_id = {lit(p)} AND t.task_id = {lit(tid)} AND c.contract_version = t.contract_version")
+        key = key or JOBSPEC.idempotency_key(p, tid, core, attempt, role, dispatch_no)
+        name = JOBSPEC.job_name(p, tid, attempt, role, dispatch_no)
         out = psql(f"SELECT r_job_id FROM devplat.dispatch_job({lit(p)}, {lit(tid)}, {attempt}, {lit(role)}, {dispatch_no}, "
-                   f"{adm}, {lit(key)}, NULL, 'proj-{p}-exec', {lit(name)}, {lit(HOLDER)}, {TOKENS[(p, tid)]})", role=R["ctl"])
+                   f"{adm}, {lit(key)}, {self.target(p)}, 'proj-{p}-exec', {lit(name)}, {lit(HOLDER)}, {TOKENS[(p, tid)]})", role=R["ctl"])
         return int(out)
 
     def verify_tests(self, tid, h, attempt=1, tests=("unit",), outcome="passed"):
@@ -360,10 +377,18 @@ class T01RulesPorted(Base):
         lim = dict(l.split("|") for l in psql("SELECT counter, coalesce(max_count::text,'') FROM devplat.loop_counters").splitlines())
         self.assertEqual({k: (int(v) if v else None) for k, v in lim.items()}, RULES["limits"])
         kinds = dict(l.split("|") for l in psql("SELECT kind, lifecycle FROM devplat.task_kinds").splitlines())
-        self.assertEqual(sorted(k for k, v in kinds.items() if v == "SHORT"), RULES["short_kinds"])
+        self.assertEqual(sorted(k for k, v in kinds.items() if v == "SHORT"), sorted(RULES["short_kinds"] + DEVPLAT_SHORT_RO_KINDS))
         self.assertEqual(sorted(k for k, v in kinds.items() if v == "FULL"), RULES["full_kinds"])
         ro = psql("SELECT string_agg(kind, ',' ORDER BY kind) FROM devplat.task_kinds WHERE read_only").split(",")
-        self.assertEqual(ro, RULES["read_only_kinds"])
+        self.assertEqual(ro, sorted(RULES["read_only_kinds"] + DEVPLAT_SHORT_RO_KINDS))
+        # every catalogue kind run by a Job is a DB kind with the same lifecycle, read-only flag and suffix
+        import yaml
+        cat = {k["kind"]: k for k in yaml.safe_load(open(CATALOGUE))["kind_catalogue"]}
+        db = {l.split("|")[0]: l.split("|")[1:] for l in
+              psql("SELECT kind, lifecycle, read_only, coalesce(subtask_suffix, '') FROM devplat.task_kinds").splitlines()}
+        self.assertEqual(set(cat), set(db))
+        for k, c in cat.items():
+            self.assertEqual(db[k], [c["lifecycle"].upper(), "t" if c["read_only"] else "f", c.get("subtask_suffix", "")], k)
 
     @unittest.skipUnless(os.path.isdir(os.path.join(REPO, "tools", "devorch")), "tools/devorch not present (optional cross-check)")
     def test_vendored_rules_still_equal_devorch_source(self):
@@ -641,7 +666,7 @@ class T06Execution(Base):
         hold = int(psql(f"SELECT devplat.record_admission({lit(p)}, '{t}', 1, 'mdev-backend-engineer', 'hold', 'project_limit', "
                         f"'{{\"running\": 2}}'::jsonb, {lit(HOLDER)}, {TOKENS[(p, t)]})", role=R["ctl"]))
         call = lambda adm, key: psql(
-            f"SELECT r_job_id FROM devplat.dispatch_job({lit(p)}, '{t}', 1, 'mdev-backend-engineer', 1, {adm}, {lit(key)}, NULL, "
+            f"SELECT r_job_id FROM devplat.dispatch_job({lit(p)}, '{t}', 1, 'mdev-backend-engineer', 1, {adm}, {lit(key)}, {self.target(p)}, "
             f"'proj-{p}-exec', 'dp-{p}-ad-0001-a1', {lit(HOLDER)}, {TOKENS[(p, t)]})", role=R["ctl"])
         self.refused(lambda: call(hold, sha("k1")), "needs a fresh admit decision")
         adm = self.admit(t, "mdev-backend-engineer")
@@ -652,36 +677,102 @@ class T06Execution(Base):
         self.assertEqual(psql(f"SELECT count(*) FROM devplat.admission_decisions WHERE project_id = {lit(p)} AND task_id = '{t}' "
                               f"AND decision = 'hold' AND reason = 'project_limit'"), "1")
 
-    def test_idempotent_dispatch_concurrent(self):
-        t = "ID-0001"
+    def test_assigned_role_and_verifier_jobs_of_one_attempt(self):
+        # R6 re-check RA-1: the implementer's Job and the verifier's Job of the same attempt and dispatch ordinal are
+        # two job_runs rows; with role-less jobspec names/keys the second dispatch_job() hit an idempotency collision
+        t = "AD-0003"
+        self.new_task(t, "implementation")
+        self.to_running(t)
+        a = self.dispatch(t, "mdev-backend-engineer", dispatch_no=1)
+        h = head(t)
+        res = self.result(t, "implementation", head_commit=h, tests=[{"id": "unit", "exit_code": 0, "outcome": "passed"}])
+        self.ev(t, "implementation_completed", [self.fev("result_file")], head_commit=h, payload={"result": res})
+        self.verify_tests(t, h)                                   # verifier, dispatch_no 1 of its own role
+        self.assertEqual(self.ev(t, "tests_passed", [self.fev("test_run")], head_commit=h)["gate"], "G2")
+        rows = psql(f"SELECT count(DISTINCT idempotency_key) || ',' || count(DISTINCT k8s_job_name) || ',' || count(*) "
+                    f"FROM devplat.job_runs WHERE project_id = {lit(self.project)} AND task_id = '{t}' AND attempt = 1")
+        self.assertEqual(rows, "2,2,2")
+        self.assertNotEqual(a, 0)
+
+    def test_dispatch_needs_the_projects_execution_target(self):
+        # R6 re-check RS-9: without a target the namespace was not tied to the task's project
+        t = "AD-0004"
         self.new_task(t, "implementation")
         self.to_running(t)
         p = self.project
-        adm = self.admit(t, "mdev-backend-engineer")
-        key = sha(f"{p}|core|1")
-        sql = (f'SET ROLE "{R["ctl"]}"; BEGIN; SELECT r_job_id, r_created FROM devplat.dispatch_job({lit(p)}, {lit(t)}, 1, '
-               f"'mdev-backend-engineer', 1, {adm}, {lit(key)}, NULL, 'proj-{p}-exec', 'dp-{p}-id-0001-a1', "
-               f"{lit(HOLDER)}, {TOKENS[(p, t)]}); SELECT pg_sleep(1.5); COMMIT;")
-        t0 = time.time()
+        other = "e" + secrets.token_hex(3)
+        self.make_project(other, "onboarding")
+        call = lambda target, ns: psql(
+            f"SELECT r_job_id FROM devplat.dispatch_job({lit(p)}, '{t}', 1, 'mdev-backend-engineer', 1, "
+            f"{self.admit(t, 'mdev-backend-engineer')}, {lit(sha(secrets.token_hex(4)))}, {target}, {lit(ns)}, "
+            f"'dp-{p}-ad-0004', {lit(HOLDER)}, {TOKENS[(p, t)]})", role=R["ctl"])
+        msg = "namespace is not in an enabled execution target"
+        self.refused(lambda: call("NULL", f"proj-{other}-exec"), msg)
+        self.refused(lambda: call("NULL", f"proj-{p}-exec"), msg)
+        self.refused(lambda: call(self.target(other), f"proj-{other}-exec"), msg)
+        call(self.target(p), f"proj-{p}-exec")
+
+    def test_admission_older_than_ten_minutes_is_refused(self):
+        # 16-... step 6, 17-... §2 rule 5: dispatch_job() needs an admit decision at most 10 minutes old
+        if psql("SELECT rolsuper FROM pg_roles WHERE rolname = current_user") != "t":
+            self.skipTest("backdating an append-only admission row needs a superuser connection")
+        t = "AD-0002"
+        self.new_task(t, "implementation")
+        self.to_running(t)
+        p = self.project
+        call = lambda adm, key: psql(
+            f"SELECT r_job_id FROM devplat.dispatch_job({lit(p)}, '{t}', 1, 'mdev-backend-engineer', 1, {adm}, {lit(key)}, {self.target(p)}, "
+            f"'proj-{p}-exec', 'dp-{p}-ad-0002-a1', {lit(HOLDER)}, {TOKENS[(p, t)]})", role=R["ctl"])
+        stale = self.admit(t, "mdev-backend-engineer")
+        psql(f"SET session_replication_role = replica; UPDATE devplat.admission_decisions "
+             f"SET decided_at = clock_timestamp() - interval '10 minutes 1 second' WHERE decision_id = {stale}")
+        self.refused(lambda: call(stale, sha("k-stale")), "needs a fresh admit decision")
+        call(self.admit(t, "mdev-backend-engineer"), sha("k-fresh"))
+
+    def race(self, sqls):
+        """Run each SQL text in its own session, released together: a gate session holds an ACCESS EXCLUSIVE lock on
+        devplat.job_runs until every racer is blocked on it, so the calls really overlap (R6 CI finding: without the
+        gate, the second call usually ran after the first had inserted and the race was never exercised)."""
+        gate = subprocess.Popen(_psql_args(DB), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        gate.stdin.write("BEGIN; LOCK TABLE devplat.job_runs IN ACCESS EXCLUSIVE MODE; SELECT 'locked';\n"); gate.stdin.flush()
+        deadline = time.time() + 10
+        while psql("SELECT count(*) FROM pg_locks WHERE relation = 'devplat.job_runs'::regclass AND mode = 'AccessExclusiveLock' "
+                   "AND granted") != "1":
+            self.assertLess(time.time(), deadline, "gate lock not taken"); time.sleep(0.05)
         procs = [subprocess.Popen(_psql_args(DB), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                  text=True) for _ in range(2)]
-        for pr in procs:
+                                  text=True) for _ in sqls]
+        for pr, sql in zip(procs, sqls):
             pr.stdin.write(sql); pr.stdin.close()
-        outs = []
-        for pr in procs:
-            so, se = pr.communicate()
-            outs.append((pr.returncode, so.strip(), se.strip()))
-        elapsed = time.time() - t0
-        self.assertEqual([o[0] for o in outs], [0, 0], outs)
-        rows = sorted(o[1].splitlines()[0] for o in outs)
-        ids = {r.split("|")[0] for r in rows}
-        self.assertEqual(len(ids), 1, rows)
-        self.assertEqual(sorted(r.split("|")[1] for r in rows), ["f", "t"])
-        self.assertGreater(elapsed, 2.5, "second session must have waited for the first (true concurrency)")
-        self.assertEqual(psql(f"SELECT count(*) FROM devplat.job_runs WHERE project_id = {lit(p)} AND task_id = '{t}'"), "1")
+        while psql("SELECT count(*) FROM pg_locks WHERE relation = 'devplat.job_runs'::regclass AND NOT granted") != str(len(sqls)):
+            self.assertLess(time.time(), deadline, "racers did not block on the gate"); time.sleep(0.05)
+        gate.stdin.write("COMMIT;\n"); gate.stdin.close(); gate.communicate()
+        outs = [tuple(x.strip() for x in pr.communicate()) for pr in procs]   # communicate() sets returncode
+        return [(pr.returncode, *o) for pr, o in zip(procs, outs)]
+
+    def test_idempotent_dispatch_concurrent(self):
+        # Stress: controller replicas (or retries) send the same dispatch at the same instant: one row, one created=t.
+        # The failure window is microseconds, so this alone is probabilistic (it caught the bug in CI and fails in
+        # about a third of local runs without the fix); test_dispatch_serialized_per_key below is deterministic.
+        p = self.project
+        for i in range(8):
+            t = f"ID-000{i + 1}"
+            self.new_task(t, "implementation")
+            self.to_running(t)
+            adm = self.admit(t, "mdev-backend-engineer")
+            key = sha(f"{p}|{t}|core|1")
+            sql = (f'SET ROLE "{R["ctl"]}"; BEGIN; SELECT r_job_id, r_created FROM devplat.dispatch_job({lit(p)}, {lit(t)}, 1, '
+                   f"'mdev-backend-engineer', 1, {adm}, {lit(key)}, {self.target(p)}, 'proj-{p}-exec', 'dp-{p}-{t.lower()}-a1', "
+                   f"{lit(HOLDER)}, {TOKENS[(p, t)]}); SELECT pg_sleep(0.2); COMMIT;")
+            outs = self.race([sql] * 4)
+            self.assertEqual([o[0] for o in outs], [0] * 4, (i, outs))
+            rows = sorted(o[1].splitlines()[0] for o in outs)
+            self.assertEqual(len({r.split("|")[0] for r in rows}), 1, rows)
+            self.assertEqual(sorted(r.split("|")[1] for r in rows), ["f", "f", "f", "t"])
+            self.assertEqual(psql(f"SELECT count(*) FROM devplat.job_runs WHERE project_id = {lit(p)} AND task_id = '{t}'"), "1")
+        ids = {rows[0].split("|")[0]}
         adm2 = self.admit(t, "mdev-backend-engineer")
         self.refused(lambda: psql(f"SELECT * FROM devplat.dispatch_job({lit(p)}, {lit(t)}, 1, 'mdev-backend-engineer', 1, {adm2}, "
-                                  f"{lit(sha('other'))}, NULL, 'proj-x-exec', 'dp-other-a1', {lit(HOLDER)}, {TOKENS[(p, t)]})",
+                                  f"{lit(sha('other'))}, {self.target(p)}, 'proj-{p}-exec', 'dp-other-a1', {lit(HOLDER)}, {TOKENS[(p, t)]})",
                                   role=R["ctl"]), "duplicate key")
         jid = ids.pop()
         uid1, uid2 = "11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222"
@@ -691,6 +782,31 @@ class T06Execution(Base):
         self.assertEqual(psql(f"SELECT devplat.job_heartbeat({jid}, '{uid1}')", role=R["ctl"]), "t")
         self.refused(lambda: upd("running", f"'{uid2}'"), "duplicate execution")
         self.refused(lambda: upd("planned", "NULL"), "illegal job phase change created -> planned")
+
+    def test_dispatch_serialized_per_key(self):
+        # Deterministic: while one dispatch with key K is uncommitted, a second call with K waits on the per-key lock
+        # BEFORE its lookup, then returns the first call's row (created=f). Without the lock it would race to insert.
+        p, t = self.project, "SK-0001"
+        self.new_task(t, "implementation")
+        self.to_running(t)
+        adm, key = self.admit(t, "mdev-backend-engineer"), sha(f"{p}|sk|1")
+        call = (f"SELECT r_job_id, r_created FROM devplat.dispatch_job({lit(p)}, {lit(t)}, 1, 'mdev-backend-engineer', 1, "
+                f"{adm}, {lit(key)}, {self.target(p)}, 'proj-{p}-exec', 'dp-{p}-sk-0001-a1', {lit(HOLDER)}, {TOKENS[(p, t)]});")
+        opened = lambda: subprocess.Popen(_psql_args(DB), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        a = opened()
+        a.stdin.write(f'SET ROLE "{R["ctl"]}"; BEGIN; {call}\n'); a.stdin.flush()
+        deadline = time.time() + 10
+        while psql("SELECT count(*) FROM pg_stat_activity WHERE state = 'idle in transaction' AND query LIKE '%dispatch_job%'") != "1":
+            self.assertLess(time.time(), deadline, "first dispatch did not complete"); time.sleep(0.05)
+        b = opened()
+        b.stdin.write(f'SET ROLE "{R["ctl"]}"; {call}\n'); b.stdin.close()
+        while psql("SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted") != "1":
+            self.assertLess(time.time(), deadline, "second dispatch did not wait on the per-key lock"); time.sleep(0.05)
+        a.stdin.write("COMMIT;\n"); a.stdin.close()
+        (ao, ae), (bo, be) = a.communicate(), b.communicate()
+        self.assertEqual((a.returncode, b.returncode), (0, 0), (ae, be))
+        self.assertEqual(ao.strip().split("|")[1], "t")
+        self.assertEqual(bo.strip(), ao.strip().split("|")[0] + "|f")
 
     def test_env_classification_only_from_platform_signals(self):
         t = "EV-0001"
@@ -789,6 +905,25 @@ class T07SideEffects(Base):
         self.refused(lambda: psql(f"SELECT * FROM devplat.enqueue_outbox({lit(q)}, 'github', 'open_draft_pr', 'gh:{q}:pr', "
                                   f"'{{}}'::jsonb)", role=R["ctl"]), f"project {q} is onboarding")
 
+    def test_controller_cannot_drop_mandatory_hard_preconditions(self):
+        # R6 re-check RS-5: a compromised controller activating a project with a list of its choosing
+        q = "m" + secrets.token_hex(3)
+        self.make_project(q, "onboarding")
+        self.fact("note", "verified", project=q)
+        up = lambda hard, st="onboarding", wf=None: psql(
+            f"SELECT devplat.upsert_project({lit(q)}, 'M', NULL, NULL, 'cfg-2', 'r@2', {lit(st)}, 'standard', {arr(hard)}, "
+            f"'{{}}'::jsonb, 5, NULL, '{{}}'::jsonb, {lit(wf)})", role=R["ctl"])
+        self.refused(lambda: up(["note"], "active"), "must include the platform's mandatory keys {DOD-02,DOD-13}")
+        self.refused(lambda: up(["DOD-02", "note"]), "mandatory keys {DOD-13}")
+        self.refused(lambda: up(HARD, wf="DOD-02"), "Linear writes need their own fact")
+        self.refused(lambda: up(HARD, wf="REDUCED-ASSURANCE"), "reserved key")
+        self.refused(lambda: up(HARD + ["X-1"], wf="X-1"), "Linear writes need their own fact")
+        up(HARD + ["X-1"], wf="LINEAR-WRITE")
+        self.refused(lambda: psql("SELECT devplat.set_mandatory_hard_preconditions(ARRAY['note'])", role=R["ctl"]),
+                     "permission denied")
+        self.refused(lambda: psql("INSERT INTO devplat.mandatory_hard_preconditions VALUES ('x')", role=R["ctl"]),
+                     "permission denied")
+
     def test_linear_writes_need_configured_project_fact(self):
         q = "l" + secrets.token_hex(3)
         self.make_project(q, "onboarding")
@@ -866,6 +1001,40 @@ class T09IsolationAndStatus(Base):
         self.assertEqual(psql(f"SELECT count(*) FROM devplat.task_events WHERE task_id = '{mine}'", role=role), "1")
         self.assertEqual(psql(f"SELECT count(*) > 0 FROM devplat.projects WHERE project_id <> {lit(self.project)}", role=R["api"]), "t")
         self.refused(lambda: psql("SELECT * FROM devplat.leases", role=role), "permission denied")
+        # run_uploads has no project_id; visibility follows the upload's Job (Codex review on PR #3)
+        for proj, tid in ((self.project, "IS-0002"), (other, "IS-0003")):
+            self.new_task(tid, "planning", project=proj)
+            self.to_running(tid, project=proj)
+            jid = self.dispatch(tid, "mdev-tpm", project=proj)
+            psql(f"INSERT INTO devplat.run_uploads (job_id, name, declared_size) VALUES ({jid}, 'result.json', 10)")
+        seen = psql("SELECT string_agg(DISTINCT j.project_id, ',') FROM devplat.run_uploads u "
+                    "JOIN devplat.job_runs j USING (job_id)", role=R["ctl"])
+        self.assertEqual(sorted(seen.split(",")), sorted([self.project, other]), "controller sees every project")
+        self.assertEqual(psql("SELECT count(*) FROM devplat.run_uploads", role=role), "1", "only the granted project's upload")
+
+    def test_plan_proposal_ids_and_onboarding_dispatch(self):
+        # doc 16 §10: planner Jobs, kind plan_proposal; ids <task>-pN (task-bound) or PL-<nnnn> (project-level)
+        o = "q" + secrets.token_hex(3)
+        self.make_project(o, "onboarding")
+        create = lambda tid, parent=None, covers=None: psql(
+            f"SELECT devplat.create_task({lit(o)}, {lit(tid)}, 'plan_proposal', {lit(parent)}, {arr(covers)}, NULL, {lit(HOLDER)}, 60)",
+            role=R["ctl"])
+        self.refused(lambda: create("PLAN-1"), "project-level plan proposal id must be PL-<nnnn>")
+        self.refused(lambda: create("PL-1"), "PL-<nnnn>")
+        self.refused(lambda: create("PB-0001-p1", parent="PB-0001"), "needs a parent in the same project")
+        self.new_task("PB-0001", "planning", project=o)
+        self.refused(lambda: create("PB-0001-r1", parent="PB-0001"), "plan proposal id must be PB-0001-pN")
+        self.refused(lambda: create("PL-0002", covers=["PB-0001"]), "no covers_tasks")
+        self.new_task("PB-0001-p1", "plan_proposal", parent="PB-0001", project=o)
+        self.new_task("PL-0001", "plan_proposal", project=o)
+        self.to_running("PL-0001", project=o)          # SHORT read-only: dispatchable while onboarding
+        self.dispatch("PL-0001", "planner", project=o)
+        r = self.ev("PL-0001", "result_accepted", [self.fev("result_file", project=o)], project=o,
+                    payload={"result": self.result("PL-0001", "plan_proposal")})
+        self.assertEqual(r["to"], "COMPLETED")
+        # the planner role cannot be assigned another kind (role vs kind map from the catalogue)
+        self.refused(lambda: self.new_task("PL-0003", "plan_proposal", project=o,
+                                           body=dict(self.body("PL-0003", "plan_proposal"), assigned_agent="mdev-tpm")))
 
     def test_task_identity_is_project_scoped(self):
         other = "s" + secrets.token_hex(3)
@@ -928,10 +1097,17 @@ class T09IsolationAndStatus(Base):
                                   f"'application/json', 'result', NULL, NULL, NULL, 'evidence')", role=R["ctl"]),
                      "result artifact over 1048576 bytes")
         self.refused(lambda: psql(f"SELECT * FROM devplat.register_artifact({lit(self.project)}, {lit(sha('m'))}, 10, "
-                                  f"'application/json', 'result', NULL, NULL, NULL, 'evidence', 'manifests/T/1/1.json')",
+                                  f"'application/json', 'result', NULL, NULL, NULL, 'evidence', 'manifests/T/1/verifier-d1.json')",
                                   role=R["ctl"]), "artifacts_alias_check")
-        psql(f"SELECT * FROM devplat.register_artifact({lit(self.project)}, {lit(sha('m'))}, 10, 'application/json', "
-             f"'evidence_manifest', NULL, NULL, NULL, 'evidence', 'manifests/T-0001/1/1.json')", role=R["ctl"])
+        man = lambda h, alias: psql(f"SELECT * FROM devplat.register_artifact({lit(self.project)}, {lit(sha(h))}, 10, "
+                                    f"'application/json', 'evidence_manifest', NULL, NULL, NULL, 'evidence', {lit(alias)})", role=R["ctl"])
+        # R6 re-check RC-1: one alias per (task, attempt, role, dispatch) or per gate; never the role-less form
+        man("m", "manifests/T-0001/1/backend-engineer-d1.json")
+        man("m2", "manifests/T-0001/1/verifier-d1.json")
+        man("m3", "manifests/T-0001/1/gate-G2.json")
+        self.refused(lambda: man("m4", "manifests/T-0001/1/1.json"), "artifacts_alias_key_check")
+        self.refused(lambda: man("m5", "manifests/T-0001/1/verifier-d1.json"), "already bound to another object")
+        man("m2", "manifests/T-0001/1/verifier-d1.json")      # same object again: idempotent
         self.assertEqual(psql("SELECT count(*) FROM devplat.expire_artifacts(100)", role=R["ctl"]), "0")
 
 
@@ -1052,6 +1228,22 @@ class T10DevorchRulesPorted(Base):
         r = "CR-0002"
         self.refused(lambda: self.new_task(r, "planning", body=self.body(r, "planning", allowed_paths=["src/**"])),
                      "read-only kinds must have allowed_paths []")
+
+    def test_cross_project_dependency_refused(self):
+        # R6 re-check RA-3: contract v2 allows dependencies[].project_id; the DB does not implement it yet
+        other = "x" + secrets.token_hex(3)
+        self.make_project(other, "active")
+        self.new_task("XP-0001", "implementation", project=other)
+        self.new_task("XP-0001", "implementation")           # same id in this project
+        t = "XP-0002"
+        dep = {"task_id": "XP-0001", "required_state": "COMPLETED", "project_id": other}
+        self.refused(lambda: self.new_task(t, "implementation", body=self.body(t, "implementation", dependencies=[dep])),
+                     f"cross-project dependency on {other}/XP-0001 is not implemented")
+        self.refused(lambda: self.new_task("XP-0003", "implementation",
+                                           body=self.body("XP-0003", "implementation", dependencies=[{"task_id": "XP-0999"}])),
+                     "dependency XP-0999 is not a task of project")
+        self.new_task("XP-0004", "implementation", body=self.body("XP-0004", "implementation",
+                      dependencies=[{"task_id": "XP-0001", "required_state": "COMPLETED", "project_id": self.project}]))
 
     def test_path_ownership_conflict(self):
         # devorch test_path_ownership_conflict: an active owner of src/core/** blocks a contract for src/core/x/**

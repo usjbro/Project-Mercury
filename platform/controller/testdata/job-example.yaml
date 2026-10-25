@@ -5,7 +5,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: dp-mercury-dt-0001-a2-d1                 # dp-<project>-<task>-a<attempt>-d<dispatch>; deterministic => create is idempotent
+  name: dp-mercury-dt-0001-a2-backend-engineer-d1                 # dp-<project>-<task>-a<attempt>-<role>-d<dispatch>; deterministic => create is idempotent
   namespace: proj-mercury-exec                # from the project's execution target {cluster_ref, namespace_prefix}
   labels:
     app.kubernetes.io/managed-by: devplat-controller
@@ -16,7 +16,7 @@ metadata:
     devplat.io/role: mdev-backend-engineer
     devplat.io/kind: implementation
     devplat.io/network-class: deps            # selects the egress NetworkPolicy
-    devplat.io/idempotency-key: 236b93d0c657f40e8603a992840ceb18a8ec0978   # sha256(project|task|contract_core|attempt|dispatch)[:40]; computed by platform/controller/jobspec.py
+    devplat.io/idempotency-key: 4b3b161b68923723f237c2dc0e4b8d9197f11914   # sha256(project|task|contract_core|attempt|role|dispatch)[:40]; computed by platform/controller/jobspec.py
   annotations:
     devplat.io/contract-core-sha256: 4b1e0c3a9d7f25e86c1b0a4f3e9d2c7b6a5f4e3d2c1b0a9f8e7d6c5b4a392817
     devplat.io/contract-version: "1"
@@ -117,7 +117,7 @@ spec:
             - {name: ANTHROPIC_BASE_URL, value: "http://devplat-model-gateway.devplat-system.svc:8080"}   # project bound to the token, not the URL (R6 D12)
             - name: ANTHROPIC_AUTH_TOKEN      # per-Job gateway token, not the API key; revoked when the Job ends
               valueFrom:
-                secretKeyRef: {name: dp-mercury-dt-0001-a2-d1-io, key: gateway_token}
+                secretKeyRef: {name: dp-mercury-dt-0001-a2-backend-engineer-d1-io, key: gateway_token}
             - {name: DEVPLAT_ARTIFACT_GATEWAY, value: "http://devplat-artifact-gateway.devplat-system.svc:8082"}   # uploads only here (R6 D10)
             - {name: NPM_CONFIG_REGISTRY, value: "http://devplat-registry-proxy-mercury.devplat-system.svc:4873/"}   # this project's read-only proxy (R6 D14)
             - {name: DISABLE_AUTOUPDATER, value: "1"}
@@ -159,8 +159,8 @@ spec:
               - {key: managed-settings.mdev-backend-engineer.json, path: managed-settings.json}   # one settings key per role
         - name: contract
           configMap:
-            name: dp-mercury-dt-0001-a2-d1-contract   # ownerReference -> this Job
+            name: dp-mercury-dt-0001-a2-backend-engineer-d1-contract   # ownerReference -> this Job
         - name: io
           secret:
-            secretName: dp-mercury-dt-0001-a2-d1-io   # one-time bundle URL, one-time upload token, gateway token; ownerReference -> this Job
+            secretName: dp-mercury-dt-0001-a2-backend-engineer-d1-io   # one-time bundle URL, one-time upload token, gateway token; ownerReference -> this Job
             defaultMode: 0400

@@ -237,6 +237,12 @@ def check(doc, file_stem, validator, cat=None):
     for g in doc["review_gates"].get("external_gates", []):
         if g["id"] in hp:
             errs.append(f"external_gates: '{g['id']}' is a hard precondition; list it only in review_gates.hard_preconditions")
+    rp = doc["security"]["restricted_paths"]
+    if status != "draft" and isinstance(rp, list) and ".github/**" not in rp:
+        errs.append("security.restricted_paths must include '.github/**' (CI hardening H8, R6 D13; re-check RS-7)")
+    wf = doc["issue_tracker"].get("write_fact") if isinstance(doc["issue_tracker"], dict) else None
+    if wf in hp:
+        errs.append(f"issue_tracker.write_fact: '{wf}' is a hard precondition; Linear writes need their own fact (DOD-05)")
     ra = doc["security"].get("reduced_assurance")
     if doc["security"]["runtime_class"] == "default" and not ra:
         errs.append("security.runtime_class 'default' requires security.reduced_assurance (R6 D16)")
@@ -377,12 +383,17 @@ def self_test(validator):
         ("hard preconditions without DOD-13", "hard_preconditions", m(lambda d: d["review_gates"].update(hard_preconditions=["DOD-02", "DOD-01"]))),
         ("hard preconditions missing", "hard_preconditions", m(lambda d: d["review_gates"].pop("hard_preconditions"))),
         ("hard precondition duplicated as external gate", "is a hard precondition", m(lambda d: d["review_gates"]["external_gates"].append({"id": "DOD-02", "satisfied_by": "operator_fact", "ref": "x"}))),
+        # minor 2: per-project Linear write fact
+        ("Linear writes without a write fact", "/issue_tracker", m(lambda d: d.update(issue_tracker={"kind": "linear", "team": "T", "project": "P", "write_mode": "comments"}))),
+        ("write fact with read-only Linear", "/issue_tracker", m(lambda d: d.update(issue_tracker={"kind": "linear", "team": "T", "project": "P", "write_mode": "read_only", "write_fact": "LINEAR-WRITE"}))),
+        ("write fact reuses a hard precondition", "Linear writes need their own fact", m(lambda d: d.update(issue_tracker={"kind": "linear", "team": "T", "project": "P", "write_mode": "comments", "write_fact": d["review_gates"]["hard_preconditions"][0]}))),
+        (".github/** not restricted", "must include '.github/**'", m(lambda d: d["security"].update(restricted_paths=[p for p in d["security"]["restricted_paths"] if p != ".github/**"]))),
         ("role not in the catalogue", "not a role of the platform catalogue", m(lambda d: d["agent_permissions"]["roles"].update({"mdev-rogue": {"enabled": False, "writes": False, "path_scopes": []}}))),
         ("task kind not given by the catalogue", "is not given to this role", m(lambda d: d["agent_permissions"]["roles"][first_role].update(task_kinds=["security_review"]))),
         ("read-only catalogue role made writable", "all read-only", m(lambda d: d["agent_permissions"]["roles"][first_ro].update(writes=True, path_scopes=[]))),
         ("reviewer without a gated kind", "no review kind with a gate", m(lambda d: d["review_gates"]["required_reviewers"]["default"].append(ungated))),
         ("no sandbox runtime without reduced assurance", "requires security.reduced_assurance", m(lambda d: d["security"].update(runtime_class="default"))),
-        ("reduced assurance with builds", "builds disabled", m(lambda d: d["security"].update(runtime_class="default", reduced_assurance={"fact_key": "REDUCED-ASSURANCE", "sandbox_repository": "https://github.com/example/sandbox", "llm_key_secret": "devplat-llm-key-sandbox", "builds": "disabled"}))),
+        ("reduced assurance with builds", "builds disabled", m(lambda d: (d["security"].update(runtime_class="default", reduced_assurance={"fact_key": "REDUCED-ASSURANCE", "sandbox_repository": "https://github.com/example/sandbox", "llm_key_secret": "devplat-llm-key-sandbox", "builds": "disabled"}), d["environments"].append({"id": "k8s-build", "kind": "kubernetes_build", "purpose": "self-test", "task_kinds": ["build"], "ref": "self-test"})))),
         ("reduced assurance on the real repository", "must not be the project's source repository", m(lambda d: (d["security"].update(runtime_class="default", reduced_assurance={"fact_key": "REDUCED-ASSURANCE", "sandbox_repository": d["source_repository"]["url"], "llm_key_secret": "devplat-llm-key-sandbox", "builds": "disabled"}), d.update(environments=[e for e in d["environments"] if e["kind"] != "kubernetes_build"])))),
         ("reduced assurance with builds enabled", "/security/reduced_assurance/builds", m(lambda d: d["security"].update(reduced_assurance={"fact_key": "REDUCED-ASSURANCE", "sandbox_repository": "https://github.com/example/sandbox", "llm_key_secret": "devplat-llm-key-sandbox", "builds": "enabled"}))),
     ]

@@ -69,6 +69,7 @@ INSERT INTO states VALUES ('NEW'), ('BLOCKED'), ('READY'), ('RUNNING'), ('AWAITI
   ('AWAITING_INTEGRATION'), ('AWAITING_HUMAN'), ('COMPLETED'), ('FAILED'), ('CANCELLED');
 
 -- devorch FULL_KINDS / SHORT_KINDS / READ_ONLY_KINDS / REVIEW_GATE; subtask id suffixes (check-contract rule).
+-- plan_proposal is the one devplat kind not in devorch (planner Jobs, doc 16 §10): SHORT, read-only, suffix p.
 CREATE TABLE task_kinds (
   kind              text PRIMARY KEY,
   lifecycle         text NOT NULL REFERENCES lifecycles,
@@ -76,7 +77,7 @@ CREATE TABLE task_kinds (
   needs_g4          boolean NOT NULL,          -- devorch needs_g4(): every FULL kind (TDD DoD D6)
   is_review         boolean NOT NULL,
   operator_evidence boolean NOT NULL,          -- completion needs an authenticated operator fact
-  subtask_suffix    text CHECK (subtask_suffix IN ('r', 's', 'i'))
+  subtask_suffix    text CHECK (subtask_suffix IN ('r', 's', 'i', 'p'))
 );
 INSERT INTO task_kinds VALUES
   ('implementation',     'FULL',  false, true,  false, false, NULL),
@@ -90,6 +91,7 @@ INSERT INTO task_kinds VALUES
   ('security_review',    'SHORT', true,  false, true,  false, 's'),
   ('integration',        'SHORT', false, false, false, false, 'i'),
   ('planning',           'SHORT', true,  false, false, false, NULL),
+  ('plan_proposal',      'SHORT', true,  false, false, false, 'p'),
   ('mac_validation',     'SHORT', true,  false, false, true,  NULL),
   ('operator_action',    'SHORT', true,  false, false, true,  NULL);
 
@@ -348,6 +350,10 @@ CREATE TABLE oidc_issuers (
   enabled            boolean NOT NULL DEFAULT true
 );
 -- Allowed operator subjects (chart operatorIdentity.allowedSubjects, minItems 1). project_id NULL = all projects. R6 D2.
+-- Platform invariant (R6 D1, re-check RS-5): fact keys every project's hard_preconditions must include. Set only
+-- by the migration Job (set_mandatory_hard_preconditions); the controller cannot narrow a project's list below it.
+CREATE TABLE mandatory_hard_preconditions (fact_key text PRIMARY KEY CHECK (fact_key ~ '^[A-Za-z0-9._:-]{1,64}$'));
+
 CREATE TABLE operator_identities (
   issuer     text NOT NULL REFERENCES oidc_issuers,
   subject    text NOT NULL,
@@ -634,7 +640,8 @@ CREATE TABLE artifacts (
   sha256          text NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
   bucket          text NOT NULL,
   object_key      text NOT NULL,
-  alias_key       text CHECK (alias_key ~ '^manifests/[A-Za-z0-9._-]+/[0-9]+/[0-9]+\.json$'),
+  -- manifests/<task>/<attempt>/<role>-d<dispatch>.json per dispatch, or .../gate-G<n>.json per gate (R6 re-check RC-1)
+  alias_key       text CHECK (alias_key ~ '^manifests/[A-Za-z0-9._-]+/[0-9]+/([a-z0-9-]+-d[0-9]+|gate-G[1-7])\.json$'),
   size_bytes      bigint NOT NULL CHECK (size_bytes >= 0),
   media_type      text NOT NULL,
   kind            text NOT NULL REFERENCES artifact_kinds,
@@ -651,6 +658,7 @@ CREATE TABLE artifacts (
   CONSTRAINT artifacts_alias_check CHECK (alias_key IS NULL OR kind = 'evidence_manifest'),
   FOREIGN KEY (project_id, task_id) REFERENCES tasks
 );
+CREATE UNIQUE INDEX artifacts_alias_unique ON artifacts (project_id, alias_key) WHERE alias_key IS NOT NULL;   -- one object per alias (RC-1)
 
 -- Authenticated human statements. Append-only; a revocation is a newer fact with the same key.
 -- Written ONLY by record_operator_fact() (devplat_api) for an allowed operator identity (R6 D2).
@@ -1009,6 +1017,15 @@ BEGIN
   RETURN n;
 END $$;
 
+CREATE FUNCTION set_mandatory_hard_preconditions(p_keys text[]) RETURNS int
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = devplat, pg_catalog, pg_temp AS $$
+BEGIN
+  IF coalesce(cardinality(p_keys), 0) < 1 THEN PERFORM _refuse('at least one mandatory hard precondition is required'); END IF;
+  DELETE FROM mandatory_hard_preconditions;
+  INSERT INTO mandatory_hard_preconditions SELECT DISTINCT x FROM unnest(p_keys) x;
+  RETURN (SELECT count(*) FROM mandatory_hard_preconditions);
+END $$;
+
 -- =====================================================================================================
 -- 9. Controller API (SECURITY DEFINER; EXECUTE granted to the controller role only)
 -- =====================================================================================================
@@ -1022,6 +1039,19 @@ DECLARE v_role text; v_missing text[];
 BEGIN
   IF coalesce(cardinality(p_hard_preconditions), 0) < 1 THEN
     PERFORM _refuse('review_gates.hard_preconditions must list at least one fact key');
+  END IF;
+  -- R6 re-check RS-5: the controller supplies the list, so the platform's mandatory keys are enforced here
+  IF NOT EXISTS (SELECT 1 FROM mandatory_hard_preconditions) THEN
+    PERFORM _refuse('mandatory hard preconditions are not set (migration Job: set_mandatory_hard_preconditions)');
+  END IF;
+  v_missing := ARRAY(SELECT m.fact_key FROM mandatory_hard_preconditions m WHERE m.fact_key <> ALL (p_hard_preconditions)
+                     ORDER BY m.fact_key);
+  IF cardinality(v_missing) > 0 THEN
+    PERFORM _refuse(format('review_gates.hard_preconditions must include the platform''s mandatory keys %s', v_missing));
+  END IF;
+  IF p_linear_write_fact = ANY (p_hard_preconditions) OR p_linear_write_fact = 'REDUCED-ASSURANCE'
+     OR p_linear_write_fact IN (SELECT fact_key FROM mandatory_hard_preconditions) THEN
+    PERFORM _refuse(format('linear_write_fact %s is a hard precondition or reserved key; Linear writes need their own fact', p_linear_write_fact));
   END IF;
   INSERT INTO projects (project_id, display_name, github_repo, linear_team, config_version, registry_ref, status,
                         artifact_bucket, cost_usd_per_day, tokens_per_day, limits, linear_write_fact)
@@ -1135,7 +1165,8 @@ BEGIN
 END $$;
 
 -- Create a task (NEW) with the caller's first lease. devorch subtask id convention: reviews <parent>-rN,
--- security reviews <parent>-sN, integration <first covers_tasks entry>-iN. Projects in onboarding or active (R6 D4).
+-- security reviews <parent>-sN, integration <first covers_tasks entry>-iN, plan proposals <parent>-pN (task-bound)
+-- or PL-<nnnn> (project-level, no parent; doc 16 §10). Projects in onboarding or active (R6 D4).
 CREATE FUNCTION create_task(p_project_id text, p_task_id text, p_kind text, p_parent_task_id text,
                             p_covers_tasks text[], p_external_ref text, p_holder text, p_ttl_seconds int)
 RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path = devplat, pg_catalog, pg_temp AS $$
@@ -1166,6 +1197,18 @@ BEGIN
     END LOOP;
     IF p_task_id !~ ('^' || regexp_replace(p_covers_tasks[1], '([.\-])', '\\\1', 'g') || '-i[0-9]+$') THEN
       PERFORM _refuse(format('integration id must be %s-iN', p_covers_tasks[1]));
+    END IF;
+  ELSIF k.subtask_suffix = 'p' THEN
+    IF coalesce(cardinality(p_covers_tasks), 0) > 0 THEN PERFORM _refuse('a plan proposal has no covers_tasks'); END IF;
+    IF p_parent_task_id IS NULL THEN
+      IF p_task_id !~ '^PL-[0-9]{4,}$' THEN PERFORM _refuse('a project-level plan proposal id must be PL-<nnnn>'); END IF;
+    ELSE
+      IF NOT EXISTS (SELECT 1 FROM tasks WHERE project_id = p_project_id AND task_id = p_parent_task_id) THEN
+        PERFORM _refuse('a task-bound plan proposal needs a parent in the same project');
+      END IF;
+      IF p_task_id !~ ('^' || regexp_replace(p_parent_task_id, '([.\-])', '\\\1', 'g') || '-p[0-9]+$') THEN
+        PERFORM _refuse(format('plan proposal id must be %s-pN', p_parent_task_id));
+      END IF;
     END IF;
   ELSIF p_parent_task_id IS NOT NULL OR coalesce(cardinality(p_covers_tasks), 0) > 0 THEN
     PERFORM _refuse('only subtasks have a parent or covers_tasks');
@@ -1247,6 +1290,13 @@ BEGIN
   VALUES (p_project_id, p_task_id, p_contract_version, p_core_sha256, p_body, p_max_attempts, p_origin,
           p_origin = 'planner' OR v_first IS NOT NULL, p_holder);
   FOR d IN SELECT x FROM jsonb_array_elements(coalesce(p_body->'dependencies', '[]')) x LOOP
+    -- R6 re-check RA-3: cross-project dependencies are designed only; refuse them rather than bind to a same-id task
+    IF d ? 'project_id' AND d->>'project_id' <> p_project_id THEN
+      PERFORM _refuse(format('cross-project dependency on %s/%s is not implemented', d->>'project_id', d->>'task_id'));
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM tasks WHERE project_id = p_project_id AND task_id = d->>'task_id') THEN
+      PERFORM _refuse(format('dependency %s is not a task of project %s', d->>'task_id', p_project_id));
+    END IF;
     INSERT INTO task_dependencies VALUES (p_project_id, p_task_id, p_contract_version, d->>'task_id',
       coalesce(d->>'required_state', 'COMPLETED'), d->>'path', d->>'sha256');
   END LOOP;
@@ -1656,6 +1706,10 @@ BEGIN
   SELECT * INTO t FROM tasks WHERE project_id = p_project_id AND task_id = p_task_id FOR SHARE;
   IF NOT FOUND THEN PERFORM _refuse(format('unknown task %s/%s', p_project_id, p_task_id)); END IF;
   PERFORM _check_lease(t, p_holder, p_token);
+  -- One caller per key at a time (CI found the race): two concurrent calls with one key would otherwise both miss
+  -- the lookup below, and the second insert then fails on the admission_id unique index, which ON CONFLICT
+  -- (idempotency_key) does not arbitrate. Transaction-scoped; a hash collision only serializes two dispatches.
+  PERFORM pg_advisory_xact_lock(hashtextextended('devplat.dispatch_job:' || p_idempotency_key, 0));
   -- an existing row for this key is returned before any other check (at-least-once controller)
   SELECT * INTO j FROM job_runs jr WHERE jr.idempotency_key = p_idempotency_key;
   IF NOT FOUND THEN
@@ -1663,13 +1717,14 @@ BEGIN
     IF t.attempt IS NOT NULL AND p_attempt <> t.attempt AND NOT (t.need_bump AND p_attempt = t.attempt + 1) THEN
       PERFORM _refuse(format('attempt %s is not dispatchable (current %s)', p_attempt, t.attempt));
     END IF;
-    IF p_role <> 'verifier' THEN PERFORM _check_dispatchable(p_project_id, t.kind, 'dispatch'); END IF;
+    PERFORM _check_dispatchable(p_project_id, t.kind, 'dispatch');   -- every role, the verifier included (re-check RA-8)
     SELECT * INTO a FROM admission_decisions WHERE decision_id = p_admission_id;
     IF NOT FOUND OR a.decision <> 'admit' OR a.project_id <> p_project_id OR a.task_id <> p_task_id
        OR a.attempt <> p_attempt OR a.role <> p_role OR a.decided_at < clock_timestamp() - interval '10 minutes' THEN
       PERFORM _refuse('dispatch needs a fresh admit decision for this task, attempt and role');
     END IF;
-    IF p_target_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM execution_targets et
+    -- R6 re-check RS-9: a target is required, so the namespace is always tied to the task's project
+    IF p_target_id IS NULL OR NOT EXISTS (SELECT 1 FROM execution_targets et
          WHERE et.target_id = p_target_id AND et.project_id = p_project_id AND et.enabled
            AND p_k8s_namespace LIKE et.namespace_prefix || '-%') THEN
       PERFORM _refuse('namespace is not in an enabled execution target of the task''s project');
@@ -1771,6 +1826,10 @@ BEGIN
   IF NOT FOUND THEN PERFORM _refuse(format('unknown artifact kind %s', p_kind)); END IF;
   IF p_size_bytes > ak.max_bytes THEN PERFORM _refuse(format('%s artifact over %s bytes', p_kind, ak.max_bytes)); END IF;
   v_until := now() + make_interval(days => CASE p_retention_class WHEN 'ephemeral' THEN 7 ELSE ak.default_retention_days END);
+  IF p_alias_key IS NOT NULL AND EXISTS (SELECT 1 FROM artifacts x WHERE x.project_id = p_project_id AND x.alias_key = p_alias_key
+                                                                    AND x.sha256 <> p_sha256) THEN
+    PERFORM _refuse(format('manifest alias %s is already bound to another object', p_alias_key));
+  END IF;
   INSERT INTO artifacts (project_id, sha256, bucket, object_key, alias_key, size_bytes, media_type, kind, task_id, job_id, gate,
                          retention_class, retain_until)
   VALUES (p_project_id, p_sha256, 'devplat-' || p_project_id, 'sha256/' || p_sha256, p_alias_key, p_size_bytes, p_media_type,
@@ -2084,6 +2143,11 @@ BEGIN
     EXECUTE format('ALTER TABLE devplat.%I ENABLE ROW LEVEL SECURITY', r);
     EXECUTE format('CREATE POLICY %I ON devplat.%I FOR SELECT USING (project_id IS NULL OR devplat.can_see(project_id))', r || '_visible', r);
   END LOOP;
+  -- run_uploads has no project_id: an upload is visible exactly when its Job is (job_runs is RLS-filtered for the
+  -- invoker). It was granted to the readonly role without any policy (Codex review on PR #3).
+  ALTER TABLE devplat.run_uploads ENABLE ROW LEVEL SECURITY;
+  CREATE POLICY run_uploads_visible ON devplat.run_uploads FOR SELECT
+    USING (EXISTS (SELECT 1 FROM devplat.job_runs j WHERE j.job_id = run_uploads.job_id));
 END $$;
 
 REVOKE ALL ON ALL TABLES IN SCHEMA devplat FROM PUBLIC;
@@ -2104,7 +2168,8 @@ GRANT EXECUTE ON FUNCTION can_see(text), verify_chain(text, text), chain_digest(
   TO :"role_controller", :"role_api", :"role_readonly";
 
 -- migrator (deploy time): role catalogue and operator identities
-GRANT EXECUTE ON FUNCTION load_role_catalogue(text, text, jsonb), set_operator_identities(text, text, jsonb) TO :"role_migrator";
+GRANT EXECUTE ON FUNCTION load_role_catalogue(text, text, jsonb), set_operator_identities(text, text, jsonb),
+  set_mandatory_hard_preconditions(text[]) TO :"role_migrator";
 
 -- controller: functions only
 GRANT EXECUTE ON FUNCTION

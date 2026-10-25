@@ -560,14 +560,11 @@
             ],
             "properties": {
               "name": {
-                "enum": [
-                  "anthropic",
-                  "openai"
-                ]
+                "const": "anthropic",
+                "description": "R6 re-check RS-8: the endpoint and content allowlists are Anthropic Messages API shapes; another provider needs its own allowlist first."
               },
               "host": {
-                "type": "string",
-                "pattern": "^[a-z0-9.-]+\\.[a-z]{2,}$"
+                "const": "api.anthropic.com"
               }
             }
           }
@@ -582,7 +579,12 @@
             "rejectContainer",
             "rejectFilesAndBatches",
             "allowedBetaHeaders",
-            "projectFrom"
+            "projectFrom",
+            "allowedToolTypes",
+            "allowedContentSourceTypes",
+            "rejectFileReferences",
+            "allowedContentBlockTypes",
+            "allowedRequestFields"
           ],
           "properties": {
             "allowedEndpoints": {
@@ -619,6 +621,53 @@
             },
             "projectFrom": {
               "const": "token"
+            },
+            "allowedToolTypes": {
+              "const": [
+                "custom"
+              ],
+              "description": "R6 re-check RS-1: allowlist, not a denylist. A tool passes only without `type` or with `type: custom`; every other type (web_search, web_fetch, code_execution, computer use, text editor, bash, memory, any type added later) is refused."
+            },
+            "allowedContentSourceTypes": {
+              "const": [
+                "base64",
+                "text"
+              ],
+              "description": "R6 re-check RS-1: image and document content blocks (in messages and tool results) may only carry `source.type` base64 or text. `url` would make the provider fetch an agent-chosen URL (exfiltration through the query string, instruction intake from the fetched content); `file` refers to the Files API."
+            },
+            "rejectFileReferences": {
+              "const": true,
+              "description": "R6 re-check RS-1: any `file_id` anywhere in the request is refused."
+            },
+            "allowedContentBlockTypes": {
+              "const": [
+                "text",
+                "image",
+                "document",
+                "tool_use",
+                "tool_result",
+                "thinking",
+                "redacted_thinking"
+              ],
+              "description": "R6 confirmation C-1: content blocks of these types only, at any depth (messages, system, tool_result content); any other type, present or future, is refused with 403."
+            },
+            "allowedRequestFields": {
+              "const": [
+                "model",
+                "messages",
+                "system",
+                "max_tokens",
+                "tools",
+                "tool_choice",
+                "temperature",
+                "top_p",
+                "top_k",
+                "stop_sequences",
+                "stream",
+                "metadata",
+                "thinking"
+              ],
+              "description": "R6 confirmation C-1: top-level request fields allowlist; any other field (mcp_servers, container, a future provider feature) is refused with 403."
             }
           }
         },

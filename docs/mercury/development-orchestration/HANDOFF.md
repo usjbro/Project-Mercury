@@ -10,13 +10,14 @@ For the operator and for the next Claude Code session. Facts are separated from 
 |---|---|---|---|
 | `claude/mercury-tdd` | `main` (1 commit) | Mercury TDD v1.0-rc1 (32 sections), ADR-001…020, owner documents, reviews | Design only. **Not approved** (DOD-01) |
 | `claude/dev-orchestration` | `claude/mercury-tdd` | v1 development orchestration ("local mode"): docs 00–13, devorch v2 tool + 30 tests, 13 agent definitions, settings deny rules, guard hook, reviews R1–R5 | Proposed. Tested in scratch repositories |
-| `claude/devplatform-k8s` | `claude/dev-orchestration` | **Amendment 001: devplat**, a Kubernetes-native, multi-project platform. Docs 14–29, ADR-022…030, `platform/` (schemas, project configs, base manifests, Helm charts, PostgreSQL schema, Job generator, validators), review R6 and fix round | Proposed. Offline-validated (§3). **Never run on a cluster** |
+| `claude/devplatform-k8s` | `claude/dev-orchestration` | **Amendment 001: devplat**, a Kubernetes-native, multi-project platform. Docs 14–29, ADR-022…030, `platform/` (schemas, project configs, base manifests, Helm charts, PostgreSQL schema, Job generator, validators), review R6 and fix round | Proposed. **Never run on a cluster** |
+| `claude/nice-edison-q1ai3u` | `claude/devplatform-k8s` | 2026-10-23: cross-group alignment, R6 dispositions, independent re-check and its fixes (§5) | Proposed. Offline-validated (§3, §8). **Never run on a cluster** |
 
 **Start here:**
 - Package index: `docs/mercury/development-orchestration/README.md`.
 - Amendment texts: `amendments/`.
-- Decisions awaiting you: `12-amendments.md` (DOD-01…25).
-- Review record: `reviews/R6-amendment-001.md`.
+- Decisions awaiting you: **`OPERATOR-BRIEF.md`** (sequenced short list); full records in `12-amendments.md` (DOD-01…25).
+- Review record: `reviews/R6-amendment-001.md`, `reviews/R6-dispositions.md`, `reviews/R6-recheck.md`.
 
 ## 2. What the design says (in one paragraph each)
 
@@ -26,8 +27,8 @@ For the operator and for the next Claude Code session. Facts are separated from 
 - **Controller** (deterministic): the task state machine ported from devorch, scheduling and admission, Job creation and reconciliation.
 - **PostgreSQL:** the only writer is the controller, through SECURITY DEFINER functions.
 - **gitbroker:** the only holder of the dev-bot App key. It validates agent output and pushes `dev/*` branches and **draft** PRs.
-- **model gateway:** the only holder of the LLM key, with an endpoint allowlist that rejects server tools.
-- **artifact gateway:** the only path for uploads from pods.
+- **model gateway:** the only holder of the LLM key, with endpoint, tool-type and content-source allowlists (no server tools, no URL or file sources).
+- **artifact gateway:** the only path for uploads from pods; each upload is authorized in PostgreSQL.
 - **namespacer, devplat-dns, per-project read-only registry proxies.**
 
 Every specialist run is a short-lived Job with:
@@ -38,33 +39,17 @@ Gates G1–G7 work as in v1, and G7 is your observed merge. Tests that need macO
 
 **Jupiter.** No repository, Linear project, Notion page or document was found. `platform/projects/jupiter.onboarding.yaml` is `draft` with every value unresolved and 24 questions for you. Nothing was invented.
 
-## 3. Verified state (offline, in the authoring container)
+## 3. Verified state (offline)
 
-The latest full run is summarized in §3.1. The single command is:
+The single command, run in this container on 2026-10-23 at the head of `claude/nice-edison-q1ai3u`:
 
 ```
 GO=/usr/local/go1.24.7/bin/go HELM=… KUBECONFORM=… platform/tools/validate_all.sh --strict
 ```
 
-Helm v3.17.3 and kubeconform v0.6.7 were built from source into the scratchpad. They were not installed on any host.
+Helm v3.17.3 and kubeconform v0.6.7 were built from source into the session scratchpad (`go install`); nothing was installed on a host. Results are in §8.
 
-Last results reported by the fix groups (2026-10-22):
-
-| Check | Result |
-|---|---|
-| devorch v1 regression | 30/30 |
-| Job generator (`platform/controller/test_jobspec.py`) | 13/13. Output equals the doc 16 example via a vendored fixture |
-| Project configs + validator self-test | 2/2 valid; 46/46 mutations rejected |
-| Base manifests, strict Kubernetes 1.33 | 140/140 |
-| Admission policies | 128 CEL expressions compile; 115 cases / 133 decisions, 0 mismatches. Includes 10 exploit regressions from the security review, all denied |
-| PostgreSQL state (`platform/db/test_schema.py`, real PostgreSQL 16.15, applied by the migrator login) | 47/47, stable over 6 runs; 17/17 rule mutations caught |
-| Charts (`platform/tools/charts/run.sh`) | 51 passed, 0 skipped. Includes 30 negative renders and chart/base parity |
-
-**What these checks do not show:** runtime behaviour on a cluster (NetworkPolicy enforcement, gVisor, admission with typed objects, the Job lifecycle, recovery), GitHub behaviour (ruleset, App permissions), real images (none exist), or the Claude Code headless flags (V-16-1).
-
-### 3.1 Latest full run
-
-`validate_all.sh --strict` at commit `b26ff34` on 2026-10-23 passed every check, with nothing skipped (§8).
+**What these checks do not show:** runtime behaviour on a cluster (NetworkPolicy enforcement, gVisor, admission with typed objects, the Job lifecycle, recovery), GitHub behaviour (ruleset, App permissions), real images (none exist), the gateways, gitbroker, namespacer and controller (none are built), or the Claude Code headless flags (V-16-1).
 
 ## 4. Review status
 
@@ -72,25 +57,23 @@ Last results reported by the fix groups (2026-10-22):
 |---|---|
 | R1–R4 (v1) | Critical/High dispositions in `reviews/R0-dispositions.md` |
 | R5 (v1 re-check) | Guard hook **did not fire** in live subagent dispatch (DOD-10). Dispositions in `R5-recheck.md` |
-| R6 (Amendment 001) | Architecture: accept_with_conditions for the direction, rejected as an implementation baseline until fixes land. Security: changes_required (3 High: model-gateway server tools, S3 egress, agent code in CI). Fix decisions D1–D26 applied by four groups (database, security/base, core docs and schemas, charts/build) |
+| R6 (Amendment 001) | Findings and decisions D1–D26: `reviews/R6-amendment-001.md`. Per-finding fix, location, check and status: `reviews/R6-dispositions.md` |
+| R6 re-check (2026-10-23) | Independent, read-only, fresh-context reviews with the `mdev-lead-architect` and `mdev-security-engineer` briefs against `ea13dd5`: both **changes_required**: 2 new High (RA-1 Job name/key collision between roles; RS-1 model-gateway URL content sources) and 11 Medium. **All fixed** (RS-9 after the confirmation pass). Confirmation pass on `c249c51`: both **accept_with_conditions**; the conditions (RC-1 manifest alias without role, C-1 block-type and field allowlists) are fixed. Record: `reviews/R6-recheck.md` |
 
-**R6 is not yet closed.** Remaining work:
-1. Write `reviews/R6-dispositions.md`: per finding A-01…A-30 and S-1…S-24, its fix, location and test.
-2. An **independent re-check** of the High findings against the current head. This is required before calling the package ready for operator review.
+## 5. Done on 2026-10-23, and open items
 
-## 5. Open items for the next session (in order)
+**Done** (branch `claude/nice-edison-q1ai3u`, stacked on `claude/devplatform-k8s`):
+1. The six cross-group mismatches: `plan_proposal` is a DB kind (SHORT, read-only, ids `<task>-pN` / `PL-<nnnn>`); `issue_tracker.write_fact` (config schema minor 2); contract v2 `path`/`sha256` for `INTERFACE_FROZEN`; per-Job tokens registered by `set_job_tokens()` and authorized in PostgreSQL (docs 16, 18, charts, base); the 10-minute admission rule (docs 16, 17, DB test); the onboarding rule (the stale text was in ADR-029, not doc 26).
+2. `mercury.yaml` config_version 3: no in-cluster build environment; images are built in devplat CI (doc 22 O-5).
+3. A-05 direction (subject to your review): project-neutral role bodies plus a project section generated from the project config. The generator part is implemented and tested; the 13 neutral bodies are not written (R-1).
+4. `reviews/R6-dispositions.md`; decisions that had never reached the files were applied (A-15 checkpoint anchoring; D13 CI hardening in the DOD-02 row; contract v2 `frozen_by`).
+5. Independent re-check run, its findings fixed, confirmation pass run and its two conditions fixed (`reviews/R6-recheck.md`); strict validation green.
+6. Operator decision brief: `OPERATOR-BRIEF.md`.
+7. CI: `.github/workflows/devplat-ci.yml` runs workflow lint and `validate_all.sh --strict` on PRs that touch the platform (`23-…` §5.4). Its first GitHub run found a real race in `dispatch_job()`, now fixed. An independent review found 3 Medium gaps that let `--strict` pass with skips, all fixed.
 
-1. **Cross-group mismatches** reported by the database group, not yet applied:
-   - Doc 26 still lets `onboarding` projects run `design` Jobs. D4 and the DB allow only short-lifecycle read-only kinds.
-   - The project-config schema needs `issue_tracker.write_fact` (the per-project Linear write fact, replacing hard-coded DOD-05).
-   - The task-contract v2 dependency items need optional `path`/`sha256` for `INTERFACE_FROZEN`.
-   - Doc 18 §8.2: upload tokens are registered by the controller (`set_job_tokens()`) and authorized in PostgreSQL. Port 9444 is an admin channel only.
-   - Docs 16/17 must say that `dispatch_job()` requires an admission decision of at most 10 minutes.
-   - The DB has no task kind `plan_proposal`, so planner Jobs can't be dispatched yet. Add it as a SHORT kind.
-2. `platform/projects/mercury.yaml` still plans in-cluster toolchain builds. Builds are off by default (D20), so builds move to platform CI (doc 22 O-5).
-3. A-05 is only partly closed: the 12 role definitions still contain Mercury scopes and paths. The runtime preamble overrides only the v1 mechanics. Decide between per-project role overlays and a neutral rewrite.
-4. Write R6 dispositions, run the independent re-check (`mdev-security-engineer` and `mdev-lead-architect`, read-only), fix any new Critical or High findings, and re-run `validate_all.sh --strict`.
-5. Then prepare the operator decision brief: the short list in §6. Optionally open a **draft** PR per branch for review, **only if the operator authorizes PRs** (the original brief forbade opening PRs without authorization).
+**Open, in order:**
+1. Open residuals in `R6-dispositions.md` §4 (R-1 neutral role bodies after DOD-12; R-2 every runtime check; R-5 your decisions; R-7 a cluster-scoped baseline deny for project namespaces at DP4).
+2. PRs: the original brief forbade opening PRs without your authorization. None has been opened.
 
 ## 6. Decisions only the operator can make
 
@@ -116,20 +99,23 @@ The full list is in `12-amendments.md`. The ones that unblock the most:
 
 ## 8. Final validation log
 
-`GO=… HELM=… KUBECONFORM=… platform/tools/validate_all.sh --strict` at commit `b26ff34` on 2026-10-23: **ALL CHECKS PASSED (nothing skipped), exit 0.**
+`GO=… HELM=… KUBECONFORM=… platform/tools/validate_all.sh --strict` on 2026-10-23 at the head of `claude/nice-edison-q1ai3u`: **ALL CHECKS PASSED (nothing skipped), exit 0.**
 
 | Check | Result |
 |---|---|
 | devorch v1 regression | 30 tests OK |
 | devorch examples drift | OK |
-| Job generator | 13 tests OK |
-| Project configs, plus validator self-test | pass |
+| Job generator (`test_jobspec.py`) | 14 tests OK; output equals the doc 16 example via the vendored fixture |
+| Project configs, plus validator self-test | 2/2 valid; self-test 50/50 |
 | Execution profiles schema; task contract v2 example | pass |
+| Task contract v2 rules (`platform/schemas/test_schemas.py`) | 7 tests OK |
 | Generated base manifests up to date | pass |
-| Base manifests, strict Kubernetes 1.33 | pass |
-| Role ConfigMap output | pass |
-| PostgreSQL state schema (real PostgreSQL 16) | 47 tests OK |
-| Admission policies (CEL compile and behavioural cases) | 0 mismatches |
-| Charts | 51 passed, 0 failed, 0 skipped |
+| Base manifests, strict Kubernetes 1.33 | 140 valid |
+| Role ConfigMap generator tests; output | 12 tests OK; output valid |
+| PostgreSQL state schema (real PostgreSQL 16) | 54 tests OK |
+| Admission policies (CEL compile and behavioural cases) | 131 expressions compiled; 125 cases / 143 decisions; 0 mismatches |
+| Charts | 58 passed, 0 failed, 0 skipped |
+
+Mutation checks run this round (each weakened rule made at least one test fail): DB 8 (plan_proposal id branch, kind writable, `PL-` pattern, admission TTL, mandatory hard preconditions, write-fact separation, role-less jobspec formulas, NULL execution target); generator 4; charts 1 (`db-paths`).
 
 All results are offline. No cluster or GitHub behaviour is covered (§3).

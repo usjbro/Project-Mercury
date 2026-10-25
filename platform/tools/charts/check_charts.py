@@ -31,8 +31,16 @@ CH = os.path.join(ROOT, "platform", "deploy", "charts")
 BASE = os.path.join(ROOT, "platform", "deploy", "base")
 V = lambda f: os.path.join(HERE, "values", f)
 HELM, KC, GO = os.environ.get("HELM", "helm"), os.environ.get("KUBECONFORM", "kubeconform"), os.environ.get("GO")
-KCARGS = ["-strict", "-summary", "-kubernetes-version", "1.33.0", "-schema-location", "default", "-schema-location",
-          "https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"]
+sys.path.insert(0, os.path.join(ROOT, "platform", "tools"))
+from validate_k8s import SCHEMA_COMMIT  # noqa: E402  (one pin for both validators)
+# Schema sources pinned by commit (R6 CI review CI-2): the yannh commit is the one in platform/tools/validate_k8s.py
+# (kubeconform's "default" location with master replaced); datreeio/CRDs-catalog for the CloudNativePG Cluster CRD.
+KCARGS = ["-strict", "-summary", "-kubernetes-version", "1.33.0", "-schema-location",
+          f"https://raw.githubusercontent.com/yannh/kubernetes-json-schema/{SCHEMA_COMMIT}/"
+          "{{.NormalizedKubernetesVersion}}-standalone{{.StrictSuffix}}/{{.ResourceKind}}{{.KindSuffix}}.json",
+          "-schema-location",
+          "https://raw.githubusercontent.com/datreeio/CRDs-catalog/501527ab9c40c827144c8f45945b25a023e344ce/"
+          "{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"]
 DP = ["template", "t", os.path.join(CH, "devplat"), "-n", "devplat-system", "--kube-version", "1.33.0"]
 PJ = ["template", "m", os.path.join(CH, "devplat-project"), "--kube-version", "1.33.0"]
 RESULTS = []
@@ -106,6 +114,12 @@ NEG = [
     ("external PG without host", DP + ["-f", V("devplat-test.yaml"), "--set", "postgres.mode=external"], "schema"),
     ("model-gateway extra endpoint (D12)", DP + ["-f", V("devplat-test.yaml"), "--set", "modelGateway.policy.allowedEndpoints[2]=POST /v1/files"], "schema"),
     ("model-gateway server tools allowed (D12)", DP + ["-f", V("devplat-test.yaml"), "--set", "modelGateway.policy.rejectServerTools=false"], "schema"),
+    ("model-gateway URL content source (RS-1)", DP + ["-f", V("devplat-test.yaml"), "--set", "modelGateway.policy.allowedContentSourceTypes[2]=url"], "schema"),
+    ("model-gateway server tool type allowed (RS-1)", DP + ["-f", V("devplat-test.yaml"), "--set", "modelGateway.policy.allowedToolTypes[1]=web_fetch_20250910"], "schema"),
+    ("model-gateway file references allowed (RS-1)", DP + ["-f", V("devplat-test.yaml"), "--set", "modelGateway.policy.rejectFileReferences=false"], "schema"),
+    ("model-gateway extra content block type (C-1)", DP + ["-f", V("devplat-test.yaml"), "--set", "modelGateway.policy.allowedContentBlockTypes[7]=container_upload"], "schema"),
+    ("model-gateway extra request field (C-1)", DP + ["-f", V("devplat-test.yaml"), "--set", "modelGateway.policy.allowedRequestFields[13]=mcp_servers"], "schema"),
+    ("model-gateway second provider (RS-8)", DP + ["-f", V("devplat-test.yaml"), "--set", "modelGateway.providers[1].name=openai", "--set", "modelGateway.providers[1].host=api.openai.com"], "schema"),
     ("model-gateway project from path (D12)", DP + ["-f", V("devplat-test.yaml"), "--set", "modelGateway.policy.projectFrom=path"], "schema"),
     ("gitbroker caller auth other than projected token (S-23)", DP + ["-f", V("devplat-test.yaml"), "--set", "gitbroker.callerAuth.mode=none"], "schema"),
     ("test-namespace quota over the base caps (D19)", PJ + ["--set-string", "test.quota.secrets=100"], "schema"),
@@ -246,6 +260,39 @@ def check_pinning(rendered):
     result("secret-pinning: rendered platform pods vs base devplat-secret-pinning", not bad, f"{n} references, {len(bad)} problems")
 
 
+# ---------------------------------------------------------------- 6b DB paths (R6 re-check RS-4)
+DB_COMPONENTS = {"controller": "devplat_controller", "api": "devplat_api", "model-gateway": "devplat_model_gateway",
+                 "artifact-gateway": "devplat_artifact_gateway"}   # every runtime group of platform/db/roles.sql
+
+
+def check_db_paths(rendered):
+    """Each component the DB authorizes must be able to reach it: credentials, CNPG login, NetworkPolicy both ways."""
+    rd = list(docs(rendered["devplat test values"]))
+    cluster = next(d for d in rd if d["kind"] == "Cluster")
+    logins = {r["name"]: r.get("passwordSecret", {}).get("name") for r in cluster["spec"]["managed"]["roles"] if r.get("login")}
+    base_np = {d["metadata"]["name"]: d for d in docs(open(os.path.join(BASE, "networkpolicies.yaml")).read())
+               if d["metadata"]["namespace"] == "devplat-system"}
+    pg_in = [pe.get("podSelector", {}).get("matchLabels", {}).get("app.kubernetes.io/name")
+             for r in base_np["postgres"]["spec"]["ingress"] for pe in r["from"]]
+    bad = []
+    for comp, role in DB_COMPONENTS.items():
+        name, secret = f"devplat-{comp}", f"devplat-db-{comp}"
+        wl = next((d for d in rd if d["kind"] == "Deployment" and d["metadata"]["name"] == name), None)
+        env = [e for c in (wl or {}).get("spec", {}).get("template", {}).get("spec", {}).get("containers", []) for e in c.get("env", [])]
+        if not any(e.get("valueFrom", {}).get("secretKeyRef", {}).get("name") == secret for e in env):
+            bad.append(f"{name}: no DB credentials from {secret}")
+        if logins.get(role) != secret:
+            bad.append(f"CNPG managed role {role}: login with passwordSecret {secret} missing")
+        if name not in pg_in:
+            bad.append(f"base NetworkPolicy postgres: no ingress from {name}")
+        own = base_np.get(comp, {}).get("spec", {}).get("egress", [])
+        if not any(5432 in [p_["port"] for p_ in r.get("ports", [])] and any("cnpg.io/cluster" in str(t) for t in r.get("to", [])) for r in own):
+            bad.append(f"base NetworkPolicy {comp}: no egress to PostgreSQL 5432")
+    for x in bad: print("      " + x)
+    result("db-paths: every DB-authorized component has credentials, a CNPG login and network paths", not bad,
+           f"{len(DB_COMPONENTS)} components, {len(bad)} problems")
+
+
 # ---------------------------------------------------------------- 7 CEL
 def celcheck_bin(out):
     if not GO:
@@ -344,7 +391,7 @@ def main():
     check_lint(); r = check_render(out); check_negative(); check_schema()
     if "devplat-project mercury parity values" in r: parity(r, "project")
     if "devplat test values" in r: parity(r, "platform")
-    if "devplat test values" in r: check_pinning(r); check_cel(r, out)
+    if "devplat test values" in r: check_pinning(r); check_db_paths(r); check_cel(r, out)
     fails = [n for n, ok in RESULTS if ok is False]
     print(f"\n{sum(1 for _, ok in RESULTS if ok)} passed, {len(fails)} failed, {sum(1 for _, ok in RESULTS if ok is None)} skipped; outputs in {out}")
     sys.exit(1 if fails else 0)

@@ -11,7 +11,7 @@ namespacer (:8083, fixed template), model-gateway (:8080 / admin :9443, endpoint
 
 Secrets (fixed names, doc 18 section 8.1; created by the operator, never by this chart):
   devplat-gitbroker-github-app, devplat-model-gateway-llm-keys,
-  devplat-db-migrator, devplat-db-controller, devplat-db-api, devplat-db-model-gateway,
+  devplat-db-migrator, devplat-db-controller, devplat-db-api, devplat-db-model-gateway, devplat-db-artifact-gateway,
   devplat-artifacts-controller, -gitbroker, -gitbroker-fetch, -api, -artifact-gateway,
   devplat-oidc-client, devplat-linear-token (optional).
 

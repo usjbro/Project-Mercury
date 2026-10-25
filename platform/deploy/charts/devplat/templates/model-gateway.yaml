@@ -1,11 +1,15 @@
 {{- /*
 devplat-model-gateway: the only path from agent pods to LLM APIs (:8080, only for pods with network-class
-model-only or deps, base NetworkPolicy). Per-Job tokens are minted on the admin port :9443 by the controller; the
-project is bound to the token, never taken from the URL path (D12).
-Request policy (D12, ConfigMap devplat-model-gateway-policy): only the allowlisted endpoints; requests carrying
-server-side tools (web_search, web_fetch, code_execution, computer use, any tool whose `type` is server-side),
-`mcp_servers` or `container`, Files/Batches APIs, or a non-allowlisted `anthropic-beta` header are rejected with
-403 before anything is forwarded. Per-token budgets.
+model-only or deps, base NetworkPolicy). Per-Job tokens are minted by the controller and registered as SHA-256
+hashes (set_job_tokens()); each request is authorized in PostgreSQL (reserve_budget()), and :9443 is an admin
+channel only. The project is bound to the token, never taken from the URL path (D12).
+Request policy (D12, R6 re-check RS-1; ConfigMap devplat-model-gateway-policy): only the allowlisted endpoints;
+a tool passes only without `type` or with `type: custom` (an allowlist: any server-side tool type, present or
+future, is refused); image and document blocks only with `source.type` base64 or text (no `url`, which would make
+the provider fetch an agent-chosen URL; no `file`); content blocks only of the allowlisted types and top-level
+request fields only from the allowlist (C-1); no `file_id` anywhere; no `mcp_servers` or `container`; no
+Files/Batches APIs; no non-allowlisted `anthropic-beta` header. Violations are rejected with 403 before anything
+is forwarded. Per-token budgets.
 Provider keys: Secret devplat-model-gateway-llm-keys (key "<provider>-api-key"; "<provider>-api-key-reduced" is the
 separate spend-limited key used for reduced-assurance projects, D16). Budget tables: Secret devplat-db-model-gateway.
 */}}

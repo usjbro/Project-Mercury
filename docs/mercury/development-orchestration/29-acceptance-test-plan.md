@@ -58,7 +58,7 @@ Levels:
 | `tools/devorch/test_devorch.py` | v1 regression, the specification for AT-07 | 30/30 |
 | `tools/devorch/gen_examples.py --check` | v1 examples unchanged | OK |
 | `platform/controller/test_jobspec.py` | AT-09, AT-04 naming. Output **equals** the doc 16 §4.1 example; strict v1.33 valid for all 13 profiles; negative strictness; hardening; digest pinning; per-dispatch names | 11/11 |
-| `platform/tools/validate_projects.py` (+ `--self-test`) | AT-25 at schema level. Mercury valid (`onboarding`, 0 unresolved security-core fields); Jupiter valid (`draft`, 53 unresolved); 24/24 mutation cases rejected | pass |
+| `platform/tools/validate_projects.py` (+ `--self-test`) | AT-25 at schema level. Mercury valid (`onboarding`, 0 unresolved security-core fields); Jupiter valid (`draft`, 53 unresolved); the self-test (50/50 checks, 2026-10-23) rejected | pass |
 | Execution profiles and task contract v2 schemas | 13 profiles; converted v1 example | valid |
 | `platform/tools/validate_k8s.py platform/deploy/base` | AT-02 | 121/121 strict-valid |
 | `platform/tools/admission/run.sh` | AT-16 offline. 93 CEL expressions compile in the Kubernetes v0.33 CEL environment; 61 admission cases match expectations, including doc 16's example Job and pod | 0 mismatches |

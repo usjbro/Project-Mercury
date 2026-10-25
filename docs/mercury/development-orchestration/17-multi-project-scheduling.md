@@ -50,6 +50,7 @@ Rules:
 2. **No preemption of agent Jobs.** A running LLM Job is never evicted to make room (lost work costs money). Agent pods use PriorityClass `devplat-agent` with `preemptionPolicy: Never`; platform pods use `devplat-platform` (higher), so agents can never evict the platform.
 3. **Holds are visible.** Each held task shows its first failing check and since when, in the API and dashboard.
 4. **Admission is idempotent.** Reservations and `assigned` are written in one transaction; a crash before Job creation leaves a `job_runs` row without a Job, which reconciliation repairs (`21-…` §3, normative).
+5. **Admission decisions expire.** `dispatch_job()` (`19-…`) refuses unless it names an unconsumed `admit` decision for the same project, task, attempt and role that is **at most 10 minutes old**. A task whose Job was not created within 10 minutes of admission (image pull, target outage, controller restart) goes through a fresh admission round before dispatch, so a decision never authorizes a Job under a budget, capacity or ownership state it did not see. Every role, the `verifier` included, passes the project-status and precondition checks (§2 checks 1–2) both at admission and at dispatch (R6 re-check RA-8).
 
 ## 3. Concurrency limits
 
@@ -76,7 +77,7 @@ Lexicographic key, highest first:
 | k4 | High-risk validation flag (security/recovery spikes, feasibility) from project config | v1 priority 3 |
 | k5 | Age in READY (aging) | Prevents starvation inside a project |
 
-The critical path is computed per project from its DAG (Mercury: `data/dag.json` via `devorch.py dag`). Cross-project critical paths are not merged; a declared cross-project dependency raises the upstream task's k3 by the downstream project's dependent count.
+The critical path is computed per project from its DAG (Mercury: `data/dag.json` via `devorch.py dag`). Cross-project critical paths are not merged; a declared cross-project dependency (designed, not implemented; R6 re-check RA-3) would raise the upstream task's k3 by the downstream project's dependent count.
 
 ## 5. Weighted fair share across projects
 

@@ -44,7 +44,7 @@ DEVPLAT_DNS = [{"to": [sys_peer("devplat-dns")], "ports": [{"protocol": "UDP", "
 
 default_deny(S); kube_dns(S); metrics(S)
 PROJECTS = ["mercury", "jupiter"]
-DB_CLIENTS = ["devplat-controller", "devplat-api", "devplat-model-gateway", "devplat-migrator"]
+DB_CLIENTS = ["devplat-controller", "devplat-api", "devplat-model-gateway", "devplat-artifact-gateway", "devplat-migrator"]
 np("controller", S, app("devplat-controller"), ["Egress"], egress=[
     {"to": [{"podSelector": PG}], "ports": tcp(5432)},
     {"to": [{"podSelector": app("devplat-gitbroker")}], "ports": tcp(8080)},
@@ -53,7 +53,7 @@ np("controller", S, app("devplat-controller"), ["Egress"], egress=[
     {"to": [{"podSelector": app("devplat-artifact-gateway")}], "ports": tcp(9444)},
     *ART,
     {"to": APISERVER, "ports": tcp(443, 6443)}],
-    comment="Controller: DB, gitbroker internal API, model-gateway admin (budgets, Job tokens), namespacer API, artifact-gateway admin (Job upload tokens), object store, kube-apiserver. No internet.")
+    comment="Controller: DB, gitbroker internal API, model-gateway admin, namespacer API, artifact-gateway admin (admin channels; per-Job tokens are registered and authorized in PostgreSQL), object store, kube-apiserver. No internet.")
 np("migrator", S, app("devplat-migrator"), ["Egress"], egress=[{"to": [{"podSelector": PG}], "ports": tcp(5432)}],
    comment="D9 migration hook Job: PostgreSQL only.")
 np("external-postgres", S, {"matchExpressions": [{"key": "app.kubernetes.io/name", "operator": "In", "values": DB_CLIENTS}]}, ["Egress"],
@@ -82,8 +82,8 @@ np("gitbroker-fetch", S, app("devplat-gitbroker-fetch"), ["Ingress", "Egress"],
 np("artifact-gateway", S, app("devplat-artifact-gateway"), ["Ingress", "Egress"],
    ingress=[{"from": [{"namespaceSelector": role_ns("exec", "build", "test")}], "ports": tcp(8082)},
             {"from": [{"podSelector": app("devplat-controller")}], "ports": tcp(9444)}],
-   egress=[*ART],
-   comment="D10 artifact gateway: the ONLY artifact path of agent/build/test pods (per-Job one-time token, size caps per D11); writes runs/<job-uid>/ with its own S3 credential. Controller mints/revokes tokens on 9444.")
+   egress=[*ART, {"to": [{"podSelector": PG}], "ports": tcp(5432)}],
+   comment="D10 artifact gateway: the ONLY artifact path of agent/build/test pods (per-Job one-time token, size caps per D11); writes runs/<job-uid>/ with its own S3 credential. Tokens are minted by the controller and authorized in PostgreSQL; 9444 is admin only.")
 np("model-gateway", S, app("devplat-model-gateway"), ["Ingress", "Egress"],
    ingress=[{"from": [{"namespaceSelector": role_ns("exec"), "podSelector": {"matchExpressions": wl("agent", "planner", "verifier")["matchExpressions"] + nc("model-only", "deps")["matchExpressions"]}}],
              "ports": tcp(8080)},
@@ -108,7 +108,7 @@ np("postgres", S, PG, ["Ingress", "Egress"],
    egress=[{"to": [{"podSelector": PG}], "ports": tcp(5432, 8000)},
            *ART,
            {"to": APISERVER, "ports": tcp(443, 6443)}],
-   comment="PostgreSQL (CloudNativePG Cluster devplat-pg): controller, api, model-gateway (budget role) and migrator; replication; operator status port; backups to the object store; instance manager to kube-apiserver.")
+   comment="PostgreSQL (CloudNativePG Cluster devplat-pg): controller, api, model-gateway (budget role), artifact-gateway (upload authorization) and migrator; replication; operator status port; backups to the object store; instance manager to kube-apiserver.")
 
 A = "devplat-artifacts"
 default_deny(A); kube_dns(A); metrics(A)

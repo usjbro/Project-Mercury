@@ -5,7 +5,7 @@ leader (Lease devplat-controller); the standby does no writes. Test namespaces a
 devplat-namespacer Deployment (D19). The controller NEVER runs schema migrations (D9): its DB role has no DDL
 rights, and it refuses to start while the schema version differs from the one it was built for.
 Calls to gitbroker carry a projected, audience-bound ServiceAccount token (audience gitbroker.callerAuth.audience),
-which gitbroker verifies (S-23); network position alone is not authentication. Per-run objects: Job dp-<project>-<task>-a<attempt>-d<dispatch>,
+which gitbroker verifies (S-23); network position alone is not authentication. Per-run objects: Job dp-<project>-<task>-a<attempt>-<role>-d<dispatch>,
 ConfigMap <job>-contract, Secret <job>-io (doc 16, doc 18 section 8.2).
 */}}
 {{- $ns := .Release.Namespace -}}

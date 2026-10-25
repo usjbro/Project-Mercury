@@ -44,7 +44,7 @@
     "schema_minor": {
       "type": "integer",
       "minimum": 0,
-      "description": "Additive changes (new optional fields) bump the minor. Readers ignore nothing: unknown fields are rejected, so a reader must support the file's minor. Minor 1 (R6): review_gates.hard_preconditions, security.reduced_assurance, statuses paused/archived, project id <= 24, catalogue role ids, bucket devplat-<project_id>."
+      "description": "Additive changes (new optional fields) bump the minor. Readers ignore nothing: unknown fields are rejected, so a reader must support the file's minor. Minor 1 (R6): review_gates.hard_preconditions, security.reduced_assurance, statuses paused/archived, project id <= 24, catalogue role ids, bucket devplat-<project_id>. Minor 2: issue_tracker.write_fact (per-project Linear write fact). Minor 2 also: environments[].task_kinds value plan_proposal."
     },
     "project_id": {
       "$ref": "#/$defs/project_id"
@@ -62,7 +62,7 @@
         "paused",
         "archived"
       ],
-      "description": "Mirrors the DB project status (R6 D4). draft: registered, nothing scheduled. onboarding: security core resolved; tasks may be created; only SHORT read-only kinds may be dispatched (planning, *_review, operator_action, mac_validation) and nothing is pushed. active: every field resolved; FULL-lifecycle dispatch and pushes are allowed only with the project's hard-precondition facts (review_gates.hard_preconditions). paused: no new admission, running Jobs finish. archived: read-only. Enforced by platform/tools/validate_projects.py and the controller's admission."
+      "description": "Mirrors the DB project status (R6 D4). draft: registered, nothing scheduled. onboarding: security core resolved; tasks may be created; only SHORT read-only kinds may be dispatched (planning, plan_proposal, *_review, operator_action, mac_validation) and nothing is pushed. active: every field resolved; FULL-lifecycle dispatch and pushes are allowed only with the project's hard-precondition facts (review_gates.hard_preconditions). paused: no new admission, running Jobs finish. archived: read-only. Enforced by platform/tools/validate_projects.py and the controller's admission."
     },
     "config_version": {
       "type": "integer",
@@ -192,8 +192,32 @@
                 "comments",
                 "status_and_comments"
               ],
-              "description": "Linear writes need an operator decision (v1 DOD-05); default read_only."
+              "description": "Linear writes need an operator decision (v1 DOD-05); default read_only. Any mode other than read_only needs write_fact."
+            },
+            "write_fact": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,64}$",
+              "description": "Minor 2. Key of the per-project operator fact that enables Linear writes (DB projects.linear_write_fact; replaces the platform-wide DOD-05). Writes are refused until an allowlisted operator records this fact for this project. Must not be a review_gates.hard_preconditions key, so satisfying governance never enables Linear writes by itself."
             }
+          },
+          "if": {
+            "properties": {
+              "write_mode": {
+                "const": "read_only"
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "required": [
+                "write_fact"
+              ]
+            }
+          },
+          "else": {
+            "required": [
+              "write_fact"
+            ]
           }
         },
         {
@@ -490,9 +514,11 @@
                 "integration",
                 "build",
                 "planning",
-                "design"
+                "design",
+                "plan_proposal"
               ]
-            }
+            },
+            "description": "Work classes this environment runs, in a coarse vocabulary: catalogue kinds, except that `review` stands for every *_review kind and `build` for BuildKit image builds (not a task kind). Minor 2 adds plan_proposal (planner Jobs, R6 re-check RA-7)."
           },
           "requirements": {
             "type": "array",
@@ -1242,7 +1268,7 @@
           }
         }
       },
-      "description": "Declared dependencies on other projects, evaluated by the controller like contract dependencies[] (15-… §2, 17-… §9). No Job ever receives another project's code; only the dependency's completion fact or a published artifact digest crosses."
+      "description": "Declared dependencies on other projects. Designed, NOT implemented: the controller cannot evaluate them yet and register_contract() refuses a contract dependency on another project (R6 re-check RA-3). No Job ever receives another project's code."
     },
     "notes": {
       "type": "array",

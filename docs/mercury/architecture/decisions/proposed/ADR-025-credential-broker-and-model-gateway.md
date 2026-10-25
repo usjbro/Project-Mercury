@@ -45,7 +45,9 @@ The R6 security review found four weaknesses in the first version of this ADR:
 5. **`devplat-gitbroker-fetch` serves bundles to pods and holds no GitHub credential.** Untrusted pods never reach the key holder.
 6. **`devplat-artifact-gateway` is the only artifact path for pods (D10).** Pods upload `runs/<job-uid>/…` with a per-Job one-time token, within the size caps of D11. The gateway writes with its own S3 credential. Presigned URLs are used only between platform components. Project pods have no route to the object store.
 7. **`devplat-model-gateway` is the only holder of LLM provider keys (D12).** It allows only `POST /v1/messages` and `POST /v1/messages/count_tokens`. It rejects:
-   - server tools (web search, web fetch, code execution, computer use, any tool with a server-side `type`);
+   - every tool except one without `type` or with `type: custom` (an allowlist: web search, web fetch, code execution, computer use and any server-side type added later are refused);
+   - image or document content blocks whose `source.type` is not `base64` or `text` (a `url` source makes the provider fetch an agent-chosen URL; a `file` source refers to the Files API), and any `file_id` (R6 re-check RS-1);
+   - any content block type other than `text`, `image`, `document`, `tool_use`, `tool_result`, `thinking`, `redacted_thinking`, and any top-level request field outside an allowlist (`model`, `messages`, `system`, `max_tokens`, `tools`, `tool_choice`, `temperature`, `top_p`, `top_k`, `stop_sequences`, `stream`, `metadata`, `thinking`) — so `mcp_servers`, `container` and future fields are refused without being named (C-1);
    - `mcp_servers` and `container`;
    - Files and Batches APIs;
    - non-allow-listed `anthropic-beta` headers.

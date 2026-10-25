@@ -125,9 +125,55 @@
           "project_id": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9-]{1,22}[a-z0-9]$",
-            "description": "Only for a declared cross-project dependency; default = this contract's project."
+            "description": "Reserved for declared cross-project dependencies, which are NOT implemented: the DB refuses a value other than this contract's project (R6 re-check RA-3)."
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "description": "INTERFACE_FROZEN only: the frozen interface file (repository-relative). DB task_dependencies.path."
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "INTERFACE_FROZEN only: the sha256 the dependency must have frozen for path (its interface_frozen frozen_files). DB task_dependencies.sha256."
           }
-        }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "required_state": {
+                  "const": "INTERFACE_FROZEN"
+                }
+              },
+              "required": [
+                "required_state"
+              ]
+            },
+            "then": {
+              "required": [
+                "path",
+                "sha256"
+              ]
+            },
+            "else": {
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "path"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "sha256"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        ]
       }
     },
     "approved_design_refs": {
@@ -173,7 +219,8 @@
           },
           "frozen_by": {
             "type": "string",
-            "pattern": "^DT-[0-9]{4}(-[a-z0-9]+)?$"
+            "pattern": "^[A-Z][A-Z0-9]{1,7}-[0-9]{4,6}(-[a-z][0-9]{1,3})?$",
+            "description": "Task that freezes the interface (any task id of this project; DB task_interface_contracts.frozen_by joins tasks.task_id)."
           }
         }
       }

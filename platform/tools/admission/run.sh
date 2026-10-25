@@ -7,9 +7,9 @@
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); ROOT=$(cd "$HERE/../../.." && pwd)
 GO=${GO:-go}; OUT=${OUT:-$(mktemp -d)}; VER=v1.33.0
-CACHE=${K8S_SCHEMA_CACHE:-$HOME/.cache/devplat-k8s-schemas}
+SCHEMAS=$(python3 "$ROOT/platform/tools/validate_k8s.py" --k8s $VER --print-cache-dir)   # keyed by the pinned commit
 python3 "$ROOT/platform/tools/validate_k8s.py" --k8s $VER "$ROOT/platform/deploy/base"   # also fills the schema cache
-python3 "$HERE/extract_policies.py" "$ROOT/platform/deploy/base" "$CACHE/$VER" "$OUT"
+python3 "$HERE/extract_policies.py" "$ROOT/platform/deploy/base" "$SCHEMAS" "$OUT"
 (cd "$HERE" && "$GO" build -o "$OUT/celcheck" .)
 "$OUT/celcheck" "$OUT/cel-items.json"
 python3 "$HERE/cases.py" "$OUT/pol-data.json" "$OUT/suite.json"

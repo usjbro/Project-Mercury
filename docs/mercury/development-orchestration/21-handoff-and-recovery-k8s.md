@@ -8,7 +8,7 @@ Reuses / supersedes: **keeps** `07-handoff-and-recovery.md` §1 handoff flow and
 1. **At-least-once.** Any controller step may run twice (crash between a Kubernetes call and the DB commit, leader change, lost response). Every step is idempotent or fenced.
 2. **The DB decides, Kubernetes executes.** A Job exists because a `job_runs` row exists, which exists because an `admit` decision was consumed (`19-…` §7).
 3. **One writer per task.** Task lease + fencing token; a stale leader's write is refused inside the transaction (DP002 → that replica steps down).
-4. **Create protocol** (order): (a) `record_admission(admit)` → (b) `dispatch_job()` row with the `jobspec.py` name `dp-<project>-<task>-a<attempt>-d<dispatch>` and key → (c) `set_job_tokens()` (hashes of the per-Job model-gateway and artifact-gateway tokens) → (d) create the Job **suspended** → (e) owned ConfigMap and Secret `dp-<job>-io` → (f) unsuspend → (g) `record_event(dispatched)` with an idempotency key. A crash anywhere is repaired by repeating from the first incomplete step: (a)–(c) and (g) are idempotent in the DB, (d) uses `AlreadyExists` → adopt (§3).
+4. **Create protocol** (order): (a) `record_admission(admit)` → (b) `dispatch_job()` row with the `jobspec.py` name `dp-<project>-<task>-a<attempt>-<role>-d<dispatch>` and key → (c) `set_job_tokens()` (hashes of the per-Job model-gateway and artifact-gateway tokens) → (d) create the Job **suspended** → (e) owned ConfigMap and Secret `dp-<job>-io` → (f) unsuspend → (g) `record_event(dispatched)` with an idempotency key. A crash anywhere is repaired by repeating from the first incomplete step: (a)–(c) and (g) are idempotent in the DB, (d) uses `AlreadyExists` → adopt (§3).
 5. **Environmental re-dispatch** within an attempt increments `dispatch_no` (new Job name, key, admission and tokens); it never reuses a Job name.
 
 ## 2. Idempotency per step
@@ -124,4 +124,4 @@ Every 5 minutes and on each webhook (a hint, never trusted alone):
 
 ## 11. Resolved gap
 
-The v1 gap (an env re-dispatch within one attempt collided with the per-attempt Job name) is closed: `jobspec.py` names Jobs `…-a<attempt>-d<dispatch>` and includes `dispatch_no` in the idempotency key, matching `job_runs.dispatch_no` (`19-…`).
+The v1 gap (an env re-dispatch within one attempt collided with the per-attempt Job name) is closed: `jobspec.py` names Jobs `…-a<attempt>-<role>-d<dispatch>` and includes the role and `dispatch_no` in the idempotency key (the role since the R6 re-check RA-1: the assigned role and the verifier run Jobs in the same attempt), matching `job_runs.dispatch_no` (`19-…`).

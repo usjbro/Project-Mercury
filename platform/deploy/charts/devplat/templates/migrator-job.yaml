@@ -2,7 +2,9 @@
 Schema migrations (D9). A Helm hook Job, not the controller, applies the forward-only migrations as the dedicated
 login devplat_migrator (Secret devplat-db-migrator, pinned to ServiceAccount devplat-migrator). The schema owner
 role devplat_owner is NOLOGIN; the migrator owns the database and grants the runtime roles. It then syncs
-operator_identities from ConfigMap devplat-operator-identities.
+operator_identities from ConfigMap devplat-operator-identities and sets the platform's mandatory hard preconditions
+(set_mandatory_hard_preconditions(DEVPLAT_MANDATORY_HARD_PRECONDITIONS); a fixed platform invariant, R6 D1 / re-check
+RS-5: the controller cannot register a project whose hard_preconditions omit them).
 Hooks: pre-install + pre-upgrade for postgres.mode=external; post-install + pre-upgrade for cnpg, because the
 Cluster devplat-pg is created by this release (the Job waits for it, bounded by activeDeadlineSeconds).
 backoffLimit 0: a failed migration fails the Helm operation and is kept for inspection.
@@ -62,6 +64,8 @@ spec:
           env:
             {{- include "devplat.commonEnv" . | nindent 12 }}
             {{- include "devplat.dbEnv" (dict "root" . "role" "migrator") | nindent 12 }}
+            - name: DEVPLAT_MANDATORY_HARD_PRECONDITIONS
+              value: "DOD-02,DOD-13"                # == project-config schema review_gates.hard_preconditions minimum
           resources:
             {{- toYaml .Values.migrator.resources | nindent 12 }}
           volumeMounts:

@@ -23,7 +23,9 @@ CTL = "system:serviceaccount:devplat-system:devplat-controller"
 
 def tns(name=TNS, project="mercury", **over):
     L = {"devplat.io/managed-by": "devplat-controller", "devplat.io/ns-role": "test", "devplat.io/project": project,
-         "pod-security.kubernetes.io/enforce": "restricted"}
+         "pod-security.kubernetes.io/enforce": "restricted", "pod-security.kubernetes.io/enforce-version": "v1.33",
+         "pod-security.kubernetes.io/audit": "restricted", "pod-security.kubernetes.io/audit-version": "v1.33",
+         "pod-security.kubernetes.io/warn": "restricted", "pod-security.kubernetes.io/warn-version": "v1.33"}
     L.update(over)
     return {"metadata": {"name": name, "labels": {k: v for k, v in L.items() if v is not None}}}
 
@@ -318,6 +320,19 @@ A(pods("R6-E8-ephemeral-volumeName", p, "proj-mercury-exec", {"devplat-proj-pod-
 p = agent_pod(); p["spec"]["containers"][0]["image"] = "registry.devplat.internal/projects/jupiter/built@sha256:" + "e" * 64
 A(pods("R6-E9-cross-project-image", p, "proj-mercury-exec", {"devplat-image-pinning": "deny"}))
 A(nsr("R6-E10-lookalike-ns", tns("proj-mercury-t-deadbeef-t-12345678")))
+# R6 re-check (security): namespacer content gaps RS-2 (default-deny shape, allow-deps selector) and RS-3 (labels)
+DD = {"podSelector": {}, "policyTypes": ["Ingress", "Egress"]}
+A(nsr("RS2-default-deny-selects-nothing", netpol("default-deny-all", dict(DD, podSelector={"matchLabels": {"never": "x"}})), "NetworkPolicy", ns=TNS))
+A(nsr("RS2-default-deny-ingress-only", netpol("default-deny-all", dict(DD, policyTypes=["Ingress"])), "NetworkPolicy", ns=TNS))
+A(nsr("RS2-default-deny-with-allow-rule", netpol("default-deny-all", dict(DD, egress=[{"to": [{"podSelector": {}}]}])), "NetworkPolicy", ns=TNS))
+A(nsr("RS2-default-deny-matchExpressions", netpol("default-deny-all", dict(DD, podSelector={"matchExpressions": [{"key": "a", "operator": "Exists"}]})), "NetworkPolicy", ns=TNS))
+A(nsr("RS2-allow-deps-all-pods", netpol("allow-deps", {"podSelector": {}, "policyTypes": ["Egress"],
+    "egress": [{"to": [peer("devplat-registry-proxy-mercury")], "ports": [{"protocol": "TCP", "port": 4873}]}]}), "NetworkPolicy", ns=TNS))
+A(nsr("RS3-ingress-gateway-label", tns(**{"devplat.io/ingress-gateway": "true"})))
+A(nsr("RS3-old-psa-version", tns(**{"pod-security.kubernetes.io/enforce-version": "v1.0"})))
+A(nsr("RS3-psa-warn-baseline", tns(**{"pod-security.kubernetes.io/warn": "baseline"})))
+A(nsr("RS3-psa-audit-missing", tns(**{"pod-security.kubernetes.io/audit": None})))
+A(nsr("ok-RS3-metadata-name-label", tns(**{"kubernetes.io/metadata.name": TNS})))
 p = agent_pod(); del p["metadata"]["labels"]["devplat.io/network-class"]
 A(pods("R6-E11-no-network-class", p, "proj-mercury-exec", {"devplat-proj-pod-identity": "deny"}))
 

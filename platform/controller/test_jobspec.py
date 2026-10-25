@@ -99,11 +99,22 @@ class T(unittest.TestCase):
 
     def test_name_deterministic_and_dns_label(self):
         self.assertEqual(job()["metadata"]["name"], job()["metadata"]["name"])
-        self.assertEqual(job()["metadata"]["name"], "dp-mercury-dt-0001-a2-d1")
-        long = J.job_name("a-very-long-project-identifier-x", "DT-0001-r1-and-a-long-suffix-here", 12)
+        self.assertEqual(job()["metadata"]["name"], "dp-mercury-dt-0001-a2-backend-engineer-d1")
+        long = J.job_name("a-very-long-project-identifier-x", "DT-0001-r1-and-a-long-suffix-here", 12,
+                          "mdev-platform-integration-engineer")
         self.assertLessEqual(len(long + "-contract"), 63)
         self.assertRegex(long, r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
-        self.assertNotEqual(J.job_name("p", "DT-0001", 1), J.job_name("p", "DT-0001", 2))
+        self.assertNotEqual(J.job_name("p", "DT-0001", 1, "verifier"), J.job_name("p", "DT-0001", 2, "verifier"))
+
+    def test_roles_of_one_attempt_get_distinct_names_and_keys(self):
+        # job_runs is UNIQUE (project, task, attempt, role, dispatch_no) and idempotency_key is globally UNIQUE: the
+        # assigned role's Job and the verifier's Job of the same attempt and dispatch must not collide (R6 RA-1)
+        core = RUN["contract_core_sha256"]
+        roles = [p["role"] for p in PROFILES["profiles"]] + ["verifier"]
+        self.assertEqual(len({J.job_name("mercury", "DT-0001", 2, r) for r in roles}), len(roles))
+        self.assertEqual(len({J.idempotency_key("mercury", "DT-0001", core, 2, r) for r in roles}), len(roles))
+        long = [J.job_name("a-very-long-project-identifier-x", "DT-0001-r1-and-a-long-suffix-here", 12, r) for r in roles]
+        self.assertEqual(len(set(long)), len(roles))
 
     def test_pod_has_no_credentials_or_host_access(self):
         spec = job()["spec"]["template"]["spec"]
@@ -119,7 +130,7 @@ class T(unittest.TestCase):
         # the only credential is the per-Job gateway token, read from the run's own Secret; never an API key
         self.assertFalse([e for e in envs if "API_KEY" in e["name"] or "GITHUB" in e["name"]])
         tok = [e for e in envs if e["name"] == "ANTHROPIC_AUTH_TOKEN"][0]
-        self.assertEqual(tok["valueFrom"]["secretKeyRef"]["name"], "dp-mercury-dt-0001-a2-d1-io")
+        self.assertEqual(tok["valueFrom"]["secretKeyRef"]["name"], "dp-mercury-dt-0001-a2-backend-engineer-d1-io")
 
     def test_container_hardening(self):
         j = job()

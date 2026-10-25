@@ -82,11 +82,11 @@ platform/deploy/charts/
 | `devplat-gitbroker-github-app` | `app-id`, `private-key.pem` | gitbroker |
 | `devplat-model-gateway-llm-keys` | `<provider>-api-key`, `<provider>-api-key-reduced` (separate spend-limited key, D16) | model-gateway |
 | `devplat-db-migrator` | basic-auth; the only login that changes the schema (D9) | migrator hook Job |
-| `devplat-db-controller`, `devplat-db-api`, `devplat-db-model-gateway` | basic-auth (also CNPG managed-role passwords) | controller, api, model-gateway |
+| `devplat-db-controller`, `devplat-db-api`, `devplat-db-model-gateway`, `devplat-db-artifact-gateway` | basic-auth (also CNPG managed-role passwords) | controller, api, model-gateway, artifact-gateway |
 | `devplat-artifacts-controller`, `-gitbroker`, `-gitbroker-fetch`, `-api`, `-artifact-gateway` | `access-key-id`, `secret-access-key` (scoped per prefix; workload identity preferred in cloud) | the named component |
 | `devplat-oidc-client`, `devplat-linear-token` (optional) | `client-secret`, `token` | api |
 
-Per-run objects are created by the controller, never by the charts: Job `dp-<project>-<task>-a<attempt>-d<dispatch>`, ConfigMap `<job>-contract`, and Secret `<job>-io`. The Secret holds the one-time fetch token, the artifact-gateway upload token (TTL = Job deadline + 15 min) and the per-Job gateway token. All three objects are owner-referenced to the Job (base VAP `devplat-controller-run-objects`).
+Per-run objects are created by the controller, never by the charts: Job `dp-<project>-<task>-a<attempt>-<role>-d<dispatch>`, ConfigMap `<job>-contract`, and Secret `<job>-io`. The Secret holds the one-time fetch token, the artifact-gateway upload token (TTL = Job deadline + 15 min) and the per-Job gateway token. All three objects are owner-referenced to the Job (base VAP `devplat-controller-run-objects`).
 
 ## 3. Dependencies
 

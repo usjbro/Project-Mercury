@@ -16,42 +16,48 @@ Reuses / supersedes: **supersedes for the platform** `02-principal-orchestrator.
 
 | # | Step | Actor and mechanism | Recorded (`task_events`) | On failure |
 |---|---|---|---|---|
-| 1 | **Validate dependencies** | Controller (port of devorch `issue_blockers`, R6 D7): DAG deps COMPLETED; contract `dependencies[]` at `required_state` ∈ {`COMPLETED`, `INTERFACE_FROZEN` with `interface_contracts[].sha256` = the freezing task's frozen hash, `AWAITING_HUMAN` (stack ≤ 2)}; the task's **required facts** (`task_required_facts`, e.g. Mercury G-S1, P0-n); declared cross-project dependencies. Facts are OIDC-authenticated operator facts **recorded for this project** | `unblocked` (G1, `design_ref` evidence on an approved commit) | Stays BLOCKED with the blocker list |
+| 1 | **Validate dependencies** | Controller (port of devorch `issue_blockers`, R6 D7): DAG deps COMPLETED; contract `dependencies[]` at `required_state` ∈ {`COMPLETED`, `INTERFACE_FROZEN` with the dependency's own `path` and `sha256` (both required for this state, forbidden otherwise; task contract v2) equal to the freezing task's `frozen_files[path]`, `AWAITING_HUMAN` (stack ≤ 2)}; the task's **required facts** (`task_required_facts`, e.g. Mercury G-S1, P0-n); declared cross-project dependencies are **not implemented** (`register_contract()` refuses them, R6 re-check RA-3). Facts are OIDC-authenticated operator facts **recorded for this project** | `unblocked` (G1, `design_ref` evidence on an approved commit) | Stays BLOCKED with the blocker list |
 | 2 | **Authorize** | Controller admission (`17-…` §2). Project status (R6 D4): `onboarding` dispatches only SHORT read-only kinds (planning, `*_review`, `plan_proposal`, `operator_action`, `mac_validation`); FULL-lifecycle kinds and any push need status `active` **and** this project's hard-precondition facts (`review_gates.hard_preconditions`, default `DOD-02`, `DOD-13`; a platform-wide fact never counts, R6 D1). The contract passed `register_contract` (kind→role from the catalogue, allowed ∩ restricted containment, ownership); a planner-originated contract or any revision carries an operator approval (R6 D18); budgets and capacity | `assigned` (READY → RUNNING) + task lease | Hold with reason (`admission_decisions`); stays READY |
 | 3 | **Select role** | `assigned_agent` → catalogue role and execution profile (`platform/agents/execution-profiles.yaml`); the catalogue must list the role as executor of the kind; the project config must enable it | (part of `assigned`) | Contract invalid → `escalated` |
 | 4 | **Prepare project environment** | Resolve the execution target `{cluster_ref, namespace_prefix}`; check namespace health, quota headroom, approved image digest for the project (per-project image prefix, R6 D15), role ConfigMap present for the pinned definition commit | — | Hold (`image_unavailable`, `target_unavailable`); a confirmed target outage is environmental per `21-…` |
 | 5 | **Prepare workspace** | Gitbroker writes the source bundle `src/<project>/<sha>.bundle` (base for attempt 1, the last **validated** head of this task for a correction, the human-amended tip after §7.3) and registers a one-time fetch URL served by the keyless `devplat-gitbroker-fetch` (TTL ≤ 15 min after unsuspend). Workspace = `emptyDir` sized by the profile | — | Classified per `21-…` |
-| 6 | **Create Job** | Create the Job **suspended** (name and key from `jobspec.py`) | — | API error → retry next tick (no event); `AlreadyExists` → `21-…` §3 |
+| 6 | **Create Job** | `dispatch_job()` first: it needs the step-2 `admit` decision for this task, attempt and role, **at most 10 minutes old** (`17-…` §2 rule 5); an older decision is refused and the task is re-admitted. Then create the Job **suspended** (name and key from `jobspec.py`) | — | API error → retry next tick (no event); `AlreadyExists` → `21-…` §3 |
 | 7 | **Deliver contract** | Create ConfigMap `<job>-contract` (contract with `worktree=/workspace/repo`, `evidence_dir=/out`) and Secret `<job>-io` (fetch URL, one-time artifact-gateway **upload token** scoped to `runs/<job-uid>/`, TTL = Job deadline + 15 min, gateway token), both with `ownerReferences` → the Job uid; then set `suspend: false` | `dispatched` (Job uid, attempt N, dispatch D) | Setup incomplete after 5 min → delete Job; `21-…` |
 | 8 | **Monitor** | Watch Job and pod; renew the task lease; heartbeats (`21-…` §5); pending timeout (10 min); `activeDeadlineSeconds` | `started` (FULL lifecycle, pod Running) | `21-…` §6 |
 | 9 | **Collect** | On a terminal Job condition the controller reads `runs/<job-uid>/` (`result.json`, `result.bundle`, `agent.stream.jsonl`, `runner.json`, `fetch.log`) from the store with its own credentials; if the pod died before uploading, it reads container logs through the API (bounded) | — | Missing objects are evidence; classification `21-…` §6 |
-| 10 | **Persist** | Size-check, hash, copy into immutable `sha256/<hex>`; register `artifacts` rows (`19-…`); write the evidence manifest `manifests/<task>/<attempt>/<dispatch>.json`; only then delete the Job | `artifacts` rows (not a transition) | Store unavailable → keep the Job (TTL 24 h) and retry |
+| 10 | **Persist** | Size-check, hash, copy into immutable `sha256/<hex>`; register `artifacts` rows (`19-…`); write the evidence manifest `manifests/<task>/<attempt>/<role>-d<dispatch>.json`; only then delete the Job | `artifacts` rows (not a transition) | Store unavailable → keep the Job (TTL 24 h) and retry |
 | 11 | **Validate** | Gitbroker: quarantine fetch of the bundle and the port of devorch `result_errors` (§7.2). Controller (R6 D7): result schema; `project_id`/`task_id`/`contract_version`/`attempt`/`agent` match; `status = completed`; for `implementation_completed` the result `head_commit` = the validated tip; blocking findings **computed from the `findings` array**; review binding (`reviewed_head_commit`); integration binding (`integrated_heads`); required tests reported | `implementation_completed` (FULL) or `result_accepted` (SHORT) — or `attempt_failed` / `escalated` | Budgets as in devorch; exhausted → `failed` |
 | 12 | **Test and review** | Verifier Job re-runs `required_tests` at the validated head in a fresh workspace (G2; `test_runs`); review subtasks `<task>-rN` (code/design/reliability) and `<task>-sN` (security, fresh Job, never the author's workspace) bound to the tested head (G3/G4); integration subtask `<first covered>-iN` (G5) | `tests_passed` (head), `code_review_passed`, `security_review_passed`, `integration_verified` | `tests_failed`, `code_review_changes_required`, `security_review_blocked`, `integration_failed` → correction attempt N+1 |
 | 13 | **Pull request** | Gitbroker pushes `dev/*` only if the remote tip is an ancestor of (or equal to) the tested head and G1–G5 are recorded — **never force** (§7.3); finds or creates a **draft** PR; the controller waits for CI on that head | `pr_prepared` (G6, `pr` + `ci_run` evidence) | CI red → correction; non-fast-forward → §7.3 |
 | 14 | **Human approval** | GitHub reconciliation: PR merged, `merged_by` ∈ the project's `human_approvers`, merged head = G6 head. The platform never merges (the ruleset of DOD-02 is what prevents the App from merging or approving, R6 D13) | `human_merged` (G7), `closed` | `human_changes_requested` (review, or human commits §7.3) → correction; wrong `merged_by` → security escalation |
-| 15 | **Re-evaluate** | Controller recomputes READY for dependents in **all** projects (including cross-project dependencies), records `interface_frozen` where due, releases path ownership | `interface_frozen` where due | — |
+| 15 | **Re-evaluate** | Controller recomputes READY for dependents of the task's project (cross-project dependencies are not implemented), records `interface_frozen` where due, releases path ownership | `interface_frozen` where due | — |
 
 Short-lifecycle kinds (reviews, integration, planning, `plan_proposal`) stop at step 11 with `result_accepted`. `mac_validation` and `operator_action` tasks (`job: false` in the catalogue) skip steps 4–10: they complete only with authenticated operator evidence through `devplat-api` (macOS lane, `22-…`).
 
 ```mermaid
 sequenceDiagram
     participant C as devplat-controller
+    participant DB as PostgreSQL
     participant G as gitbroker (+ keyless gitbroker-fetch)
     participant K as Kubernetes API
     participant P as Job pod (fetch + agent)
     participant A as artifact-gateway
     participant S as object store
     participant M as model-gateway
+    C->>DB: record_admission(admit); dispatch_job() (name and key from jobspec.py)
+    C->>DB: set_job_tokens(sha256 of the model-gateway and upload tokens the controller minted)
     C->>G: write source bundle, register one-time fetch URL
-    C->>K: create Job (suspend=true, name from jobspec.py)
+    C->>K: create Job (suspend=true)
     K-->>C: uid
-    C->>A: mint one-time upload token for runs/UID/
-    C->>K: create ConfigMap contract + Secret io (ownerRef UID)
-    C->>K: patch suspend=false   (event: dispatched)
+    C->>K: create ConfigMap contract + Secret io with both tokens (ownerRef UID)
+    C->>A: :9444 register run (job uid, project), admin channel only
+    C->>K: patch suspend=false
+    C->>DB: record_event(dispatched)
     P->>G: fetch bundle via gitbroker-fetch (one-time URL)
-    P->>M: LLM calls (per-Job token binds project and budget)
+    P->>M: LLM calls (per-Job token)
+    M->>DB: reserve_budget(sha256(token), ...) authorizes each call
     P->>A: upload result.json, bundle, logs (upload token)
+    A->>DB: authorize_upload(sha256(token), job uid, name, size)
     A->>S: write runs/UID/* with its own credentials
     K-->>C: Job Complete / Failed
     C->>S: read, hash, copy to sha256/HEX (evidence)
@@ -76,7 +82,7 @@ The contract is the v1 example `examples/contract-implementation.json` (budget `
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: dp-mercury-dt-0001-a2-d1                 # dp-<project>-<task>-a<attempt>-d<dispatch>; deterministic => create is idempotent
+  name: dp-mercury-dt-0001-a2-backend-engineer-d1                 # dp-<project>-<task>-a<attempt>-<role>-d<dispatch>; deterministic => create is idempotent
   namespace: proj-mercury-exec                # from the project's execution target {cluster_ref, namespace_prefix}
   labels:
     app.kubernetes.io/managed-by: devplat-controller
@@ -87,7 +93,7 @@ metadata:
     devplat.io/role: mdev-backend-engineer
     devplat.io/kind: implementation
     devplat.io/network-class: deps            # selects the egress NetworkPolicy
-    devplat.io/idempotency-key: 236b93d0c657f40e8603a992840ceb18a8ec0978   # sha256(project|task|contract_core|attempt|dispatch)[:40]; computed by platform/controller/jobspec.py
+    devplat.io/idempotency-key: 4b3b161b68923723f237c2dc0e4b8d9197f11914   # sha256(project|task|contract_core|attempt|role|dispatch)[:40]; computed by platform/controller/jobspec.py
   annotations:
     devplat.io/contract-core-sha256: 4b1e0c3a9d7f25e86c1b0a4f3e9d2c7b6a5f4e3d2c1b0a9f8e7d6c5b4a392817
     devplat.io/contract-version: "1"
@@ -188,7 +194,7 @@ spec:
             - {name: ANTHROPIC_BASE_URL, value: "http://devplat-model-gateway.devplat-system.svc:8080"}   # project bound to the token, not the URL (R6 D12)
             - name: ANTHROPIC_AUTH_TOKEN      # per-Job gateway token, not the API key; revoked when the Job ends
               valueFrom:
-                secretKeyRef: {name: dp-mercury-dt-0001-a2-d1-io, key: gateway_token}
+                secretKeyRef: {name: dp-mercury-dt-0001-a2-backend-engineer-d1-io, key: gateway_token}
             - {name: DEVPLAT_ARTIFACT_GATEWAY, value: "http://devplat-artifact-gateway.devplat-system.svc:8082"}   # uploads only here (R6 D10)
             - {name: NPM_CONFIG_REGISTRY, value: "http://devplat-registry-proxy-mercury.devplat-system.svc:4873/"}   # this project's read-only proxy (R6 D14)
             - {name: DISABLE_AUTOUPDATER, value: "1"}
@@ -230,10 +236,10 @@ spec:
               - {key: managed-settings.mdev-backend-engineer.json, path: managed-settings.json}   # one settings key per role
         - name: contract
           configMap:
-            name: dp-mercury-dt-0001-a2-d1-contract   # ownerReference -> this Job
+            name: dp-mercury-dt-0001-a2-backend-engineer-d1-contract   # ownerReference -> this Job
         - name: io
           secret:
-            secretName: dp-mercury-dt-0001-a2-d1-io   # one-time bundle URL, one-time upload token, gateway token; ownerReference -> this Job
+            secretName: dp-mercury-dt-0001-a2-backend-engineer-d1-io   # one-time bundle URL, one-time upload token, gateway token; ownerReference -> this Job
             defaultMode: 0400
 ```
 
@@ -243,10 +249,10 @@ spec:
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: dp-mercury-dt-0001-a2-d1-contract
+  name: dp-mercury-dt-0001-a2-backend-engineer-d1-contract
   namespace: proj-mercury-exec
   ownerReferences:
-    - {apiVersion: batch/v1, kind: Job, name: dp-mercury-dt-0001-a2-d1, uid: "<job uid>", controller: true}
+    - {apiVersion: batch/v1, kind: Job, name: dp-mercury-dt-0001-a2-backend-engineer-d1, uid: "<job uid>", controller: true}
 immutable: true
 data:
   contract.json: '{"schema":"devplat.task_contract.v2","project_id":"mercury","task_id":"DT-0001","attempt":2,"worktree":"/workspace/repo","evidence_dir":"/out", ...}'
@@ -254,10 +260,10 @@ data:
 apiVersion: v1
 kind: Secret
 metadata:
-  name: dp-mercury-dt-0001-a2-d1-io
+  name: dp-mercury-dt-0001-a2-backend-engineer-d1-io
   namespace: proj-mercury-exec
   ownerReferences:
-    - {apiVersion: batch/v1, kind: Job, name: dp-mercury-dt-0001-a2-d1, uid: "<job uid>", controller: true}
+    - {apiVersion: batch/v1, kind: Job, name: dp-mercury-dt-0001-a2-backend-engineer-d1, uid: "<job uid>", controller: true}
 immutable: true
 type: Opaque
 stringData:
@@ -311,7 +317,7 @@ The layout, names and caps are owned by `20-artifact-storage.md` (R6 D11):
 | `fetch.log` | 64 MiB (log cap) | Log evidence |
 | **Total per run** | **512 MiB** | Enforced by the artifact gateway |
 
-The pod uploads only to `devplat-artifact-gateway` (in-cluster, port 8082) with its one-time upload token; the gateway enforces the caps and the `runs/<job-uid>/` scope and writes to the store with its own credentials. Presigned URLs are used only between platform components. The controller copies each object to `sha256/<hex>` (object lock where supported), registers `artifacts` rows, writes `manifests/<task>/<attempt>/<dispatch>.json`, and deletes `runs/<job-uid>/` (lifecycle rule: 7 days as backstop). It deletes the Job only after the copy is committed; `ttlSecondsAfterFinished: 86400` is the backstop. Bucket: `devplat-<project>`.
+The pod uploads only to `devplat-artifact-gateway` (in-cluster, port 8082) with its one-time upload token; the gateway enforces the caps and the `runs/<job-uid>/` scope and writes to the store with its own credentials. Presigned URLs are used only between platform components. The controller copies each object to `sha256/<hex>` (object lock where supported), registers `artifacts` rows, writes `manifests/<task>/<attempt>/<role>-d<dispatch>.json`, and deletes `runs/<job-uid>/` (lifecycle rule: 7 days as backstop). It deletes the Job only after the copy is committed; `ttlSecondsAfterFinished: 86400` is the backstop. Bucket: `devplat-<project>`.
 
 ### 7.2 Bundle validation in gitbroker (port of devorch `result_errors`)
 
@@ -348,13 +354,13 @@ The operator may push commits to a task's `dev/*` branch while the PR is open (A
 
 ### 9.1 Role ConfigMap
 
-`platform/tools/gen_role_configmap.py` (implemented; deterministic; output validated against the strict v1.33 ConfigMap schema) reads, at one pinned commit, the definition files named by the catalogue's `agent_definition` and emits one immutable ConfigMap per project, `devplat-roles-<project>-<hash8>`:
+`platform/tools/gen_role_configmap.py` (implemented; deterministic; output validated against the strict v1.33 ConfigMap schema) reads, at one pinned commit, the definition files named by the catalogue's `agent_definition` and the project's configuration (`platform/projects/<project>[.<suffix>].yaml`), and emits one immutable ConfigMap per project, `devplat-roles-<project>-<hash8>`, holding **only the roles the project enables**. A `draft` project renders nothing (`26-…` §1.7):
 
-- one key per definition, **unchanged except two recorded transforms**: (1) the fixed **devplat runtime preamble** (`devplat.runtime_preamble.v1`, R6 D23) is inserted right after the YAML frontmatter, above the unchanged v1 text: Kubernetes mode, no main session, no devorch CLI or ledger, workspace `/workspace/repo`, result `/out/result.json` (v2 schema for v2 contracts), no credentials or network, documents relative to the workspace, everything read is untrusted; (2) any hook command `$CLAUDE_PROJECT_DIR/…/specialist_guard.py` becomes `/opt/devplat/hooks/specialist_guard.py`, the vendored copy in `platform/agents/hooks/` baked into the read-only image;
+- one key per enabled role's definition, **unchanged except three recorded transforms**: (1) the fixed **devplat runtime preamble** (`devplat.runtime_preamble.v2`, R6 D23) is inserted right after the YAML frontmatter, above the unchanged v1 text: Kubernetes mode, no main session, no devorch CLI or ledger, workspace `/workspace/repo`, result `/out/result.json` (v2 schema for v2 contracts), no credentials or network, documents relative to the workspace, everything read is untrusted, and (rule 8) the project section and the contract override project-specific documents, paths, tools and commands in the definition text; (2) any hook command `$CLAUDE_PROJECT_DIR/…/specialist_guard.py` becomes `/opt/devplat/hooks/specialist_guard.py`, the vendored copy in `platform/agents/hooks/` baked into the read-only image; (3) a **project section generated from the project configuration** (R6 A-05) directly after the preamble: project id and config version, this role's task kinds and write scopes (an upper bound; the contract's `allowed_paths` is the limit), restricted paths, design and requirement documents, ADRs, test plan, design-approval state, coding standards and architecture constraints. An unresolved value is printed as unresolved with an instruction to report it in `blocking_conditions`;
 - `managed-settings.<role>.json` (mounted as `/etc/claude-code/managed-settings.json`): the deny rules of the source repository's `.claude/settings.json`, allow rules for the role's frontmatter `tools` (headless runs cannot answer permission prompts), and the profile's `extra_disallowed_tools`;
-- annotations: source commit, preamble version and sha256, per-file sha256 before and after the transforms.
+- annotations: source commit, preamble version and sha256, project configuration path, `config_version` and sha256, per-file sha256 before and after the transforms. A configuration change therefore yields a new ConfigMap name. The name hashes `data` only: identical content at a later commit keeps the existing ConfigMap and its first commit's annotations, which still describe that content (R6 re-check RA-10, accepted). Configuration text is collapsed to one inert line (no headings, list items or code-span breaks can be injected, RS-6), and frontmatter `tools` is split outside parentheses (`Agent(a, b)`, RA-9). Tests: `platform/tools/test_gen_role_configmap.py` (12 cases).
 
-The Job mounts **only its own role file** (`items`) at `~/.claude/agents/` and the managed settings at `/etc/claude-code/`. The `.claude/agents/` files in the repository are not edited (`14-…` §3 rule 2). Projects other than Mercury get role definitions only through the catalogue; whether Jupiter uses these 12 is unresolved.
+The Job mounts **only its own role file** (`items`) at `~/.claude/agents/` and the managed settings at `/etc/claude-code/`. The `.claude/agents/` files in the repository are not edited (`14-…` §3 rule 2). Projects other than Mercury get role definitions only through the catalogue. The definition **bodies** are still Mercury's v1 text (A-05 remains partly open): the decided target is project-neutral catalogue bodies plus this generated project section, with Mercury's `.claude/agents/` files kept unchanged for v1 local mode (`reviews/R6-dispositions.md`, A-05).
 
 ### 9.2 What still applies inside the container
 
@@ -391,9 +397,9 @@ The controller's classification of a failure (§6, `21-…`) stays authoritative
 
 | ID | Item |
 |---|---|
-| V-16-1 | Pinned Claude Code CLI: `--agent` with `-p`, `--setting-sources`, `--strict-mcp-config`, `/etc/claude-code/managed-settings.json` precedence, frontmatter `tools`/`disallowedTools` enforced headless; the runtime preamble is honoured |
+| V-16-1 | Pinned Claude Code CLI: `--agent` with `-p` (the runner passes the definition's frontmatter `name`, not the catalogue role id: `planner` runs `mdev-principal-orchestrator`, R6 re-check RA-11), `--setting-sources`, `--strict-mcp-config`, `/etc/claude-code/managed-settings.json` precedence, frontmatter `tools`/`disallowedTools` enforced headless; the runtime preamble is honoured |
 | V-16-2 | Claude Code and the Mercury toolchain run with read-only root FS, `emptyDir` HOME, uid 10001, under gVisor (amd64 and, for the workstation, arm64) |
-| V-16-3 | `ANTHROPIC_BASE_URL` + per-Job token through model-gateway; key never visible in the pod (env, files, `/proc`); server tools, `mcp_servers`, files/batches APIs refused (R6 D12) |
+| V-16-3 | `ANTHROPIC_BASE_URL` + per-Job token through model-gateway; key never visible in the pod (env, files, `/proc`); server tools, non-`custom` tool types, `url`/`file` content sources, `file_id` references, `mcp_servers`, files/batches APIs refused (R6 D12, re-check RS-1) |
 | V-16-4 | `suspend` → unsuspend resets the deadline; `podFailurePolicy` rules match `fetch` and `agent` as written |
 | V-16-5 | Default-deny egress enforced by the chosen CNI (probe: `git push`, GitHub API, PostgreSQL, the object store endpoint and the Kubernetes API from an agent pod all fail) |
 | V-16-6 | Artifact gateway: upload token single-use, scope `runs/<job-uid>/` only, per-object and 512 MiB total caps, expiry at deadline + 15 min |

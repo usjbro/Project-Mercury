@@ -64,7 +64,7 @@ The task state machine, lifecycles (FULL/SHORT), gates G1–G7, subtask ids (`-r
 | Images | Allowed image prefixes per project and per namespace role; platform namespaces admit only platform images (R6 D15) |
 | Secrets | Project test secrets (e.g. Mercury T3 sandbox App credentials) live only in that project's test namespace (`22-…`) |
 
-Cross-project dependencies are allowed only when declared in project config and are evaluated by the controller like contract `dependencies[]` (`17-…` §9). No Job ever sees two projects' code.
+Cross-project dependencies are **designed, not implemented**: they would be allowed only when declared in project config. Until the DB stores them, `register_contract()` refuses a dependency whose `project_id` is another project (R6 re-check RA-3). No Job ever sees two projects' code.
 
 ## 4. Kubernetes deployment architecture
 
@@ -124,7 +124,7 @@ flowchart LR
     CTL --> NSR
     CTL --> GB
     CTL --> S3
-    CTL -.->|"read-only until DOD-05"| LN
+    CTL -.->|"read-only until the project's write_fact"| LN
     GB --> GH
     GB --> S3
     GF --> S3
@@ -198,7 +198,7 @@ sequenceDiagram
 |---|---|---|---|---|---|
 | **Claude Code subagent definition** (role) | Prompt, scope, `tools` / `disallowedTools`, hooks for one role | Definition source repository (today `.claude/agents/mdev-*.md`); in the cluster an immutable ConfigMap generated from it at a pinned commit with the devplat runtime preamble (`16-…` §9) | Versioned with its repository | Operator-approved change | `mdev-backend-engineer.md` |
 | **Agent image** (OCI) | The runtime: devplat-runner, Claude Code CLI pinned, project toolchain (e.g. Node 24 for Mercury) | Registry, referenced **by digest** | Immutable per digest | DevOps build Job + operator approval of the digest | `devplat/agent-node24@sha256:…` |
-| **Kubernetes Job** | One dispatch of one attempt of one task by one role | `proj-<P>-exec` | Minutes to hours; deleted after collection | Only the controller | `dp-mercury-dt-0001-a2-d1` (name from `jobspec.py`, normative) |
+| **Kubernetes Job** | One dispatch of one attempt of one task by one role | `proj-<P>-exec` | Minutes to hours; deleted after collection | Only the controller | `dp-mercury-dt-0001-a2-backend-engineer-d1` (name from `jobspec.py`, normative) |
 | **Task record** | Durable task state, contract, events, gates, evidence | PostgreSQL `tasks`, `task_events`, `artifacts` (`19-…`), keyed by `(project_id, task_id)` | Until the project is archived | Only the controller (state); operator via API (facts, approvals) | `(mercury, DT-0001)` in RUNNING, attempt 2 |
 | **Project config** | What the project is and how it may be built | `platform/projects/<P>.yaml` (project registry) | Versioned | Operator-approved change | `mercury.yaml` with target `{default, proj-mercury}` |
 | *(and)* **Role catalogue + execution profile** | Which kinds a role executes; how it becomes a Job: resources, deadline, network, runtime, writes | `platform/agents/execution-profiles.yaml` | Versioned | Operator-approved change | `mdev-code-reviewer`: kind `code_review`, `writes_allowed: false` |
@@ -247,7 +247,7 @@ Rules: (1) devplat images, code and tests are built from `platform/` only: no pl
 | Contracts `devorch.task_contract.v1` / `task_result.v1` / `handoff.v1` | **Generalized** to `devplat.task_contract.v2`, `devplat.task_result.v2`, `devplat.handoff.v2` (`platform/schemas/`: project id, project-neutral ids, catalogue roles, planner); v1 stays readable for local mode | v1: Implemented+tested; v2: Configured (schemas + validated examples) |
 | `check-result` git checks (`result_errors`) | **Kept**, moved into gitbroker bundle validation | Documented only |
 | Path ownership (`active_primary_paths`, `overlap`) | **Kept**, per project, re-checked at admission (`17-…` §9) | Documented only |
-| 12 role definitions | **Kept unchanged in the repository**; the generated ConfigMap adds the devplat runtime preamble and the vendored hook path (`16-…` §9, R6 D23) | Configured (v1); generator Implemented+tested offline |
+| 12 role definitions | **Kept unchanged in the repository**; the generated ConfigMap holds the project's enabled roles and adds the devplat runtime preamble, a project section generated from the project configuration, and the vendored hook path (`16-…` §9.1, R6 D23, A-05) | Configured (v1); generator Implemented+tested offline |
 | Principal Orchestrator main session | **Changed**: loop → controller; reasoning → `planner` Jobs | Documented only |
 | Git ledger `devorch/state`, LOCK, single-session rule | **Changed**: `task_events` in PostgreSQL + Lease-based leader election + task leases | Documented only |
 | Operator facts via `devorch.py fact --actor operator` (self-asserted) | **Changed**: recorded only through `devplat-api` by an allowlisted OIDC subject, **per project** (R6 D1, D2) | Designed, unverified; OIDC provider open (DOD-14) |

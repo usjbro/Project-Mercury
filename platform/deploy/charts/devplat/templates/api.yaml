@@ -2,7 +2,7 @@
 devplat-api: REST API + dashboard backend. Operator facts and approvals only from an OIDC-authenticated subject listed in
 operator_identities (D2: checked inside record_operator_fact; the list comes from api.oidc.allowedSubjects via the
 migrator Job; DOD-14; closes v1 R5 N-06). It writes operator facts (Secret devplat-db-api), never task
-state. Linear read token: Secret devplat-linear-token (optional; writes only after DOD-05).
+state. Linear read token: Secret devplat-linear-token (optional; writes only for a project whose issue_tracker.write_fact is recorded).
 */}}
 {{- $env := printf `- name: DEVPLAT_OIDC_ISSUER_URL
   value: %q
