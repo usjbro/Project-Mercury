@@ -1,0 +1,76 @@
+{{- /*
+Controller RBAC (doc 18 section 7). There is NO cluster-wide grant for the controller and, since D19, no
+impersonation either:
+- project namespaces: RoleBinding to ClusterRole devplat-job-runner, rendered by the devplat-project chart;
+- test namespaces: requested from the devplat-namespacer Deployment (HTTP :8083, fixed template), which holds the
+  cluster-scoped rights (ClusterRole devplat-namespacer from base, VAP devplat-namespacer-scope);
+- devplat-system: one Lease, events, and get on named platform Services (dnsConfig nameserver, hostAliases); the
+  per-project registry proxies are added by each devplat-project release (Role devplat-controller-service-lookup-<P>).
+The namespacer additionally reads the projects' test-profile ConfigMaps in devplat-system (get/list/watch on
+ConfigMaps only; no Secrets).
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: devplat-controller-leader-election
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "devplat.labels" (dict "root" . "name" "devplat-controller") | nindent 4 }}
+rules:
+  # create cannot be restricted by resourceNames; get/update are restricted to the one Lease.
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["create"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "update"]
+    resourceNames: ["devplat-controller"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  - apiGroups: ["events.k8s.io"]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: devplat-controller-service-lookup
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "devplat.labels" (dict "root" . "name" "devplat-controller") | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get"]
+    resourceNames: ["devplat-model-gateway", "devplat-gitbroker-fetch", "devplat-artifact-gateway", "devplat-dns"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: devplat-namespacer-profiles
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "devplat.labels" (dict "root" . "name" "devplat-namespacer") | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]
+{{- range $rb := list (dict "name" "devplat-controller-leader-election" "sa" "devplat-controller") (dict "name" "devplat-controller-service-lookup" "sa" "devplat-controller") (dict "name" "devplat-namespacer-profiles" "sa" "devplat-namespacer") }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $rb.name }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "devplat.labels" (dict "root" $ "name" $rb.sa) | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $rb.name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $rb.sa }}
+    namespace: {{ $.Release.Namespace }}
+{{- end }}

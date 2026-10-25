@@ -1,0 +1,11 @@
+# TEST-ONLY: every optional part of devplat-project enabled (builds, registry proxy, RuntimeClass pin).
+exec: {requiredRuntimeClassName: kata}
+registryProxy:
+  enabled: true
+  image: {digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"}
+  npmUplinks: ["https://registry.npmjs.org/"]
+build:
+  enabled: true
+  allowedBuilderImages: ["registry.devplat.internal/mirror/moby/buildkit@sha256:0000000000000000000000000000000000000000000000000000000000000001"]
+  buildkit:
+    seccompLocalhostProfile: profiles/devplat-buildkit.json

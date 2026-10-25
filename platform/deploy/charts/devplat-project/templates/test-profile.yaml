@@ -1,0 +1,66 @@
+{{- /*
+Test-namespace profile read by devplat-namespacer (D19). For every integration/e2e run the controller sends
+(project, runid, profile ref); the namespacer renders exactly the objects of doc 18 section 9.3 from its FIXED
+template, parameterized only by the values below. VAP devplat-namespacer-scope refuses anything else (names, peers,
+ports, ipBlocks outside allowedTestCIDRs, quota over the devplat-cluster-params caps, lookalike names).
+Test Jobs: SA `default`, token off, dnsPolicy None with devplat-dns.
+*/}}
+{{- $p := .Values.project.id }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: devplat-test-profile-{{ $p }}
+  namespace: {{ .Values.platformNamespace }}
+  labels:
+    {{- include "proj.labels" . | nindent 4 }}
+    devplat.io/config: test-profile
+data:
+  profile.yaml: |
+    project: {{ $p }}
+    maxConcurrentNamespaces: {{ .Values.test.maxConcurrentNamespaces }}
+    ttlSecondsAfterSuccess: {{ .Values.test.ttlSecondsAfterSuccess }}
+    ttlSecondsAfterFailure: {{ .Values.test.ttlSecondsAfterFailure }}
+    maxLifetimeSeconds: {{ .Values.test.maxLifetimeSeconds }}
+    pod:
+      serviceAccount: default
+      automountServiceAccountToken: false
+      dnsPolicy: None
+      dnsNameserverService: {{ .Values.platformNamespace }}/devplat-dns
+    # The objects the namespacer creates (doc 18 section 9.3), in order:
+    objects:
+      - kind: Namespace                  # 1
+        name: "{{ .Values.project.namespacePrefix }}-t-<8 hex runid>"
+        labels:
+          devplat.io/managed-by: devplat-controller
+          devplat.io/ns-role: test
+          devplat.io/project: {{ $p }}
+          {{- include "proj.psa" (dict "enforce" "restricted") | nindent 10 }}
+      - kind: NetworkPolicy              # 2 (fixed set; no other names)
+        names:
+          - default-deny-all
+          - allow-intra-namespace        # podSelector {} peers only
+          - allow-devplat-dns            # devplat-dns 1053
+          - allow-fetch-and-artifacts    # devplat-gitbroker-fetch 8081, devplat-artifact-gateway 8082
+          - allow-deps                   # devplat-registry-proxy-{{ $p }} 4873, network-class deps only
+        # never: model-gateway, gitbroker, object store, PostgreSQL, kube-apiserver, kube-dns, internet
+        sandboxEgressCidrs: {{ ternary (toJson .Values.test.sandboxEgress.egressCidrs) "[]" .Values.test.sandboxEgress.enabled }}   # must be within allowedTestCIDRs
+      - kind: ResourceQuota              # 3
+        name: devplat-compute
+        hard:
+          {{- range $k, $v := .Values.test.quota }}
+          {{ $k }}: {{ $v | quote }}
+          {{- end }}
+          persistentvolumeclaims: "0"
+          services.loadbalancers: "0"
+          services.nodeports: "0"
+      - kind: LimitRange                 # 4
+        name: devplat-defaults
+        containerMax: {cpu: {{ .Values.test.limits.maxCpu | quote }}, memory: {{ .Values.test.limits.maxMemory | quote }}}
+      - kind: RoleBinding                # 5
+        name: devplat-controller-test-runner
+        clusterRole: devplat-test-runner
+        subject: {{ .Values.platformNamespace }}/devplat-controller
+      - kind: ConfigMap                  # 6 (immutable)
+        name: devplat-admission-params
+        data:
+          allowedImagePrefixes: {{ include "proj.imagePrefixes" . | quote }}

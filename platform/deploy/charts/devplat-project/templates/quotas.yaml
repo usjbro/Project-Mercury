@@ -1,0 +1,43 @@
+{{- /* Quota backstop (names as in platform/deploy/base/quotas.yaml). Per-run Secrets/ConfigMaps are allowed but
+bounded (doc 18 I-5). Project workloads may not use platform or system PriorityClasses. */}}
+{{- $roles := list "exec" "build" }}
+{{- range $role := $roles }}
+{{- $v := index $.Values $role }}
+{{- $ns := include "proj.ns" (dict "Values" $.Values "role" $role) }}
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: devplat-compute
+  namespace: {{ $ns }}
+  labels:
+    {{- include "proj.labels" $ | nindent 4 }}
+spec:
+  {{- include "proj.quota" $v.quota | nindent 2 }}
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: devplat-no-platform-priority
+  namespace: {{ $ns }}
+  labels:
+    {{- include "proj.labels" $ | nindent 4 }}
+spec:
+  hard:
+    pods: "0"
+  scopeSelector:
+    matchExpressions:
+      - scopeName: PriorityClass
+        operator: In
+        values: ["devplat-platform", "system-cluster-critical", "system-node-critical"]
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: devplat-defaults
+  namespace: {{ $ns }}
+  labels:
+    {{- include "proj.labels" $ | nindent 4 }}
+spec:
+  {{- include "proj.limits" $v.limits | nindent 2 }}
+{{- end }}

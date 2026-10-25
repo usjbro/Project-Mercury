@@ -1,0 +1,63 @@
+{{- /*
+devplat-gitbroker: sole holder of the development-bot GitHub App key (Secret devplat-gitbroker-github-app, DOD-13).
+Mints scoped installation tokens, builds source bundles into the artifact store (src/<project>/<sha>.bundle), validates agent output
+bundles (port of devorch result_errors), pushes dev/* only and opens DRAFT pull requests. Ingress only from the
+controller (base NetworkPolicy); agent pods never reach it. gitbroker has no code path for merge, approve, review,
+ruleset or settings calls - but the App's contents:write + pull_requests:write COULD merge/approve through the API
+(D13). The preventive control is each repository's ruleset (required code-owner review, no bypass; DOD-02), not
+this component. One replica.
+Caller authentication (S-23): every request must carry the controller's projected ServiceAccount token for audience
+gitbroker.callerAuth.audience; gitbroker verifies signature, audience, expiry and subject against the cluster's
+ServiceAccount issuer keys. It fetches the issuer's OIDC discovery document and JWKS from the kube-apiserver with
+an AUTHENTICATED request: its own projected token (audience = the apiserver's default, i.e. no audience set; volume
+issuer-token below; the pod still has automountServiceAccountToken: false). That request is authorized only by the
+base ClusterRoleBinding devplat-gitbroker-issuer-discovery -> system:service-account-issuer-discovery (read-only,
+non-resource URLs) and reaches the apiserver through the base gitbroker egress rule. The token grants nothing else:
+gitbroker has no other Kubernetes RBAC. Cloud overlays with a public issuer may fetch the JWKS from the issuer URL
+instead. mTLS is the documented alternative (not templated).
+*/}}
+{{- $env := printf `- name: DEVPLAT_GITHUB_APP_ID
+  valueFrom:
+    secretKeyRef:
+      name: devplat-gitbroker-github-app
+      key: app-id
+- name: DEVPLAT_GITHUB_APP_KEY_FILE
+  value: "/var/run/devplat/github-app/private-key.pem"
+- name: DEVPLAT_PUSH_REF_PREFIX
+  value: %q
+- name: DEVPLAT_DRAFT_PR_ONLY
+  value: %q
+- name: DEVPLAT_CALLER_AUTH_MODE
+  value: %q
+- name: DEVPLAT_CALLER_AUDIENCE
+  value: %q
+- name: DEVPLAT_CALLER_ALLOWED_SUBJECT
+  value: "system:serviceaccount:%s:devplat-controller"
+- name: DEVPLAT_ISSUER_DISCOVERY_TOKEN_FILE
+  value: "/var/run/devplat/issuer-token/token"`
+  .Values.gitbroker.pushRefPrefix (toString .Values.gitbroker.draftPullRequestsOnly)
+  .Values.gitbroker.callerAuth.mode .Values.gitbroker.callerAuth.audience .Release.Namespace -}}
+{{- $env = printf "%s\n%s" $env (include "devplat.artifactsEnv" (dict "root" . "component" "gitbroker")) -}}
+{{- $vols := `- name: github-app-key
+  secret:
+    secretName: devplat-gitbroker-github-app
+    defaultMode: 0400
+    items:
+      - key: private-key.pem
+        path: private-key.pem
+- name: issuer-token
+  projected:
+    sources:
+      - serviceAccountToken:
+          expirationSeconds: 3600
+          path: token` -}}
+{{- $mounts := `- name: github-app-key
+  mountPath: /var/run/devplat/github-app
+  readOnly: true
+- name: issuer-token
+  mountPath: /var/run/devplat/issuer-token
+  readOnly: true` -}}
+{{ include "devplat.workload" (dict "root" . "name" "devplat-gitbroker" "key" "gitbroker" "comp" .Values.gitbroker "replicas" 1
+    "ports" (list (dict "name" "http" "containerPort" 8080 "servicePort" 8080) (dict "name" "metrics" "containerPort" 9090 "servicePort" 9090))
+    "probe" (dict "readyPath" "/readyz" "livePath" "/healthz" "port" "http")
+    "env" $env "automount" false "volumes" $vols "volumeMounts" $mounts "args" "") }}

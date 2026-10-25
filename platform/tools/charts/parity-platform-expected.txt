@@ -1,0 +1,3 @@
+# Intended differences between the devplat chart (SAs, Roles, RoleBindings in devplat-system) and platform/deploy/base.
+# ServiceAccount of an in-cluster object store; the chart deploys no store (24-... section 3).
+ONLY-BASE ServiceAccount/devplat-artifacts/devplat-artifacts

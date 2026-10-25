@@ -1,0 +1,58 @@
+{{- /*
+devplat-controller: deterministic task state machine, multi-project admission, Job creation/reconciliation,
+gate verification. Sole writer of task state (DB role in Secret devplat-db-controller). 2 replicas, one active
+leader (Lease devplat-controller); the standby does no writes. Test namespaces are requested from the
+devplat-namespacer Deployment (D19). The controller NEVER runs schema migrations (D9): its DB role has no DDL
+rights, and it refuses to start while the schema version differs from the one it was built for.
+Calls to gitbroker carry a projected, audience-bound ServiceAccount token (audience gitbroker.callerAuth.audience),
+which gitbroker verifies (S-23); network position alone is not authentication. Per-run objects: Job dp-<project>-<task>-a<attempt>-<role>-d<dispatch>,
+ConfigMap <job>-contract, Secret <job>-io (doc 16, doc 18 section 8.2).
+*/}}
+{{- $ns := .Release.Namespace -}}
+{{- $env := printf `- name: DEVPLAT_LEADER_ELECTION_LEASE
+  value: "devplat-controller"
+- name: DEVPLAT_LEASE_DURATION_SECONDS
+  value: %q
+- name: DEVPLAT_RENEW_DEADLINE_SECONDS
+  value: %q
+- name: DEVPLAT_RETRY_PERIOD_SECONDS
+  value: %q
+- name: DEVPLAT_GLOBAL_MAX_JOBS
+  value: %q
+- name: DEVPLAT_DEFAULT_PROJECT_MAX_JOBS
+  value: %q
+- name: DEVPLAT_TEST_NS_TTL_SECONDS
+  value: %q
+- name: DEVPLAT_MAX_TEST_NS_PER_PROJECT
+  value: %q
+- name: DEVPLAT_NAMESPACER_URL
+  value: "http://devplat-namespacer.%s.svc:8083"
+- name: DEVPLAT_ARTIFACT_GATEWAY_ADMIN_URL
+  value: "https://devplat-artifact-gateway.%s.svc:9444"
+- name: DEVPLAT_GITBROKER_TOKEN_FILE
+  value: "/var/run/devplat/gitbroker-token/token"
+- name: DEVPLAT_RUN_MIGRATIONS
+  value: "never"
+- name: DEVPLAT_GITBROKER_URL
+  value: "http://devplat-gitbroker.%s.svc:8080"
+- name: DEVPLAT_FETCH_URL
+  value: "http://devplat-gitbroker-fetch.%s.svc:8081"
+- name: DEVPLAT_MODEL_GATEWAY_ADMIN_URL
+  value: "https://devplat-model-gateway.%s.svc:9443"
+- name: DEVPLAT_DNS_SERVICE
+  value: "devplat-dns"`
+  (toString .Values.controller.leaderElection.leaseDurationSeconds)
+  (toString .Values.controller.leaderElection.renewDeadlineSeconds)
+  (toString .Values.controller.leaderElection.retryPeriodSeconds)
+  (toString .Values.controller.admission.globalMaxConcurrentJobs)
+  (toString .Values.controller.admission.defaultPerProjectMaxConcurrentJobs)
+  (toString .Values.controller.admission.testNamespaceTtlSeconds)
+  (toString .Values.controller.admission.maxTestNamespacesPerProject)
+  $ns $ns $ns $ns $ns -}}
+{{- $env = printf "%s\n%s\n%s" $env (include "devplat.dbEnv" (dict "root" . "role" "controller")) (include "devplat.artifactsEnv" (dict "root" . "component" "controller")) -}}
+{{ include "devplat.workload" (dict "root" . "name" "devplat-controller" "key" "controller" "comp" .Values.controller "replicas" .Values.controller.replicas
+    "ports" (list (dict "name" "metrics" "containerPort" 9090 "servicePort" 9090))
+    "probe" (dict "readyPath" "/readyz" "livePath" "/healthz" "port" "metrics")
+    "env" $env "automount" true
+    "volumes" (printf "- name: gitbroker-token\n  projected:\n    sources:\n      - serviceAccountToken:\n          audience: %s\n          expirationSeconds: 3600\n          path: token" .Values.gitbroker.callerAuth.audience)
+    "volumeMounts" "- name: gitbroker-token\n  mountPath: /var/run/devplat/gitbroker-token\n  readOnly: true" "args" "") }}

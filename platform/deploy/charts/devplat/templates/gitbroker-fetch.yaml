@@ -1,0 +1,11 @@
+{{- /*
+devplat-gitbroker-fetch: keyless bundle server for fetch init containers (doc 18 sections 4 and 8.2).
+Redeems one-time tokens (from the per-run Secret <job>-io) and streams the matching bundle
+src/<project>/<sha>.bundle from the artifact store (credentials devplat-artifacts-gitbroker-fetch: read-only on src/). It holds NO GitHub key and cannot push.
+Ingress from exec and test pods on 8081 (base NetworkPolicy).
+*/}}
+{{- $env := include "devplat.artifactsEnv" (dict "root" . "component" "gitbroker-fetch") -}}
+{{ include "devplat.workload" (dict "root" . "name" "devplat-gitbroker-fetch" "key" "gitbrokerFetch" "comp" .Values.gitbrokerFetch "replicas" .Values.gitbrokerFetch.replicas
+    "ports" (list (dict "name" "fetch" "containerPort" 8081 "servicePort" 8081) (dict "name" "metrics" "containerPort" 9090 "servicePort" 9090))
+    "probe" (dict "readyPath" "/readyz" "livePath" "/healthz" "port" "fetch")
+    "env" $env "automount" false "volumes" "" "volumeMounts" "" "args" "") }}

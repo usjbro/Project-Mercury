@@ -1,0 +1,533 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "devplat-project chart values",
+  "description": "Per-project namespace-layer values, generated from the project configuration (R6 fix round: D10, D14, D15, D16, D19, D20, D24). Unknown keys are rejected.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "project",
+    "platformNamespace",
+    "imageRegistry",
+    "assurance",
+    "registryProxy",
+    "exec",
+    "build",
+    "test"
+  ],
+  "definitions": {
+    "dnsLabel": {
+      "type": "string",
+      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+      "maxLength": 63
+    },
+    "quantity": {
+      "type": "string",
+      "pattern": "^[0-9]+(\\.[0-9]+)?(m|Ki|Mi|Gi|Ti|k|M|G|T)?$"
+    },
+    "count": {
+      "type": "string",
+      "pattern": "^[0-9]+$"
+    },
+    "boundedObjects": {
+      "type": "string",
+      "pattern": "^([1-9][0-9]?|1[0-9]{2}|200)$",
+      "description": "1..200: per-run ConfigMaps/Secrets must be possible, but bounded (doc 18 I-5)."
+    },
+    "cidr": {
+      "type": "string",
+      "pattern": "^([0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}$|^[0-9a-fA-F:]+/[0-9]{1,3}$"
+    },
+    "quota": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requests.cpu",
+        "limits.cpu",
+        "requests.memory",
+        "limits.memory",
+        "requests.ephemeral-storage",
+        "limits.ephemeral-storage",
+        "pods",
+        "count/jobs.batch",
+        "persistentvolumeclaims",
+        "requests.storage",
+        "configmaps",
+        "secrets"
+      ],
+      "properties": {
+        "requests.cpu": {
+          "$ref": "#/definitions/quantity"
+        },
+        "limits.cpu": {
+          "$ref": "#/definitions/quantity"
+        },
+        "requests.memory": {
+          "$ref": "#/definitions/quantity"
+        },
+        "limits.memory": {
+          "$ref": "#/definitions/quantity"
+        },
+        "requests.ephemeral-storage": {
+          "$ref": "#/definitions/quantity"
+        },
+        "limits.ephemeral-storage": {
+          "$ref": "#/definitions/quantity"
+        },
+        "pods": {
+          "$ref": "#/definitions/count"
+        },
+        "count/jobs.batch": {
+          "$ref": "#/definitions/count"
+        },
+        "persistentvolumeclaims": {
+          "$ref": "#/definitions/count"
+        },
+        "requests.storage": {
+          "$ref": "#/definitions/quantity"
+        },
+        "configmaps": {
+          "$ref": "#/definitions/boundedObjects"
+        },
+        "secrets": {
+          "$ref": "#/definitions/boundedObjects"
+        }
+      }
+    },
+    "resourceSet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cpu",
+        "memory"
+      ],
+      "properties": {
+        "cpu": {
+          "$ref": "#/definitions/quantity"
+        },
+        "memory": {
+          "$ref": "#/definitions/quantity"
+        },
+        "ephemeral-storage": {
+          "$ref": "#/definitions/quantity"
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max",
+        "min",
+        "default",
+        "defaultRequest",
+        "pvcMaxStorage"
+      ],
+      "properties": {
+        "max": {
+          "$ref": "#/definitions/resourceSet"
+        },
+        "min": {
+          "$ref": "#/definitions/resourceSet"
+        },
+        "default": {
+          "$ref": "#/definitions/resourceSet"
+        },
+        "defaultRequest": {
+          "$ref": "#/definitions/resourceSet"
+        },
+        "pvcMaxStorage": {
+          "$ref": "#/definitions/quantity"
+        }
+      }
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^(sha256:[a-f0-9]{64})?$"
+    },
+    "testQuota": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pods",
+        "requests.cpu",
+        "limits.cpu",
+        "requests.memory",
+        "limits.memory",
+        "requests.ephemeral-storage",
+        "limits.ephemeral-storage",
+        "services",
+        "secrets",
+        "configmaps"
+      ],
+      "description": "Doc 18 section 9.3 key set. Caps are enforced by base VAP devplat-namespacer-scope from devplat-cluster-params; the bounds here mirror its defaults.",
+      "properties": {
+        "pods": {
+          "type": "string",
+          "pattern": "^([1-9]|1[0-9]|20)$"
+        },
+        "requests.cpu": {
+          "$ref": "#/definitions/quantity"
+        },
+        "limits.cpu": {
+          "$ref": "#/definitions/quantity"
+        },
+        "requests.memory": {
+          "$ref": "#/definitions/quantity"
+        },
+        "limits.memory": {
+          "$ref": "#/definitions/quantity"
+        },
+        "requests.ephemeral-storage": {
+          "$ref": "#/definitions/quantity"
+        },
+        "limits.ephemeral-storage": {
+          "$ref": "#/definitions/quantity"
+        },
+        "services": {
+          "type": "string",
+          "pattern": "^([0-9]|1[0-9]|20)$"
+        },
+        "secrets": {
+          "type": "string",
+          "pattern": "^([1-9]|[1-4][0-9]|50)$"
+        },
+        "configmaps": {
+          "type": "string",
+          "pattern": "^([1-9]|[1-4][0-9]|50)$"
+        }
+      }
+    }
+  },
+  "properties": {
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "namespacePrefix",
+        "clusterRef"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{1,22}[a-z0-9]$",
+          "description": "D24: 3-24 characters; keeps proj-<id>-t-<8> and Job names within 63 characters."
+        },
+        "namespacePrefix": {
+          "type": "string",
+          "pattern": "^proj-[a-z][a-z0-9-]{1,22}[a-z0-9]$"
+        },
+        "clusterRef": {
+          "$ref": "#/definitions/dnsLabel"
+        }
+      }
+    },
+    "platformNamespace": {
+      "const": "devplat-system"
+    },
+    "exec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requiredRuntimeClassName",
+        "quota",
+        "limits"
+      ],
+      "properties": {
+        "requiredRuntimeClassName": {
+          "enum": [
+            "",
+            "gvisor",
+            "kata"
+          ]
+        },
+        "quota": {
+          "$ref": "#/definitions/quota"
+        },
+        "limits": {
+          "$ref": "#/definitions/limits"
+        }
+      }
+    },
+    "build": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "allowedBuilderImages",
+        "buildkit",
+        "quota",
+        "limits"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "allowedBuilderImages": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._-]+)+@sha256:[a-f0-9]{64}$"
+          },
+          "uniqueItems": true
+        },
+        "quota": {
+          "$ref": "#/definitions/quota"
+        },
+        "limits": {
+          "$ref": "#/definitions/limits"
+        },
+        "buildkit": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "imagePrefix",
+            "seccompLocalhostProfile",
+            "args"
+          ],
+          "properties": {
+            "seccompLocalhostProfile": {
+              "type": "string",
+              "pattern": "^([a-zA-Z0-9._/-]+\\.json)?$"
+            },
+            "args": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "pattern": "^[^ ]+$"
+              },
+              "description": "Space-free tokens; joined with spaces into base params buildkitArgs."
+            },
+            "imagePrefix": {
+              "type": "string",
+              "pattern": "^[a-z0-9.-]+(:[0-9]+)?/mirror/[a-z0-9._/-]+@sha256:$"
+            }
+          }
+        }
+      },
+      "if": {
+        "properties": {
+          "enabled": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "allowedBuilderImages": {
+            "minItems": 1
+          },
+          "buildkit": {
+            "properties": {
+              "seccompLocalhostProfile": {
+                "minLength": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    "test": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maxConcurrentNamespaces",
+        "ttlSecondsAfterSuccess",
+        "ttlSecondsAfterFailure",
+        "maxLifetimeSeconds",
+        "quota",
+        "limits",
+        "sandboxEgress"
+      ],
+      "properties": {
+        "maxConcurrentNamespaces": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 20
+        },
+        "ttlSecondsAfterSuccess": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 86400
+        },
+        "ttlSecondsAfterFailure": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 86400
+        },
+        "maxLifetimeSeconds": {
+          "type": "integer",
+          "minimum": 300,
+          "maximum": 86400
+        },
+        "quota": {
+          "$ref": "#/definitions/testQuota"
+        },
+        "sandboxEgress": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "egressCidrs"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "egressCidrs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/cidr"
+              }
+            }
+          }
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "maxCpu",
+            "maxMemory"
+          ],
+          "properties": {
+            "maxCpu": {
+              "$ref": "#/definitions/quantity"
+            },
+            "maxMemory": {
+              "$ref": "#/definitions/quantity"
+            }
+          }
+        }
+      }
+    },
+    "imageRegistry": {
+      "type": "string",
+      "pattern": "^[a-z0-9.-]+(:[0-9]+)?(/[a-z0-9._-]+)*$"
+    },
+    "assurance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "reducedAssuranceFact"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "standard",
+            "reduced"
+          ]
+        },
+        "reducedAssuranceFact": {
+          "type": "string",
+          "pattern": "^([A-Z0-9][A-Z0-9-]*)?$"
+        }
+      },
+      "if": {
+        "properties": {
+          "mode": {
+            "const": "reduced"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "reducedAssuranceFact": {
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "registryProxy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "image",
+        "npmUplinks",
+        "resources"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "digest"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "pattern": "^mirror/[a-z0-9]([a-z0-9._/-]*[a-z0-9])?$"
+            },
+            "digest": {
+              "$ref": "#/definitions/digest"
+            }
+          }
+        },
+        "npmUplinks": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^https://[a-z0-9.-]+(/.*)?$"
+          }
+        },
+        "resources": {
+          "type": "object"
+        }
+      },
+      "if": {
+        "properties": {
+          "enabled": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "npmUplinks": {
+            "minItems": 1
+          },
+          "image": {
+            "properties": {
+              "digest": {
+                "minLength": 1
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "assurance": {
+            "properties": {
+              "mode": {
+                "const": "reduced"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "build": {
+            "properties": {
+              "enabled": {
+                "const": false
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

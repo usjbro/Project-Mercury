@@ -1,0 +1,29 @@
+{{- /*
+devplat-artifact-gateway (D10): the only artifact path for agent, build and test pods. They PUT
+runs/<job-uid>/{result.json, result.bundle, agent.stream.jsonl, runner.json, fetch.log} to :8082 with the per-Job
+one-time token from their <job>-io Secret (TTL = Job deadline + 15 min, D11). The gateway checks the token's
+(project, job uid), enforces the caps below and writes to bucket devplat-<project> with its own S3 credentials
+(Secret devplat-artifacts-artifact-gateway). Project pods never reach the object store; presigned URLs are used
+only between platform components. The controller mints the token and registers only its SHA-256
+(set_job_tokens()); every upload is authorized in PostgreSQL (authorize_upload()), never by gateway state.
+Ingress: uploads :8082 from exec, build and test pods; admin :9444 (admin channel only) from the controller only
+(base NetworkPolicy).
+*/}}
+{{- $l := .Values.artifactGateway.limits -}}
+{{- $env := printf `- name: DEVPLAT_LIMIT_RESULT_JSON_BYTES
+  value: %q
+- name: DEVPLAT_LIMIT_RESULT_BUNDLE_BYTES
+  value: %q
+- name: DEVPLAT_LIMIT_LOGS_BYTES
+  value: %q
+- name: DEVPLAT_LIMIT_TOTAL_PER_RUN_BYTES
+  value: %q
+- name: DEVPLAT_ACCEPTED_FILES
+  value: "result.json,result.bundle,agent.stream.jsonl,runner.json,fetch.log"`
+  (toString (int $l.resultJsonBytes)) (toString (int $l.resultBundleBytes)) (toString (int $l.logsBytes)) (toString (int $l.totalPerRunBytes)) -}}
+{{- $env = printf "%s\n%s" $env (include "devplat.artifactsEnv" (dict "root" . "component" "artifact-gateway")) -}}
+{{- $env = printf "%s\n%s" $env (include "devplat.dbEnv" (dict "root" . "role" "artifact-gateway")) -}}
+{{ include "devplat.workload" (dict "root" . "name" "devplat-artifact-gateway" "key" "artifactGateway" "comp" .Values.artifactGateway "replicas" .Values.artifactGateway.replicas
+    "ports" (list (dict "name" "upload" "containerPort" 8082 "servicePort" 8082) (dict "name" "admin" "containerPort" 9444 "servicePort" 9444) (dict "name" "metrics" "containerPort" 9090 "servicePort" 9090))
+    "probe" (dict "readyPath" "/readyz" "livePath" "/healthz" "port" "upload")
+    "env" $env "automount" false "volumes" "" "volumeMounts" "" "args" "") }}

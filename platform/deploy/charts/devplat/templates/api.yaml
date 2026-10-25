@@ -1,0 +1,30 @@
+{{- /*
+devplat-api: REST API + dashboard backend. Operator facts and approvals only from an OIDC-authenticated subject listed in
+operator_identities (D2: checked inside record_operator_fact; the list comes from api.oidc.allowedSubjects via the
+migrator Job; DOD-14; closes v1 R5 N-06). It writes operator facts (Secret devplat-db-api), never task
+state. Linear read token: Secret devplat-linear-token (optional; writes only for a project whose issue_tracker.write_fact is recorded).
+*/}}
+{{- $env := printf `- name: DEVPLAT_OIDC_ISSUER_URL
+  value: %q
+- name: DEVPLAT_OIDC_CLIENT_ID
+  value: %q
+- name: DEVPLAT_OPERATOR_IDENTITIES_FILE
+  value: "/etc/devplat/identities/identities.json"
+- name: DEVPLAT_OIDC_CLIENT_SECRET
+  valueFrom:
+    secretKeyRef:
+      name: devplat-oidc-client
+      key: client-secret
+      optional: true
+- name: DEVPLAT_LINEAR_TOKEN
+  valueFrom:
+    secretKeyRef:
+      name: devplat-linear-token
+      key: token
+      optional: true`
+  .Values.api.oidc.issuerUrl .Values.api.oidc.clientId -}}
+{{- $env = printf "%s\n%s\n%s" $env (include "devplat.dbEnv" (dict "root" . "role" "api")) (include "devplat.artifactsEnv" (dict "root" . "component" "api")) -}}
+{{ include "devplat.workload" (dict "root" . "name" "devplat-api" "key" "api" "comp" .Values.api "replicas" .Values.api.replicas
+    "ports" (list (dict "name" "http" "containerPort" 8080 "servicePort" 8080) (dict "name" "metrics" "containerPort" 9090 "servicePort" 9090))
+    "probe" (dict "readyPath" "/readyz" "livePath" "/healthz" "port" "http")
+    "env" $env "automount" false "volumes" "- name: identities\n  configMap:\n    name: devplat-operator-identities" "volumeMounts" "- name: identities\n  mountPath: /etc/devplat/identities\n  readOnly: true" "args" "") }}

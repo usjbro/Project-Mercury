@@ -1,0 +1,447 @@
+# devplat base: RBAC. Status: Documented only / not deployed.
+# Design and justification of every rule: docs/mercury/development-orchestration/18-kubernetes-security-model.md §4.
+#
+# Principles
+#  - Kubernetes API identities that write: devplat-controller (Jobs and per-run objects in project namespaces) and
+#    devplat-namespacer (test namespaces, own Deployment, D19). api, gitbroker, gitbroker-fetch, model-gateway,
+#    artifact-gateway, registry proxies, migrator and every project ServiceAccount have ZERO RBAC.
+#  - The controller can create Jobs (never bare Pods), patch them only to unsuspend (admission-checked), and
+#    create/get/delete per-run ConfigMaps/Secrets by name (owner-referenced to the Job). It cannot list, watch,
+#    update or patch any Secret, and holds no Secret rights at all outside project namespaces.
+#  - No pods/exec, pods/attach, pods/portforward, pods/ephemeralcontainers, no update on Jobs, no pod writes.
+#  - ClusterRole objects devplat-job-runner and devplat-test-runner are granted ONLY through namespaced RoleBindings.
+#  - Cluster-wide grants: devplat-namespacer (the only cluster-scoped WRITE), devplat-dns (read-only discovery) and
+#    devplat-gitbroker-issuer-discovery (built-in, read-only issuer JWKS, S-23).
+#    devplat-namespacer (namespaces + fixed bootstrap objects of test namespaces), constrained by
+#    ValidatingAdmissionPolicy devplat-namespacer-scope (names, labels, NetworkPolicy peers/ports, quota caps).
+#  - The controller no longer impersonates the namespacer (R6 D19): it calls the namespacer's API (:8083) with
+#    (project, runid, profile ref) only. A compromised controller therefore cannot choose test-namespace content.
+#  - Operator access (cluster-admin break-glass, OIDC) is outside this base and bound by the operator.
+#  - Third-party operators (CloudNativePG; an S3-compatible store operator if one is run in-cluster) bring their own
+#    RBAC: review before install (doc 18 §7 note 3).
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: devplat-job-runner
+  labels:
+    app.kubernetes.io/part-of: devplat
+  annotations:
+    devplat.io/grant-scope: "namespaced only: bound by RoleBinding in proj-<P>-exec and proj-<P>-build; never by ClusterRoleBinding"
+rules:
+  # patch: only to unsuspend (suspended-setup protocol, doc 16 §3 step 7); every UPDATE/PATCH by the controller is
+  # restricted to spec.suspend true->false by ValidatingAdmissionPolicy devplat-controller-job-update.
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["events.k8s.io"]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+  # Per-run contract ConfigMap <job>-contract and per-run Secret <job>-io (one-time fetch URL, presigned upload
+  # targets, gateway run token), owner-referenced to the Job. get: verify the owner uid on AlreadyExists;
+  # delete: replace a stale object of a deleted Job of the same name. No list/watch/update/patch: the controller
+  # cannot enumerate or modify Secrets. Project namespaces hold no other Secrets (quota + policy
+  # devplat-proj-pod-identity: pods mount only dp-* Secrets); normal cleanup is the garbage collector.
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets"]
+    verbs: ["create", "get", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: devplat-test-runner
+  labels:
+    app.kubernetes.io/part-of: devplat
+  annotations:
+    devplat.io/grant-scope: "namespaced only: bound by devplat-namespacer via RoleBinding inside proj-<P>-t-<runid>"
+rules:
+  # patch: only to unsuspend (suspended-setup protocol, doc 16 §3 step 7); every UPDATE/PATCH by the controller is
+  # restricted to spec.suspend true->false by ValidatingAdmissionPolicy devplat-controller-job-update.
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["events.k8s.io"]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets"]
+    verbs: ["create", "get", "delete"]
+  # Test fixtures declared in the project config (e.g. a database for integration tests). Objects die with the
+  # namespace; no delete verb is needed except for Jobs (cancellation).
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["create", "get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    verbs: ["create", "get", "list", "watch"]
+---
+# The only cluster-scoped write permission in devplat. Justification: Namespaces are cluster-scoped, so creating
+# ephemeral test namespaces cannot be expressed with a Role. Bootstrap objects (default-deny NetworkPolicy,
+# ResourceQuota, LimitRange, RoleBinding for the controller) must exist in a namespace that does not exist yet.
+# Every request by this identity is checked by ValidatingAdmissionPolicy devplat-namespacer-scope:
+# namespace name exactly proj-<project label>-t-<8 hex>, mandatory labels incl. PSA restricted, delete only of
+# managed test namespaces, RoleBindings only to ClusterRole devplat-test-runner for the controller SA, NetworkPolicies
+# only from the fixed peer/port set, quotas and limit ranges within the caps of ConfigMap devplat-cluster-params,
+# the per-namespace image params ConfigMap only with the computed content.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: devplat-namespacer
+  labels:
+    app.kubernetes.io/part-of: devplat
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["create", "delete", "get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["resourcequotas", "limitranges", "configmaps"]
+    verbs: ["create"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["rolebindings"]
+    verbs: ["create"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles"]
+    verbs: ["bind"]
+    resourceNames: ["devplat-test-runner"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: devplat-namespacer
+  labels:
+    app.kubernetes.io/part-of: devplat
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: devplat-namespacer
+subjects:
+  - kind: ServiceAccount
+    name: devplat-namespacer
+    namespace: devplat-system
+---
+# devplat-dns (CoreDNS, kubernetes plugin only, no forward): read-only discovery, same rights as the cluster DNS.
+# Cluster-scoped READ is required because Service names in dynamically created test namespaces must resolve.
+# Residual: any pod allowed to query devplat-dns can enumerate Service names cluster-wide (names only).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: devplat-dns
+  labels:
+    app.kubernetes.io/part-of: devplat
+rules:
+  - apiGroups: [""]
+    resources: ["services", "namespaces"]
+    verbs: ["list", "watch"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: devplat-dns
+  labels:
+    app.kubernetes.io/part-of: devplat
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: devplat-dns
+subjects:
+  - kind: ServiceAccount
+    name: devplat-dns
+    namespace: devplat-system
+---
+# ---- devplat-system: controller ----
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: devplat-controller-leader-election
+  namespace: devplat-system
+rules:
+  # create cannot be restricted by resourceNames; get/update are restricted to the one Lease.
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["create"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "update"]
+    resourceNames: ["devplat-controller"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  - apiGroups: ["events.k8s.io"]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+---
+# ClusterIP lookup of the services agent pods reach (dnsConfig nameserver = devplat-dns ClusterIP; optional hostAliases).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: devplat-controller-service-lookup
+  namespace: devplat-system
+rules:
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get"]
+    resourceNames: ["devplat-model-gateway", "devplat-gitbroker-fetch", "devplat-artifact-gateway", "devplat-dns"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: devplat-controller-leader-election
+  namespace: devplat-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: devplat-controller-leader-election
+subjects:
+  - kind: ServiceAccount
+    name: devplat-controller
+    namespace: devplat-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: devplat-controller-service-lookup
+  namespace: devplat-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: devplat-controller-service-lookup
+subjects:
+  - kind: ServiceAccount
+    name: devplat-controller
+    namespace: devplat-system
+---
+# Per project (rendered by each devplat-project release): ClusterIP lookup of that project's registry proxy only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: devplat-controller-service-lookup-mercury
+  namespace: devplat-system
+rules:
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get"]
+    resourceNames: ["devplat-registry-proxy-mercury"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: devplat-controller-service-lookup-mercury
+  namespace: devplat-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: devplat-controller-service-lookup-mercury
+subjects:
+  - kind: ServiceAccount
+    name: devplat-controller
+    namespace: devplat-system
+---
+# Per project (rendered by each devplat-project release): ClusterIP lookup of that project's registry proxy only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: devplat-controller-service-lookup-jupiter
+  namespace: devplat-system
+rules:
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get"]
+    resourceNames: ["devplat-registry-proxy-jupiter"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: devplat-controller-service-lookup-jupiter
+  namespace: devplat-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: devplat-controller-service-lookup-jupiter
+subjects:
+  - kind: ServiceAccount
+    name: devplat-controller
+    namespace: devplat-system
+---
+# D19: the namespacer renders test namespaces from the projects' test-profile ConfigMaps
+# (devplat-test-profile-<P>, devplat-system). Read-only, ConfigMaps only; names are per project, so list/watch
+# cannot be restricted by resourceNames. Residual: it can read every ConfigMap in devplat-system (no Secrets).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: devplat-namespacer-profiles
+  namespace: devplat-system
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: devplat-namespacer-profiles
+  namespace: devplat-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: devplat-namespacer-profiles
+subjects:
+  - kind: ServiceAccount
+    name: devplat-namespacer
+    namespace: devplat-system
+---
+# S-23 (callerAuth: projected-token): gitbroker verifies the controller's audience-bound projected token offline
+# against the cluster's service-account issuer keys (GET /.well-known/openid-configuration and /openid/v1/jwks on
+# the kube-apiserver). Binding to the built-in read-only ClusterRole system:service-account-issuer-discovery
+# (non-resource URLs only) is explicit here instead of relying on the bootstrap binding to all service accounts.
+# The gitbroker pod therefore mounts its own apiserver-audience projected token for this call only.
+# Cloud profiles whose issuer is public may fetch the JWKS from the issuer URL instead (overlay).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: devplat-gitbroker-issuer-discovery
+  labels:
+    app.kubernetes.io/part-of: devplat
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:service-account-issuer-discovery
+subjects:
+  - kind: ServiceAccount
+    name: devplat-gitbroker
+    namespace: devplat-system
+---
+# ---- controller in project namespaces (namespaced grant of ClusterRole devplat-job-runner) ----
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: devplat-controller-job-runner
+  namespace: proj-mercury-exec
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: devplat-job-runner
+subjects:
+  - kind: ServiceAccount
+    name: devplat-controller
+    namespace: devplat-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: devplat-controller-job-runner
+  namespace: proj-mercury-build
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: devplat-job-runner
+subjects:
+  - kind: ServiceAccount
+    name: devplat-controller
+    namespace: devplat-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: devplat-controller-job-runner
+  namespace: proj-jupiter-exec
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: devplat-job-runner
+subjects:
+  - kind: ServiceAccount
+    name: devplat-controller
+    namespace: devplat-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: devplat-controller-job-runner
+  namespace: proj-jupiter-build
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: devplat-job-runner
+subjects:
+  - kind: ServiceAccount
+    name: devplat-controller
+    namespace: devplat-system
+---
+# ---- observability: Prometheus service discovery, namespaced to the platform namespaces only ----
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: devplat-prometheus-discovery
+  namespace: devplat-system
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "endpoints"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: devplat-prometheus-discovery
+  namespace: devplat-artifacts
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "endpoints"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: devplat-prometheus-discovery
+  namespace: devplat-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: devplat-prometheus-discovery
+subjects:
+  - kind: ServiceAccount
+    name: devplat-prometheus
+    namespace: devplat-observability
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: devplat-prometheus-discovery
+  namespace: devplat-artifacts
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: devplat-prometheus-discovery
+subjects:
+  - kind: ServiceAccount
+    name: devplat-prometheus
+    namespace: devplat-observability

@@ -1,0 +1,52 @@
+{
+  "schema": "devplat.task_result.v2",
+  "project_id": "mercury",
+  "task_id": "DT-0001",
+  "contract_version": 1,
+  "attempt": 2,
+  "agent": "mdev-backend-engineer",
+  "status": "completed",
+  "summary": "Clamping and negative test added (CR-DT0001-01).",
+  "head_commit": "583b776a7dcc849d5b606620bddffdb4b29627a4",
+  "modified_files": [
+    "src/core/config/load.ts",
+    "src/core/log/redact.ts",
+    "test/unit/core/config/clamp.test.ts"
+  ],
+  "commits": [
+    "583b776a7dcc849d5b606620bddffdb4b29627a4",
+    "e51956d9af81eaf457827e242123c33f553d2e94",
+    "36f16a2117742a0b8ea47353e642a7f18888f7bf"
+  ],
+  "tests": [
+    {
+      "id": "TC-UNIT-061",
+      "command": "npm test -- test/unit/core/config",
+      "exit_code": 0,
+      "outcome": "passed",
+      "runs": 1
+    },
+    {
+      "id": "TC-SEC-150",
+      "command": "npm test -- test/unit/core/log/redactor",
+      "exit_code": 0,
+      "outcome": "passed",
+      "runs": 1
+    },
+    {
+      "id": "typecheck",
+      "command": "npm run typecheck",
+      "exit_code": 0,
+      "outcome": "passed",
+      "runs": 1
+    }
+  ],
+  "defects": [],
+  "findings": [],
+  "outstanding_dependencies": [],
+  "blocking_conditions": [],
+  "recommended_next_action": "next",
+  "evidence_refs": [
+    "/out/result.json"
+  ]
+}

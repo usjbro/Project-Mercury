@@ -1,0 +1,163 @@
+{{- if .Values.registryProxy.enabled }}
+{{- /*
+Read-only npm registry proxy for ONE project (D14): devplat-registry-proxy-<P> in the platform namespace.
+Publish, unpublish and adduser are disabled; upstreams = the project's registries_allowlist (npmUplinks). No
+credentials. Ingress (NetworkPolicy registry-proxy-<P> below, identical to base) only from this project's deps-class and build pods; egress to public 443.
+*/}}
+{{- $id := .Values.project.id }}
+{{- $name := printf "devplat-registry-proxy-%s" $id }}
+{{- $d := required "registryProxy.image.digest is required when registryProxy.enabled" .Values.registryProxy.image.digest }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Values.platformNamespace }}
+  labels:
+    {{- include "proj.labels" . | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Values.platformNamespace }}
+  labels:
+    {{- include "proj.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    storage: /verdaccio/storage
+    web:
+      enable: false
+    auth:
+      htpasswd:
+        file: /verdaccio/storage/htpasswd
+        max_users: -1          # adduser disabled
+    uplinks:
+      {{- range $i, $u := .Values.registryProxy.npmUplinks }}
+      u{{ $i }}:
+        url: {{ $u | quote }}
+      {{- end }}
+    packages:
+      "**":
+        access: $all
+        publish: devplat-nobody      # no such user/group: publish disabled
+        unpublish: devplat-nobody
+        proxy: {{ range $i, $u := .Values.registryProxy.npmUplinks }}{{ if $i }} {{ end }}u{{ $i }}{{ end }}
+    listen: 0.0.0.0:4873
+    log: {type: stdout, format: json, level: info}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Values.platformNamespace }}
+  labels:
+    {{- include "proj.labels" . | nindent 4 }}
+    app.kubernetes.io/name: {{ $name }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $name }}
+  template:
+    metadata:
+      labels:
+        {{- include "proj.labels" . | nindent 8 }}
+        app.kubernetes.io/name: {{ $name }}
+    spec:
+      serviceAccountName: {{ $name }}
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      priorityClassName: devplat-platform
+      nodeSelector:
+        devplat.io/pool: control
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 65533
+        fsGroup: 65533
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: registry-proxy
+          image: {{ .Values.imageRegistry }}/{{ .Values.registryProxy.image.name }}@{{ $d }}
+          ports:
+            - {name: npm, containerPort: 4873, protocol: TCP}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            privileged: false
+            capabilities: {drop: ["ALL"]}
+          readinessProbe:
+            httpGet: {path: /-/ping, port: npm}
+          resources:
+            {{- toYaml .Values.registryProxy.resources | nindent 12 }}
+          volumeMounts:
+            - {name: config, mountPath: /verdaccio/conf, readOnly: true}
+            - {name: storage, mountPath: /verdaccio/storage}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: config
+          configMap: {name: {{ $name }}}
+        - name: storage
+          emptyDir: {sizeLimit: 5Gi}
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Values.platformNamespace }}
+  labels:
+    {{- include "proj.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: {{ $name }}
+  ports:
+    - {name: npm, port: 4873, targetPort: npm, protocol: TCP}
+---
+# Same policy as platform/deploy/base networkpolicies.yaml registry-proxy-<project> (D14): ingress only from this
+# project's deps-class exec/test pods and its build pods; egress only to public 443 (cluster ranges excluded).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: registry-proxy-{{ $id }}
+  namespace: {{ .Values.platformNamespace }}
+  labels:
+    {{- include "proj.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $name }}
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchExpressions:
+              - {key: devplat.io/ns-role, operator: In, values: ["exec", "test"]}
+              - {key: devplat.io/project, operator: In, values: ["{{ $id }}"]}
+          podSelector:
+            matchExpressions:
+              - {key: devplat.io/network-class, operator: In, values: ["deps"]}
+        - namespaceSelector:
+            matchExpressions:
+              - {key: devplat.io/ns-role, operator: In, values: ["build"]}
+              - {key: devplat.io/project, operator: In, values: ["{{ $id }}"]}
+          podSelector:
+            matchExpressions:
+              - {key: devplat.io/workload, operator: In, values: ["build"]}
+      ports:
+        - {protocol: TCP, port: 4873}
+        - {protocol: TCP, port: 5000}
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: ["10.0.0.0/8", "100.64.0.0/10", "169.254.0.0/16", "172.16.0.0/12", "192.168.0.0/16"]
+        - ipBlock:
+            cidr: ::/0
+            except: ["fc00::/7", "fe80::/10"]
+      ports:
+        - {protocol: TCP, port: 443}
+{{- end }}

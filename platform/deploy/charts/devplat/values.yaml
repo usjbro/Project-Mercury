@@ -1,0 +1,238 @@
+# devplat control-plane values (proposed; Architecture Amendment 001; R6 fix round D2, D9, D10, D12, D15, D16,
+# D19, S-22, S-24).
+# STATUS: no devplat images exist yet. Every image digest is empty, and the templates `fail` until a real
+# digest (sha256:<64 hex>) is supplied. Images are always referenced by digest, never by tag.
+#
+# IMAGES (D15): platform namespaces admit only <imageRegistry>/devplat/... and <imageRegistry>/mirror/...
+# Platform images are published as ghcr.io/OWNER/devplat-<component> (no image exists yet) and mirrored into
+# <imageRegistry>/devplat/<component>; third-party images (CoreDNS, PostgreSQL) come from <imageRegistry>/mirror/.
+# The schema enforces the devplat/ | mirror/ prefix.
+#
+# SECRETS are never values, and their NAMES are fixed by the security model (doc 18 section 8.1), because VAP
+# devplat-secret-pinning pins each name to one ServiceAccount. The operator creates them out of band:
+#   devplat-gitbroker-github-app        (keys: app-id, private-key.pem)               -> devplat-gitbroker
+#   devplat-model-gateway-llm-keys      (keys: <provider>-api-key, and <provider>-api-key-reduced for
+#                                        reduced-assurance projects, D16)              -> devplat-model-gateway
+#   devplat-db-controller | devplat-db-api | devplat-db-model-gateway | devplat-db-artifact-gateway (kubernetes.io/basic-auth)
+#   devplat-db-migrator                 (basic-auth; the ONLY login that owns/changes the schema, D9) -> devplat-migrator
+#   devplat-artifacts-controller | -gitbroker | -gitbroker-fetch | -api | -artifact-gateway
+#                                       (keys: access-key-id, secret-access-key)      -> the named component
+#   devplat-oidc-client (key: client-secret), devplat-linear-token (key: token)       -> devplat-api
+#
+# PREREQUISITES from platform/deploy/base (installed by the operator first; see 24-... section 1):
+# namespaces devplat-system / devplat-artifacts / devplat-observability, ClusterRoles devplat-job-runner,
+# devplat-test-runner, devplat-namespacer (+ binding), devplat-dns (+ binding), PriorityClasses, RuntimeClasses,
+# all ValidatingAdmissionPolicies with their params, and the NetworkPolicies of the platform namespaces.
+# This chart renders none of them.
+
+platform:
+  # Logical cluster name used in execution targets {cluster_ref, namespace_prefix} (15-...).
+  clusterRef: default
+  # standard | reduced (25-deployment-profiles.md section 1). reduced = every project of this install runs in
+  # reduced-assurance mode, which ALSO needs the per-project operator fact REDUCED-ASSURANCE (D16).
+  assuranceMode: standard
+
+# Registry (mirror) all images are pulled from. Placeholder: replace in the profile overlay.
+imageRegistry: registry.devplat.internal
+
+# Node placement. Platform services run on the `control` pool. They never tolerate the exec/build taints
+# (VAP devplat-platform-placement).
+placement:
+  control:
+    nodeSelector:
+      devplat.io/pool: control
+    tolerations: []
+
+image:
+  pullPolicy: IfNotPresent
+
+controller:
+  replicas: 2
+  image:
+    name: devplat/controller
+    digest: ""            # sha256:... - placeholder, no image exists yet
+  # Per-component ServiceAccount annotations (e.g. cloud workload identity). There is deliberately no shared map:
+  # two components with identical non-empty annotations fail the render (S-24).
+  serviceAccountAnnotations: {}
+  leaderElection:
+    leaseDurationSeconds: 15
+    renewDeadlineSeconds: 10
+    retryPeriodSeconds: 2
+  admission:
+    globalMaxConcurrentJobs: 6
+    defaultPerProjectMaxConcurrentJobs: 3
+    testNamespaceTtlSeconds: 3600        # keep failed test namespaces this long for inspection
+    maxTestNamespacesPerProject: 2
+  resources:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {cpu: "1", memory: 512Mi}
+
+migrator:
+  # Helm hook Job (D9): applies the forward-only schema migrations as login devplat_migrator (Secret
+  # devplat-db-migrator) and syncs operator_identities from api.oidc.allowedSubjects. The controller never migrates.
+  # Hooks: pre-install + pre-upgrade with postgres.mode=external; post-install + pre-upgrade with cnpg (the Cluster
+  # is created by this release, so it cannot exist before install).
+  image:
+    name: devplat/migrator
+    digest: ""
+  serviceAccountAnnotations: {}
+  activeDeadlineSeconds: 900
+  resources:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {cpu: "1", memory: 512Mi}
+
+api:
+  replicas: 1
+  image:
+    name: devplat/api
+    digest: ""
+  serviceAccountAnnotations: {}
+  oidc:
+    # Operator authentication (DOD-14). The client secret is in Secret devplat-oidc-client.
+    issuerUrl: ""
+    clientId: ""
+    # Operator identities allowed to record operator facts (D2). Synced into the DB table operator_identities,
+    # which record_operator_fact checks. At least one entry is required: the render fails on an empty list.
+    #   - {issuer: "https://…", subject: "<OIDC sub>", project: ""}   # project "" = all projects
+    allowedSubjects: []
+  resources:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {cpu: "1", memory: 512Mi}
+
+gitbroker:
+  # Holds the development-bot GitHub App key (DOD-13). Ingress only from the controller.
+  image:
+    name: devplat/gitbroker
+    digest: ""
+  serviceAccountAnnotations: {}
+  # Fixed properties; the schema only accepts these values. NOTE: they are gitbroker's own behaviour. With
+  # contents:write + pull_requests:write the App itself CAN merge and approve through the API; the preventive
+  # control is the repository ruleset (DOD-02, D13), not this chart.
+  pushRefPrefix: "dev/"
+  draftPullRequestsOnly: true
+  # S-23: the controller is authenticated by a projected, audience-bound ServiceAccount token, verified by
+  # gitbroker against the cluster's ServiceAccount issuer keys. mTLS is the alternative (not templated yet).
+  callerAuth:
+    mode: projected-token
+    audience: devplat-gitbroker
+  resources:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {cpu: "1", memory: 512Mi}
+
+gitbrokerFetch:
+  # Serves one-time source bundles (src/<project>/<sha>.bundle) to fetch init containers on :8081. No GitHub key.
+  replicas: 2
+  image:
+    name: devplat/gitbroker-fetch
+    digest: ""
+  serviceAccountAnnotations: {}
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: 500m, memory: 256Mi}
+
+artifactGateway:
+  # D10: the ONLY artifact path for agent, build and test pods (:8082); admin :9444 for the controller. Pods upload with a per-Job one-time token;
+  # the gateway writes runs/<job-uid>/... with its own S3 credentials. Agents never reach the object store.
+  replicas: 2
+  image:
+    name: devplat/artifact-gateway
+    digest: ""
+  serviceAccountAnnotations: {}
+  # Caps per run (D11, owner doc 20). Larger uploads are refused.
+  limits:
+    resultJsonBytes: 1048576          # 1 MiB
+    resultBundleBytes: 268435456      # 256 MiB
+    logsBytes: 67108864               # 64 MiB
+    totalPerRunBytes: 536870912       # 512 MiB
+  resources:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {cpu: "1", memory: 512Mi}
+
+namespacer:
+  # D19: dedicated Deployment that creates/deletes test namespaces proj-<P>-t-<8 hex> from a FIXED template plus
+  # the project's test profile (devplat-project chart). The controller sends only (project, runid, profile ref);
+  # it cannot supply NetworkPolicy or quota content. Ingress only from the controller (:8083).
+  replicas: 1
+  image:
+    name: devplat/namespacer
+    digest: ""
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: 500m, memory: 256Mi}
+
+modelGateway:
+  replicas: 2
+  image:
+    name: devplat/model-gateway
+    digest: ""
+  serviceAccountAnnotations: {}
+  # Keys are read from Secret devplat-model-gateway-llm-keys, key "<name>-api-key" (and "<name>-api-key-reduced").
+  providers:
+    - name: anthropic
+      host: api.anthropic.com
+  # Request policy (D12, R6 re-check RS-1). The endpoint list, the tool-type and content-source allowlists, the
+  # file-reference rejection and the token binding are fixed by the schema; only the beta-header allowlist is configurable (empty = no anthropic-beta header passes).
+  policy:
+    allowedEndpoints:
+      - "POST /v1/messages"
+      - "POST /v1/messages/count_tokens"
+    rejectServerTools: true           # web_search, web_fetch, code_execution, computer use, any server-side tool type
+    allowedToolTypes: [custom]        # allowlist (RS-1): a tool without `type` or with type custom; anything else refused
+    allowedContentSourceTypes: [base64, text]   # image/document source types (RS-1): no url (provider-side fetch), no file
+    rejectFileReferences: true        # any file_id in the request (RS-1)
+    allowedContentBlockTypes: [text, image, document, tool_use, tool_result, thinking, redacted_thinking]   # C-1, any depth
+    allowedRequestFields: [model, messages, system, max_tokens, tools, tool_choice, temperature, top_p, top_k, stop_sequences, stream, metadata, thinking]   # C-1
+    rejectMcpServers: true            # request field mcp_servers
+    rejectContainer: true             # request field container
+    rejectFilesAndBatches: true       # Files and Message Batches APIs (not in allowedEndpoints anyway)
+    allowedBetaHeaders: []
+    projectFrom: token                # the project is bound to the per-Job token, never taken from the URL path
+  resources:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {cpu: "1", memory: 256Mi}
+
+dns:
+  # devplat-dns: CoreDNS with only the kubernetes plugin (no forward). Project pods use dnsPolicy: None with this
+  # Service's ClusterIP (doc 18 section 9.4). Pod port 1053 (non-root), Service port 53.
+  replicas: 2
+  image:
+    name: mirror/coredns/coredns
+    digest: ""            # pin the operator-chosen CoreDNS release by digest
+  clusterDomain: cluster.local
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: 500m, memory: 128Mi}
+
+postgres:
+  # cnpg: create the CloudNativePG Cluster `devplat-pg` (operator must be installed first; base NetworkPolicies
+  # select cnpg.io/cluster=devplat-pg, S-22)
+  # external: managed PostgreSQL; role credentials in the fixed devplat-db-* Secrets
+  mode: cnpg
+  cnpg:
+    instances: 1          # 3 for multi-node profiles
+    image:                # required in cnpg mode: digest-pinned PostgreSQL 16 operand image (S-22)
+      name: mirror/cloudnative-pg/postgresql
+      digest: ""
+    storage:
+      size: 10Gi
+      storageClass: ""
+    backup:
+      enabled: false      # not templated yet (24-... section 7)
+  external:
+    host: ""
+    port: 5432
+    database: devplat
+    sslmode: verify-full
+
+artifacts:
+  # S3-compatible endpoint used by platform components only (controller, gitbroker, gitbroker-fetch, api,
+  # artifact-gateway). Never reachable from project pods (D10). MinIO community edition is archived (2026-04).
+  endpoint: ""
+  region: us-east-1
+  bucketPrefix: devplat-
+
+ingress:
+  enabled: false
+  className: ""
+  host: ""
+  tlsSecretName: ""

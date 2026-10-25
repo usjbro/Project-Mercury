@@ -1,0 +1,76 @@
+{{- if eq .Values.postgres.mode "cnpg" }}
+{{- if .Values.postgres.cnpg.backup.enabled }}
+{{- fail "postgres.cnpg.backup.enabled: not templated in chart 0.1 (recent CloudNativePG versions move object-store backups to the Barman Cloud plugin; configure per 24-helm-and-gitops.md section 7)" }}
+{{- end }}
+{{- /*
+CloudNativePG Cluster (custom resource; requires the CloudNativePG operator, installed beforehand by the operator).
+Name devplat-pg: base NetworkPolicies select cnpg.io/cluster=devplat-pg (S-22). The operand image is required and
+digest-pinned (S-22). No superuser access from applications.
+D9: the database owner (initdb.owner) is the migration login devplat_migrator (password from Secret
+devplat-db-migrator); devplat_owner is a NOLOGIN group role that owns the schema objects after migration.
+Runtime roles are managed roles whose passwords come from basic-auth Secrets the operator creates:
+devplat-db-controller, devplat-db-api, devplat-db-model-gateway, devplat-db-artifact-gateway. Their grants (controller = sole writer of task
+state; none of them has DDL rights) are applied by the migrator Job (19-..., platform/db), not here.
+*/}}
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: devplat-pg
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "devplat.labels" (dict "root" . "name" "devplat-pg") | nindent 4 }}
+spec:
+  instances: {{ .Values.postgres.cnpg.instances }}
+  imageName: {{ include "devplat.image" (dict "root" . "image" .Values.postgres.cnpg.image "key" "postgres.cnpg") }}
+  enableSuperuserAccess: false
+  primaryUpdateStrategy: unsupervised
+  bootstrap:
+    initdb:
+      database: devplat
+      owner: devplat_migrator
+      secret:
+        name: devplat-db-migrator
+  managed:
+    roles:
+      - name: devplat_owner
+        ensure: present
+        login: false
+      # Passwords from the fixed basic-auth Secrets of doc 18 section 8.1 (created by the operator).
+      - name: devplat_controller
+        ensure: present
+        login: true
+        passwordSecret:
+          name: devplat-db-controller
+      - name: devplat_api
+        ensure: present
+        login: true
+        passwordSecret:
+          name: devplat-db-api
+      - name: devplat_model_gateway
+        ensure: present
+        login: true
+        passwordSecret:
+          name: devplat-db-model-gateway
+      # R6 re-check RS-4: uploads are authorized in PostgreSQL (authorize_upload(), complete_upload() only)
+      - name: devplat_artifact_gateway
+        ensure: present
+        login: true
+        passwordSecret:
+          name: devplat-db-artifact-gateway
+  storage:
+    size: {{ .Values.postgres.cnpg.storage.size }}
+    {{- with .Values.postgres.cnpg.storage.storageClass }}
+    storageClass: {{ . }}
+    {{- end }}
+  affinity:
+    {{- with .Values.placement.control.nodeSelector }}
+    nodeSelector:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.placement.control.tolerations }}
+    tolerations:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    enablePodAntiAffinity: true
+    topologyKey: kubernetes.io/hostname
+{{- end }}

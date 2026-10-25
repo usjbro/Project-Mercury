@@ -1,0 +1,54 @@
+{{- /* The controller's only rights in this project: ClusterRole devplat-job-runner (base prerequisite) bound per
+namespace (doc 18 section 7, I-1): jobs create/get/list/watch/patch/delete; configmaps+secrets create/get/delete;
+pods get/list/watch; pods/log get; events read. No cluster-wide controller grant exists. */}}
+{{- $roles := list "exec" "build" }}
+{{- range $role := $roles }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: devplat-controller-job-runner
+  namespace: {{ include "proj.ns" (dict "Values" $.Values "role" $role) }}
+  labels:
+    {{- include "proj.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: devplat-job-runner
+subjects:
+  - kind: ServiceAccount
+    name: devplat-controller
+    namespace: {{ $.Values.platformNamespace }}
+{{- end }}
+{{- if .Values.registryProxy.enabled }}
+---
+# ClusterIP lookup of this project's registry proxy (deps class hostAliases), in the platform namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: devplat-controller-service-lookup-{{ .Values.project.id }}
+  namespace: {{ .Values.platformNamespace }}
+  labels:
+    {{- include "proj.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get"]
+    resourceNames: ["devplat-registry-proxy-{{ .Values.project.id }}"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: devplat-controller-service-lookup-{{ .Values.project.id }}
+  namespace: {{ .Values.platformNamespace }}
+  labels:
+    {{- include "proj.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: devplat-controller-service-lookup-{{ .Values.project.id }}
+subjects:
+  - kind: ServiceAccount
+    name: devplat-controller
+    namespace: {{ .Values.platformNamespace }}
+{{- end }}
