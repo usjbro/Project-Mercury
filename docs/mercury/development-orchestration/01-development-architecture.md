@@ -146,7 +146,7 @@ Operator and Mac tasks (MERC-001, 020, …) complete through `result_accepted` w
 | Contract integrity | The contract core (everything except the per-attempt fields `status`, `attempt` and `evidence_dir`) is hashed into every record. Changing it without `contract_revised` is refused |
 | Budgets | `budget.max_attempts`, 3 review cycles, 2 security cycles, 2 integration cycles and 5 environmental retries are counted from the ledger, and refused beyond the limit |
 | Writers | `actor` ∈ {principal-orchestrator, operator}; operator/Mac completions require `actor operator`. Agents never write the ledger; the specialist guard hook blocks the tool for them (tripwire: `--actor` is self-asserted) |
-| Evidence | `record` reads each evidence file once, copies it to `$DEVORCH_HOME/evidence/<task>/records/` and stores its sha256; the ledger trusts only that copy. Replay re-checks every hash, the subtask bindings, the required reviewers and the contract file against the last record, so `verify-ledger` and `record` apply the same rules |
+| Evidence | `record` reads each evidence file once, copies it to `$DEVORCH_HOME/evidence/<task>/records/` and stores its sha256; the ledger trusts only that copy. Replay re-checks every hash, the subtask bindings, the required reviewers (each record against the contract snapshot of its own core, `04-contracts.md`) and the contract file against the last record, so `verify-ledger` and `record` apply the same rules |
 
 **Evidence stages required by the brief → ledger events:**
 
