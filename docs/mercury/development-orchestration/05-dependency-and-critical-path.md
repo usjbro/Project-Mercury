@@ -97,7 +97,7 @@ flowchart LR
 | B expected (operator full-time) | 92 | 0.48 | 0.47 |
 | operator 50 % available | 118 | 0.37 | 0.74 |
 | operator 20 % available (RA-D4: 2 x 1/2 day per week) | 219 | 0.2 | 0.99 |
-| PRs stacked (dependents start at G6) | 86 | 0.51 | 0.4 |
+| PRs stacked (dependents start at G6) | 85 | 0.51 | 0.51 |
 | PR review 0.25 d each | 91 | 0.48 | 0.55 |
 | 1 worker | 134 | 0.92 | 0.33 |
 | 4 workers | 93 | 0.37 | 0.47 |
@@ -106,7 +106,7 @@ flowchart LR
 **Interpretation.**
 1. **Operator availability is the dominant variable.** At 50 % availability elapsed time is +28 %. At the RA-D4 pattern (about 20 %: 2 × ½ day per week) it more than doubles. **Recommendation: the operator commits ≥ 50 % availability during W0–W1 (Phase 0, identities, root steps) and on gate weeks.** RA-D4 is revised accordingly.
 2. **Agent count beyond 3 gives no gain** under the stated overheads; the floor with unlimited workers is ≈ 86. The 09 §2 limit of 3 stands.
-3. **Stacked PRs** (dependents start at G6) save ≈ 6 days at the cost of rebases. They are permitted only to depth 2 (`06-…` §6).
+3. **Stacked PRs** (dependents start at G6) save ≈ 7 days at the cost of rebases; the operator still reviews every PR, so the operator lane is busier (0.51). They are permitted only to depth 2 (`06-…` §6). (Corrected 2026-10-25: the model's stacked mode had skipped the reviews of stacked tasks and reported 86 days at 0.40; Codex review on PR #2.)
 4. **Calendar view.** B expected ≈ 92 working days ≈ 18–19 weeks to cutover start, plus the ≈ 4–5-week watch, ≈ 23 weeks in total. The roadmap's ≈ 7-month P50 assumes one human engineer; agents shorten the engineering portion, but the operator lane, shadow and pilot do not shrink.
 
 **Assumptions not modelled.**

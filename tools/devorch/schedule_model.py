@@ -67,7 +67,8 @@ def sim(d, workers=3, k_agent=0.55, ovh=0.45, sec_ovh=0.30, integ=0.10, mac_frac
     prio = lambda k: (-lp[k], -dn[k], k)
     # per-issue phase: next phase in order a -> m -> r ; "avail_at" = when deps are satisfied for the next phase
     phase = {k: [p for p in ("a", "m", "r") if T[k][p] > 0] for k in base}
-    released = {}          # k -> time dependents may start
+    released = {}          # k -> time dependents may start (stacked: at G6, before the review)
+    done = {}              # k -> time every phase and the gate are complete
     ready_at = {}          # (k, phase) -> time it became runnable
     free = {"agent": workers, "op": 1}
     t, ev, busy = 0.0, [], {"agent": 0.0, "op": 0.0}
@@ -83,14 +84,15 @@ def sim(d, workers=3, k_agent=0.55, ovh=0.45, sec_ovh=0.30, integ=0.10, mac_frac
         return g is None or (g in released and released[g] <= t)
 
     def finish(k, when):
-        released[k] = when + T[k]["gate"]
+        done[k] = when + T[k]["gate"]
+        released.setdefault(k, done[k])   # a stacked task was released at G6 already
         if trace is not None:
-            trace[k]["done"] = round(released[k], 1)
+            trace[k]["done"] = round(done[k], 1)
         if released[k] > t:
             heapq.heappush(ev, (released[k], "~", "~", "wake"))
 
     started = set()
-    while len(released) < len(base):
+    while len(done) < len(base):   # not `released`: a stacked task still owes its review (Codex review on PR #2)
         progressed = True
         while progressed:
             progressed = False
@@ -99,7 +101,7 @@ def sim(d, workers=3, k_agent=0.55, ovh=0.45, sec_ovh=0.30, integ=0.10, mac_frac
                     continue
                 cands = []
                 for k in base:
-                    if k in released or k in running or not phase[k]:
+                    if k in done or k in running or not phase[k]:
                         continue
                     p = phase[k][0]
                     if lane(p) != res:
@@ -122,7 +124,7 @@ def sim(d, workers=3, k_agent=0.55, ovh=0.45, sec_ovh=0.30, integ=0.10, mac_frac
                     heapq.heappush(ev, (t + dur(k, p), k, p, "end"))
                     progressed = True
         if not ev:
-            stuck = [k for k in base if k not in released]
+            stuck = [k for k in base if k not in done]
             raise RuntimeError(f"deadlock: {stuck[:5]}")
         t, k, p, kind = heapq.heappop(ev)
         if kind == "wake":
@@ -133,12 +135,9 @@ def sim(d, workers=3, k_agent=0.55, ovh=0.45, sec_ovh=0.30, integ=0.10, mac_frac
         if stacked and phase[k] == ["r"]:
             # stacked PRs: dependents may start at G6 (agent done), review still consumes the lane later
             released.setdefault(k, t)
-            if trace is not None:
-                trace[k]["done"] = round(t, 1)
         if not phase[k]:
-            if k not in released:
-                finish(k, t)
-    end = max(released.values())
+            finish(k, t)
+    end = max(done.values())
     return round(end), round(busy["agent"] / (workers * end), 2), round(busy["op"] / end, 2)
 
 

@@ -697,7 +697,9 @@ def cmd_record(a):
         die(f"no contract at {hpath('tasks', a.task + '.json')}")
     errs, _ = validate(contract, "task-contract")
     if not errs:
-        errs = contract_errors(contract, ownership=a.event in ("created", "contract_revised"))
+        # ownership again on `assigned`: two tasks created while both were inactive pass the creation check, and
+        # only one of them may enter RUNNING with overlapping paths (Codex review on PR #2; devplat: 17-... §9 rule 4)
+        errs = contract_errors(contract, ownership=a.event in ("created", "contract_revised", "assigned"))
     if errs:
         die("contract invalid, refusing to record: " + "; ".join(errs))
     try:
@@ -1207,6 +1209,14 @@ def cmd_git_baseline(a):
         diffs.append(".git/config changed")
     if old["git_hooks"] != snap["git_hooks"]:
         diffs.append(f"git hooks changed: {snap['git_hooks']}")
+    # user configuration is what push/fetch run with (git(..., user_config=True)); it was snapshotted but never
+    # compared (Codex review on PR #2). A baseline recorded before this check exists must be re-recorded.
+    if "user_config" not in old:
+        diffs.append("baseline has no user configuration snapshot: the operator re-records it (git-baseline record)")
+    else:
+        for k in sorted(set(old["user_config"]) | set(snap["user_config"])):
+            if old["user_config"].get(k) != snap["user_config"].get(k):
+                diffs.append(f"user configuration changed: {k}")
     for k in sorted(set(old["files"]) | set(snap["files"])):
         if old["files"].get(k) != snap["files"].get(k):
             diffs.append(f"changed: {k}")
