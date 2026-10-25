@@ -2143,6 +2143,11 @@ BEGIN
     EXECUTE format('ALTER TABLE devplat.%I ENABLE ROW LEVEL SECURITY', r);
     EXECUTE format('CREATE POLICY %I ON devplat.%I FOR SELECT USING (project_id IS NULL OR devplat.can_see(project_id))', r || '_visible', r);
   END LOOP;
+  -- run_uploads has no project_id: an upload is visible exactly when its Job is (job_runs is RLS-filtered for the
+  -- invoker). It was granted to the readonly role without any policy (Codex review on PR #3).
+  ALTER TABLE devplat.run_uploads ENABLE ROW LEVEL SECURITY;
+  CREATE POLICY run_uploads_visible ON devplat.run_uploads FOR SELECT
+    USING (EXISTS (SELECT 1 FROM devplat.job_runs j WHERE j.job_id = run_uploads.job_id));
 END $$;
 
 REVOKE ALL ON ALL TABLES IN SCHEMA devplat FROM PUBLIC;

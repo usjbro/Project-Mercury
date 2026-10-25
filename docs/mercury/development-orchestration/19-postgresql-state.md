@@ -193,6 +193,8 @@ Import tool (`platform/tools/import_v1_ledger.py`, **Designed, unverified**): `v
 
 **Found by CI (2026-10-25).** Two simultaneous `dispatch_job()` calls with one idempotency key could both miss the lookup; the second insert then failed on `job_runs.admission_id` (a unique index that `ON CONFLICT (idempotency_key)` does not arbitrate) instead of returning the first row. `dispatch_job()` now takes a transaction-scoped advisory lock on the key before the lookup. `test_dispatch_serialized_per_key` checks it deterministically, failing without the lock in every run; `test_idempotent_dispatch_concurrent` is now a gated stress test (8 rounds × 4 sessions released together). `Ran 54 tests … OK`.
 
+**Codex review on PR #3 (2026-10-25).** `run_uploads` was granted to the readonly role without row-level security, so a login granted one project could read every project's upload names, hashes and sizes. It now has a policy deriving visibility from its Job (`EXISTS` on the RLS-filtered `job_runs`); `test_rls_project_isolation` covers it and fails without the policy. The same review's P1 (artifact gateway without a DB path) was already fixed as re-check RS-4.
+
 | Class | Tests |
 |---|---|
 | T01 rules | `test_transitions_table_matches_vendored_devorch_rules` (devorch kinds plus the devplat kind `plan_proposal`; catalogue kinds = DB kinds), `test_vendored_rules_still_equal_devorch_source` (optional), `test_no_project_or_role_literals_seeded` (grep + catalogue = YAML) |

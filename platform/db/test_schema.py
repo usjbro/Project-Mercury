@@ -1001,6 +1001,16 @@ class T09IsolationAndStatus(Base):
         self.assertEqual(psql(f"SELECT count(*) FROM devplat.task_events WHERE task_id = '{mine}'", role=role), "1")
         self.assertEqual(psql(f"SELECT count(*) > 0 FROM devplat.projects WHERE project_id <> {lit(self.project)}", role=R["api"]), "t")
         self.refused(lambda: psql("SELECT * FROM devplat.leases", role=role), "permission denied")
+        # run_uploads has no project_id; visibility follows the upload's Job (Codex review on PR #3)
+        for proj, tid in ((self.project, "IS-0002"), (other, "IS-0003")):
+            self.new_task(tid, "planning", project=proj)
+            self.to_running(tid, project=proj)
+            jid = self.dispatch(tid, "mdev-tpm", project=proj)
+            psql(f"INSERT INTO devplat.run_uploads (job_id, name, declared_size) VALUES ({jid}, 'result.json', 10)")
+        seen = psql("SELECT string_agg(DISTINCT j.project_id, ',') FROM devplat.run_uploads u "
+                    "JOIN devplat.job_runs j USING (job_id)", role=R["ctl"])
+        self.assertEqual(sorted(seen.split(",")), sorted([self.project, other]), "controller sees every project")
+        self.assertEqual(psql("SELECT count(*) FROM devplat.run_uploads", role=role), "1", "only the granted project's upload")
 
     def test_plan_proposal_ids_and_onboarding_dispatch(self):
         # doc 16 §10: planner Jobs, kind plan_proposal; ids <task>-pN (task-bound) or PL-<nnnn> (project-level)
