@@ -5,7 +5,7 @@ Each test reproduces a finding from the Phase 14 reviews (R1 C-01/H-0x, R2 S-0x,
 git repositories and checks that devorch now refuses or detects it.  Run:
     python3 tools/devorch/test_devorch.py -v
 """
-import hashlib, json, os, shutil, subprocess, sys, tempfile, unittest
+import glob, hashlib, json, os, shutil, subprocess, sys, tempfile, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TOOL = os.path.join(HERE, "devorch.py")
@@ -291,6 +291,56 @@ class T(unittest.TestCase):
         p = os.path.join(self.e.home, "tasks/DT-0001.json")
         c = json.load(open(p)); c["contract_version"] = 2; c["objective"] = "split: smaller objective"; json.dump(c, open(p, "w"))
         self.e.rec("DT-0001", "contract_revised")
+
+    def revise(self, tid, **core):
+        p = os.path.join(self.e.home, "tasks", tid + ".json")
+        c = json.load(open(p))
+        c["contract_version"] += 1
+        c.update(core)
+        json.dump(c, open(p, "w"))
+
+    def test_revision_does_not_reinterpret_earlier_records(self):
+        # Codex review on PR #5: replay judged every record by the CURRENT contract, so a revision that adds a required
+        # reviewer made the old G3 record fail and `contract_revised` itself could never be appended
+        c, head = self.e.to_awaiting_review()
+        r1 = self.e.review("DT-0001", head)
+        self.e.rec("DT-0001", "code_review_passed", f"subtask:{r1}")
+        self.revise("DT-0001", required_reviewers=c["required_reviewers"] + ["mdev-reliability-engineer"])
+        self.e.rec("DT-0001", "contract_revised")
+        self.e.run("verify-ledger", ok=True)
+
+    def test_revision_may_lower_the_attempt_budget_below_recorded_failures(self):
+        self.e.contract("DT-0001", max_attempts=3)
+        for ev in ("created",):
+            self.e.rec("DT-0001", ev)
+        self.e.rec("DT-0001", "unblocked", f"design_ref:x@{self.e.base}")
+        self.e.rec("DT-0001", "assigned")
+        self.e.rec("DT-0001", "attempt_failed")
+        self.e.rec("DT-0001", "attempt_failed")
+        self.revise("DT-0001", budget={"max_attempts": 2, "max_turns": 10, "max_wall_minutes": 30})
+        self.e.rec("DT-0001", "contract_revised")
+        self.e.run("verify-ledger", ok=True)
+
+    def test_contract_snapshot_tamper_detected(self):
+        c, head = self.e.to_awaiting_review()
+        r1 = self.e.review("DT-0001", head)
+        self.e.rec("DT-0001", "code_review_passed", f"subtask:{r1}")
+        self.revise("DT-0001", required_reviewers=c["required_reviewers"] + ["mdev-reliability-engineer"])
+        self.e.rec("DT-0001", "contract_revised")
+        snaps = glob.glob(os.path.join(self.e.home, "contracts", "DT-0001", "*.json"))
+        self.assertGreaterEqual(len(snaps), 2, "one snapshot per distinct contract core")
+        old = json.load(open(snaps[0])); old["allowed_paths"] = ["**"]; json.dump(old, open(snaps[0], "w"))
+        r = self.e.run("verify-ledger", ok=False)
+        self.assertIn("snapshot", r.stdout)
+
+    def test_ledger_without_snapshots_verifies_only_while_unrevised(self):
+        # ledgers written before snapshots existed: the contract file is the contract of every record while it is unchanged
+        c, head = self.e.to_awaiting_review()
+        shutil.rmtree(os.path.join(self.e.home, "contracts"))
+        self.e.run("verify-ledger", ok=True)
+        self.revise("DT-0001", objective="a different objective")
+        r = self.e.rec("DT-0001", "contract_revised", ok=False)
+        self.assertIn("snapshot", r.stderr)   # cannot be told apart from a deleted snapshot: refused, not guessed
 
     def test_duplicate_gate_refused(self):
         c, head = self.e.to_awaiting_review()
