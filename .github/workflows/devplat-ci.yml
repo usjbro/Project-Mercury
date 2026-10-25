@@ -1,0 +1,89 @@
+# devplat CI (23-ci-cd-integration.md §5.1): the offline evidence of the devplat package, run on GitHub.
+# Interim home: Project-Mercury, until the platform repository exists (DOD-12, ADR-030); path-filtered so that
+# Mercury paths never trigger it (§5.3 rule 3).
+#
+# Hardening (§2a H1-H4, §5.1 "Workflow hygiene"): no secrets, no pull_request_target, no workflow_run;
+# permissions {} at the top and contents: read per job; actions pinned by commit SHA; checkout without persisted
+# credentials; Python wheels hash-locked; Go tools built from source and verified against sum.golang.org.
+# Agent-written code in a pull request runs here with a read-only token and nothing to steal.
+name: devplat-ci
+
+on:
+  pull_request:
+    paths:
+      - "platform/**"
+      - "tools/devorch/**"
+      - "docs/mercury/development-orchestration/**"
+      - ".claude/agents/**"
+      - ".claude/settings.json"
+      - ".github/workflows/devplat-ci.yml"
+  push:
+    branches: [main]
+    paths:  # same list as pull_request (no YAML anchors: keeps workflow auditors at full precision)
+      - "platform/**"
+      - "tools/devorch/**"
+      - "docs/mercury/development-orchestration/**"
+      - ".claude/agents/**"
+      - ".claude/settings.json"
+      - ".github/workflows/devplat-ci.yml"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: devplat-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  workflow-lint:
+    name: workflow lint (actionlint + shellcheck)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.24.7"
+          cache: false
+      - name: Build actionlint
+        run: platform/tools/ci/install_tools.sh "$RUNNER_TEMP/bin" actionlint
+      - name: Lint workflows (shellcheck is preinstalled on the runner and used by actionlint)
+        run: |
+          command -v shellcheck
+          "$RUNNER_TEMP/bin/actionlint" -color
+
+  validate:
+    name: validate_all.sh --strict
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.24.7"
+          cache: false
+      - name: Install Python dependencies (hash-locked wheels only)
+        run: |
+          python -m pip install --require-hashes --only-binary=:all: -r platform/tools/ci/requirements.txt
+      - name: Build Helm and kubeconform from source
+        run: platform/tools/ci/install_tools.sh "$RUNNER_TEMP/bin" helm kubeconform
+      - name: Start a throwaway PostgreSQL 16 (Unix socket only)
+        run: platform/tools/ci/start_postgres.sh >> "$GITHUB_ENV"
+      - name: Run every offline check (nothing may be skipped)
+        run: |
+          GO="$(command -v go)" HELM="$RUNNER_TEMP/bin/helm" KUBECONFORM="$RUNNER_TEMP/bin/kubeconform" \
+            platform/tools/validate_all.sh --strict
