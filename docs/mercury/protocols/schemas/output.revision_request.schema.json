@@ -1,0 +1,160 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://schemas.mercury.local/v1/output.revision_request.schema.json",
+  "title": "Claude revision instruction",
+  "description": "Output of claude_revision_request for non-review sources. revise/replan require >=1 instruction (V4).",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "type": "string",
+      "enum": [
+        "mercury.output.revision_request.v1"
+      ]
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "pattern": "^run_[0-9A-HJKMNP-TV-Z]{26}$"
+        },
+        "task_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^tsk_[0-9A-HJKMNP-TV-Z]{26}$"
+        },
+        "input_digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "auth_id": {
+          "type": "string",
+          "pattern": "^auth_[0-9A-HJKMNP-TV-Z]{26}$"
+        },
+        "pln_id": {
+          "type": "string",
+          "pattern": "^pln_[0-9A-HJKMNP-TV-Z]{26}$"
+        },
+        "plan_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "request_id",
+        "task_id",
+        "input_digest",
+        "auth_id",
+        "pln_id",
+        "plan_sha256"
+      ]
+    },
+    "source": {
+      "type": "string",
+      "enum": [
+        "local_tests",
+        "ci",
+        "diff_gate",
+        "merge_conflict",
+        "human_review",
+        "codex_deviation",
+        "codex_incomplete",
+        "conflicting_reviews",
+        "review_needs_plan_change",
+        "policy_rejected",
+        "authorization_amended"
+      ]
+    },
+    "head_sha": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "action": {
+      "enum": [
+        "revise",
+        "replan",
+        "escalate"
+      ],
+      "type": "string"
+    },
+    "instructions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^I[0-9]{1,3}$"
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "refs": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 60
+            },
+            "minItems": 0,
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "id",
+          "text",
+          "refs"
+        ]
+      },
+      "minItems": 0,
+      "maxItems": 50
+    },
+    "out_of_scope": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 500
+      },
+      "minItems": 0,
+      "maxItems": 20
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000
+    },
+    "escalation_reason": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 2000
+    },
+    "injection_suspected": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "schema",
+    "binding",
+    "source",
+    "head_sha",
+    "action",
+    "instructions",
+    "out_of_scope",
+    "summary",
+    "escalation_reason",
+    "injection_suspected"
+  ]
+}

@@ -1,0 +1,196 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.mercury.local/v1/plan.revision_request.schema.json",
+  "title": "Plan revision request to Codex",
+  "description": "T10, T17, T30, G4.",
+  "allOf": [
+    {
+      "$ref": "envelope.schema.json"
+    }
+  ],
+  "properties": {
+    "schema": {
+      "const": "mercury.plan.revision_request.v1"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "revision_request_id": {
+          "$ref": "common.schema.json#/$defs/revision_request_id"
+        },
+        "cycle": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_cycles": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "counter": {
+          "enum": [
+            "plan_revision_count",
+            "pr_review_cycle_count",
+            "verify_fix_count",
+            "human_change_count"
+          ]
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "$ref": "common.schema.json#/$defs/finding"
+          },
+          "minItems": 0,
+          "maxItems": 200
+        },
+        "instructions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 20
+              },
+              "text": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4000
+              },
+              "refs": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 40
+                },
+                "minItems": 0,
+                "maxItems": 20
+              }
+            },
+            "required": [
+              "id",
+              "text",
+              "refs"
+            ]
+          },
+          "minItems": 1,
+          "maxItems": 50
+        },
+        "out_of_scope": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "minItems": 0,
+          "maxItems": 20
+        },
+        "authored_by": {
+          "$ref": "common.schema.json#/$defs/agent_info"
+        },
+        "artifact": {
+          "$ref": "common.schema.json#/$defs/artifact_ref"
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "claude_plan_review",
+            "codex_deviation",
+            "authorization_amended",
+            "claude_revision_request"
+          ]
+        },
+        "current_plan": {
+          "$ref": "common.schema.json#/$defs/plan_ref"
+        },
+        "review_id": {
+          "oneOf": [
+            {
+              "$ref": "common.schema.json#/$defs/review_id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "producer": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "RD-8 provenance: verbatim_render = Claude review required_change items rendered through a fixed hashed template; claude_revision_request = output of a Claude revision_request run.",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "verbatim_render",
+                "claude_revision_request"
+              ]
+            },
+            "template_sha256": {
+              "oneOf": [
+                {
+                  "$ref": "common.schema.json#/$defs/sha256"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "instruction_run_id": {
+              "oneOf": [
+                {
+                  "$ref": "common.schema.json#/$defs/run_id"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "template_sha256",
+            "instruction_run_id"
+          ]
+        },
+        "source_review_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "common.schema.json#/$defs/review_id"
+          },
+          "minItems": 0,
+          "maxItems": 10
+        },
+        "source_sha256s": {
+          "type": "array",
+          "items": {
+            "$ref": "common.schema.json#/$defs/sha256"
+          },
+          "minItems": 0,
+          "maxItems": 20
+        }
+      },
+      "required": [
+        "revision_request_id",
+        "cycle",
+        "max_cycles",
+        "counter",
+        "findings",
+        "instructions",
+        "out_of_scope",
+        "authored_by",
+        "artifact",
+        "source",
+        "current_plan",
+        "review_id",
+        "producer",
+        "source_review_ids",
+        "source_sha256s"
+      ]
+    }
+  },
+  "unevaluatedProperties": false
+}

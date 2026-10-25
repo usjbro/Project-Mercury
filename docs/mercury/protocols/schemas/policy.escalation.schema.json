@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.mercury.local/v1/policy.escalation.schema.json",
+  "title": "MERCURY / policy escalation event",
+  "description": "T20 (opened or carried_forward), T42 (acknowledged), T43 (rejected), superseded when a new head is pushed. Binds the deterministic policy report to one head SHA (RD-14, SEC-309/310).",
+  "allOf": [
+    {
+      "$ref": "envelope.schema.json"
+    }
+  ],
+  "properties": {
+    "schema": {
+      "const": "mercury.policy.escalation.v1"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "event": {
+          "type": "string",
+          "enum": [
+            "opened",
+            "carried_forward",
+            "acknowledged",
+            "rejected",
+            "superseded"
+          ]
+        },
+        "escalation_id": {
+          "type": "string",
+          "pattern": "^pex_[0-9A-HJKMNP-TV-Z]{26}$"
+        },
+        "head_sha": {
+          "$ref": "common.schema.json#/$defs/git_sha"
+        },
+        "rule_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 60
+          },
+          "minItems": 1,
+          "maxItems": 50
+        },
+        "protected_paths": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "minItems": 0,
+          "maxItems": 200
+        },
+        "protected_blob_digest": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        },
+        "report": {
+          "$ref": "common.schema.json#/$defs/artifact_ref"
+        },
+        "carried_from_ack_id": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^pak_[0-9A-HJKMNP-TV-Z]{26}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ack": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "ack_id": {
+                  "type": "string",
+                  "pattern": "^pak_[0-9A-HJKMNP-TV-Z]{26}$"
+                },
+                "control_request_id": {
+                  "type": "string",
+                  "pattern": "^ctl_[0-9A-HJKMNP-TV-Z]{26}$"
+                },
+                "presence_assertion_sha256": {
+                  "$ref": "common.schema.json#/$defs/sha256"
+                },
+                "reason_display": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2000
+                }
+              },
+              "required": [
+                "ack_id",
+                "control_request_id",
+                "presence_assertion_sha256",
+                "reason_display"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "check_conclusion": {
+          "type": "string",
+          "enum": [
+            "success",
+            "action_required"
+          ],
+          "description": "Resulting MERCURY / policy conclusion on head_sha. Never neutral or skipped (Addendum C)."
+        }
+      },
+      "required": [
+        "event",
+        "escalation_id",
+        "head_sha",
+        "rule_ids",
+        "protected_paths",
+        "protected_blob_digest",
+        "report",
+        "carried_from_ack_id",
+        "ack",
+        "check_conclusion"
+      ]
+    }
+  },
+  "unevaluatedProperties": false
+}

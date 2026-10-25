@@ -1,0 +1,372 @@
+# MERCURY — Phase 5 Independent Security Review
+
+| Field | Value |
+|---|---|
+| Owner | Agent E — Application Security Architect |
+| Phase | 5 (independent final design validation) |
+| Date | 2026-10-13 |
+| Deliverable | "Security review report with severity-ranked findings" (brief, documentation layout) |
+| Status | Design review only. Nothing here was validated on the operator's Mac or against live GitHub/Linear. Items that need the Mac or live services are marked **UNVERIFIABLE IN DESIGN — P0-xxx**. |
+
+---
+
+## 1. Scope, method, documents and versions reviewed
+
+### 1.1 Scope
+
+The reconciled MERCURY design (TDD 1.0-rc and every supporting document revised in Phase 4), checked against:
+
+- the brief's hard constraints (`reviews/00-brief.md`). The main one: *"Human approval boundary must be enforceable by technical permissions + GitHub protections, not only prompt instructions"*;
+- the binding reconciliation decisions RD-1…RD-20 and Addenda A–C (`reviews/30-reconciliation.md`);
+- the security requirements SEC-1xx…9xx, SAC-01…20 and gates G-S1…G-S5 in `security/threat-model.md` (TM).
+
+Out of scope: implementation code (none exists), live configuration, and threats the TM excludes (root or kernel compromise, a malicious operator, compromise of a SaaS provider).
+
+### 1.2 Method
+
+| Technique | Applied to |
+|---|---|
+| Full read | TDD.md; `reviews/30-reconciliation.md` (incl. Addenda A–C); `reviews/44-revision-E.md`; TM (all sections) |
+| Targeted read (section-level) | `integrations/github.md` §2, §6–§10; `integrations/claude.md` §2, §7, §8; `integrations/codex.md` §3, §9; `integrations/linear.md` §2, §7–§9; `architecture/components.md` §4.9–§4.16, §5, §9; `architecture/state-machine.md` §5, §6, §8; `operations/macos-service.md` §3, §7, §9, §15, §16; ADR-008, ADR-013, ADR-018, ADR-019; `planning/roadmap.md`; `planning/traceability.md` §10–§11; `testing/verification-plan.md` §7.2 |
+| Pattern search (ripgrep) across `docs/mercury` | Forbidden GitHub endpoints (`merge`, `/merges`, `update-branch`, `auto-merge`, `enablePullRequestAutoMerge`, `dismiss`, `APPROVE`, `REQUEST_CHANGES`); `neutral`; `mercury-ops` and `metadata:read`; `statuses`; `add-dir`; `fd 0`; anchor carriers; `M1–M8`/`M9`/`unexpected_base_commit`; `P0-049`; `G-S5`; presence-tier method names; `redact` |
+| Trace | Each path of the human-approval-boundary proof (TM §5.2.2), followed from the requirement to the component, the API surface and the GitHub rule that enforces it |
+| Cross-document consistency | Presence-tier method lists (four documents); protected-path lists (TM, codex.md, github.md, SM, TDD); App permissions (TM, ADR-008, github.md, macos-service, overview); merge-verification numbering (TM, github.md, SM, TDD, verification plan) |
+
+Every result below cites its evidence as `file §section` (and a line number where it helps). I wrote the TM myself, so I did not mark any of its SEC statements as passing because the TM says so. A SEC counts as satisfied only when the component that implements it specifies it.
+
+### 1.3 Documents and versions reviewed
+
+All files are as of 2026-10-12/13 in the working tree (no commits were made in this phase).
+
+| Document | Version / status as read |
+|---|---|
+| `TDD.md` | 1.0-rc, "Conditionally ready for human review" |
+| `security/threat-model.md` | Phase 4 revision; **amended in this phase** (see §3, VE-19 and TM header) |
+| `integrations/github.md`, `claude.md`, `codex.md`, `linear.md` | Phase 4 (B), dispositions in `reviews/41-revision-B.md` |
+| `architecture/components.md`, `state-machine.md`, `protocols/messages.md` | Phase 4 (C), `reviews/42-revision-C.md` |
+| `operations/macos-service.md`, `recovery.md` | Phase 4 (D), `reviews/43-revision-D.md` |
+| `architecture/overview.md`, ADR-001…020 | Phase 4 (A), `reviews/40-revision-A.md` |
+| `planning/*.md`, `testing/verification-plan.md` | Phase 4 (F), `reviews/45-revision-F.md` |
+
+---
+
+## 2. Verdict
+
+**Approve with conditions.**
+
+- **The hard constraint is met in design.** Every path by which a commit can reach a protected branch is blocked by at least one control that does not depend on a prompt: GitHub rulesets and App permissions [GH], the `_mercuryagent` uid and root-owned wrappers [OS], or deterministic code [SW] (§5). The single exception is **N1**, the operator's own interactive agents, which hold the operator's own credentials. N1 is controlled by policy only (OD-E-02, RISK-28). This is declared, and it is not a MERCURY control failure.
+- **No Critical or High findings are open.** I found 0 Critical, 0 High, 8 Medium and 12 Low findings (§3). Every Medium is a cross-document inconsistency left over from the Phase 4 addenda, or a gap in a list. None of them breaks invariant H. If any were implemented as written, it would either fail closed or be caught by an existing test, with one exception: VE-05 would weaken the protected-path policy if an implementer followed the TDD text instead of SEC-310.
+- **Conditions** (detail in §7): fix the Medium findings before the milestones named in §3. Pass G-S2 (SEC-T-20 on the real Mac) before any non-sandbox write run. Before any unattended operation, adopt G-ORG and decide OD-36.
+
+---
+## 3. Severity-ranked findings
+
+Severity scale (Phase 5 common rules): **Critical** = violates a hard constraint or authority invariant, or makes the design unimplementable or unrecoverable. **High** = incorrect behaviour, data loss, duplicate side effects, security exposure, or major rework. **Medium / Low** = defects of lesser impact. "Fixed in place" applies only to my own files (TM, this report). Every other finding is routed to its owner with a proposed fix.
+
+**Totals: Critical 0 · High 0 · Medium 8 · Low 12.** Medium findings fixed in place: 1 (VE-19). Low findings fixed in place: 3 (VE-09 E part, VE-11 E part, VE-14 E part).
+
+| ID | Sev | Owner | Finding (evidence) | Proposed fix | Needed before |
+|---|---|---|---|---|---|
+| VE-01 | Medium | A | **Stale App inventory, contradicting Addenda B/C.** ADR-008 §Decision table row `mercury-ops` (line 23): installed on "target repositories (read-only)" with `metadata:read` for the drift monitor; line 33 and Alternatives (line 41) repeat it; `mercury-bot` row omits `statuses:read`. `overview.md` §C11 (line 481): "Drift monitor via `mercury-ops`". Addendum C §1: `mercury-ops` is **not** installed on targets, and the drift monitor uses a `mercury-bot` `audit` token (`metadata:read`). Addendum B §1: `statuses:read` added to `mercury-bot`. `github.md` §2.3 and the TDD §15 are correct. | Update ADR-008 rows and §33/§41 and overview C11 to match github.md §2–§3 | P0c (identity creation) |
+| VE-02 | Medium | A | **ADR-018 §Decision 2 lists the `MERCURY / claude-review` check-run summary as an anchor carrier with no condition.** Addendum B §2 and OD-24 default: carrier on **private repos only**, never on public repos. The implementers (components §4.16, github.md §6.1) are correct. | Qualify the bullet "private repositories only (Addendum B, OD-24)" | M7 |
+| VE-03 | Medium | D | **Credential inventory has stale App permissions.** `macos-service.md` §9.1 (lines 678–679): `mercury-bot` lacks `statuses:read`; `mercury-ops` has "`metadata:read` on targets" and "ruleset drift reads". §9.1 is the single source for the credential inventory, so P0c could install `mercury-ops` on targets, which SEC-110 forbids. | Copy github.md §2.2/§2.3 permissions; move "ruleset drift reads" to the `mercury-bot` row | P0c |
+| VE-04 | Medium | D | **The `agent-exec` grammar does not take the Addendum C §4 changes.** (a) §3.4 line 277: fd 0 = `/dev/null` for Codex kinds, but codex.md §3 (line 47) and TDD §13 put the prompt on fd 0. (b) §3.5 line 301 / step 5: `claude` allows `--add-dir` only equal to `cwd`, and `cwd` only `snapshots/<tree_sha>`. claude.md §2.2 needs `--add-dir runs/<run_id>/in` and `cwd = runs/<run_id>/in` for snapshot-less runs (triage). As written, both run kinds fail closed (`config_fatal`), so this is not a security exposure, but the design cannot be implemented as written. | Amend §3.4 fd table (fd 0 = `runs/<run>/in/prompt.txt` opened read-only by `mercuryd`, Codex kinds) and §3.5 `claude` row and step 5 (allow `--add-dir` ∈ {`cwd`, `runs/<run_id>/in`}; `cwd` ∈ {`snapshots/<tree>`, `runs/<run_id>/in`}). `in/` is operator-owned 0750/0640 (§7.1), so it stays read-only to the agent | M3 (Claude), M4 (Codex) |
+| VE-05 | Medium | Orchestrator | **TDD §19 "Prompt-injection defences" misclassifies protected paths.** It puts `.claude/**` and `.mcp.json` in the policy-acknowledgement (escalate) class. SEC-310 makes them **block-class**: a planted hook must never be pushed, because it would run under the operator's interactive Claude (TH-20, TH-38). The TDD is the summary an implementer reads first. | Change the clause to: "`.github/**`, `.claude/**`, `.mcp.json`, `.codex/**`, `.agents/**`, editor/env auto-run files → blocked; CODEOWNERS, lockfiles/manifests, build scripts, `.gitattributes`, `AGENTS*.md`, `CLAUDE.md` → policy acknowledgement (SEC-310)" | Before M5 |
+| VE-06 | Medium | B | **Managed Claude settings are weaker than SEC-204.** `claude.md` §7.3: only `disableBypassPermissionsMode` and `disableAutoMode`, labelled "Recommended", "CL-1…CL-8 do not depend on it". SEC-204 (MUST, OD-19 default *yes*) also requires `allowManagedHooksOnly`, deny rules for credential paths, and an empty managed MCP configuration. These close TH-20 for any Claude process, including the operator's interactive one. | List the SEC-204 keys in §7.3 and validate them in the §8 self-test when OD-19 = yes (P0-048) | M3 (G-S1) |
+| VE-07 | Medium | D | **The watchdog check needs a permission SEC-101 forbids.** `macos-service.md` §11.6 (line 865): `doctor` reads `GET /repos/{o}/{r}/actions/workflows/{id}` with the `mercury-ops` token. That endpoint needs `actions:read`. SEC-101 says no MERCURY credential holds `actions`, and github.md §2.3 does not grant it. As written, the check either fails with 403 or forces a silent permission widening. | Prefer an operator attestation (POL, monthly, like the SEC-108 admin-read checks). Alternatively, a separate OD with an ADR granting `actions:read` to `mercury-ops` on `project-mercury` only; E would then add a SEC-101 exception | M7 (watchdog) |
+| VE-19 | Medium | E | **TM had not taken the Addenda.** SEC-101 and §6.3 lacked `statuses:read` and still had `mercury-ops` on targets. SEC-113 used `neutral` for `MERCURY / policy`, which GitHub treats as passing. SEC-604, §8.5 and A-12 made the check summary an unconditional carrier. SEC-905, §8.9 and §0 item 11 used merge-verification numbering (M1–M9) that differs from github.md §8, and §8.9 scoped M8 (MERCURY review state) to the repo where GH §8 and SM §8.5 scope it globally. SEC-310 and SAC-16 required a new acknowledgement for every head, contradicting the digest carry-forward of github.md §6.2 and SM §8.7. ASM-E rows had P0 "new". | **Fixed in place** (TM revised 2026-10-13; see §6.2) | — |
+| VE-08 | Low | B | `github.md` §9.4 O6: "**Both** Apps installed with exactly the permissions of §2" on the target repo, contradicting §2.3 and Addendum C. §9.6 scopes governance drift and `unexpected_base_commit` as **global** halts. TM §8.9 now states the repo halt as the **minimum** scope, so global is compliant but costs availability. | O6: "`mercury-bot` installed; `mercury-ops` not installed". Optionally narrow §9.6 to a repo halt | P0c |
+| VE-09 | Low | B (E part fixed) | `codex.md` §9 step 2 makes `CODEOWNERS`, `.gitattributes`, `.gitmodules`, `AGENTS*.md`, `CLAUDE.md`, `.tool-versions` **block-class**, where SEC-310 makes them escalate-class. It also adds `.husky/**`, `.npmrc`, `.yarnrc*`, which SEC-310 did not list. Stricter is safe, but the two documents now disagree. | **E:** SEC-310 now adds `.husky/**`, `.npmrc`, `.yarnrc*` to block-class and allows repo policy to move escalate-class paths to block-class. **B:** state that codex.md follows the stricter repo-policy option, or align with SEC-310 | M5 |
+| VE-10 | Low | C | `components.md` §9.6 git flag set is a subset of SEC-401 / TM §8.3 / codex.md §9. It lacks `--no-textconv --no-ext-diff`, `core.attributesFile=/dev/null`, `credential.helper=`, `submodule.recurse=false`, `transfer.fsckObjects`, `core.protectHFS/NTFS`, and the SEC-402 mirror-config key allowlist check before worktree-naming calls (codex.md has only a start-up hash). No execution path exists today, because config cannot come from the worktree. | Reference codex.md §9 / TM §8.3 as the complete set; add the SEC-402 per-invocation config check (or start-up hash plus an fs-event re-check) | M5 (G-S3) |
+| VE-11 | Low | C (E part fixed) | SM §8.8 instruction-file guard compares with `tasks.last_commit_sha`, but SEC-209 said "base-SHA versions". Under SEC-310, `AGENTS*.md`/`CLAUDE.md` are escalate-class, so once acknowledged they can differ from base and steer later Codex runs. | **E:** SEC-209 amended to accept the last MERCURY commit **only** where the difference carries a presence-bound `policy ack`. **C:** state that rule in §8.8 | M4 |
+| VE-12 | Low | C | SM §5.1 `security_halt` row: "any SEC-902 trigger (E owns the list)". SEC-902 is the kill switch; the trigger list is SEC-906 / TM §8.9. | Replace with "any trigger of TM §8.9 (SEC-906)" | M5 |
+| VE-13 | Low | D, C | The presence helper uses `LAContext.evaluatePolicy(.deviceOwnerAuthentication)` (macos-service §9.5, components §5.2). That policy offers the password even when Touch ID is available. TM §8.8 requires biometrics first, with the password only when biometry is unavailable (lower exposure to synthetic-input attacks, RISK-30). | Evaluate `.deviceOwnerAuthenticationWithBiometrics`; on `biometryNotAvailable`/`biometryNotEnrolled` fall back to `.deviceOwnerAuthentication` and record `presence_method` in `control_requests`. Verify in P0-045 | M5 |
+| VE-14 | Low | A (E part fixed) | Presence-tier method lists differ in four places. ADR-019 §33 omits restore-epoch confirmation (Addendum B §5) and security `outbox retry`. macos-service §9.5 omits `outbox retry`, `resume --reopen/--discard-worktree-changes`, `orphan adopt`. TM SEC-115 listed a `guard_integrity_failure` resume that SM §6.1 does not offer. components §5.2 is the superset (§6.8 below). | **E:** SEC-115 now names components §5.2/§5.4 as the authoritative method classification and is aligned with it. **A/D:** reference components §5.2 instead of restating the list | M5 |
+| VE-15 | Low | C | `components.md` §4.16 Redactor lists exact-match and pattern stages but not SEC-501's **encodings** of loaded secrets (base64, hex, URL-encoded) or the **entropy stage, fail-closed, for public sinks**. | Add both to §4.16; TC-SEC-150 already tests 40 formats and encodings | M5 (G-S3) |
+| VE-16 | Low | D | `macos-service.md` §13.2 step 2: `mercury upgrade` "optionally `gh attestation verify` with the operator's own `gh`". SEC-103 says MERCURY never runs `gh`. If the CLI runs it, MERCURY executes with the human credential. | Make it a separate operator step in the runbook ("before `mercury upgrade`, run `gh attestation verify …`"), never invoked by MERCURY code | M8 |
+| VE-17 | Low | F | `traceability.md` §10 row ASM-E-06: "SEC-206 (SHOULD); G-S2 if chosen". The `deps_install` registry-egress part of SEC-206 is **MUST** and gates G-S2 through SAC-18. The P0-049 procedure is now specified (TM §10.4). | Mark P0-049 gating for G-S2 whenever `deps_install` is enabled for a non-sandbox repo | P0b |
+| VE-18 | Low | A, Operator | `mercury-ops` has App-level `contents:write` on public `project-mercury`, which holds `pins.json` (TM §8.6). Narrowing per token is SW-only (github.md §2.3). The residual is bounded because `project-mercury` `main` uses the target-repo ruleset (macos-service §15.1), so a push cannot reach `main` without the operator. | Keep the ruleset on `project-mercury` a P0d gate (drift-monitored); optionally host the anchor repo under a separate account/installation | P0d |
+| VE-20 | Low | Orchestrator | TDD §15 "Merge verification (M1–M8)" paraphrases checks that are not in github.md §8 ("no foreign pushes; PR body/marker intact; ruleset unchanged"). It omits the MERCURY-review-state check (GH M8) and the base-commit audit (GH §9.6). | Replace with the GH §8 list by ID, or reference it only | Before M7 |
+
+**Resolved disagreement (no finding): G-S5 placement.** E's Phase 4 text said "Unattended … (M7)"; F's roadmap §4 says "G-S5 at M9c entry; controls built in M7". These are compatible. The **controls** (anchoring, SEC-906, merge verification) are built and evidenced in M7–M8. The **gate** (G-ORG on targets, OD-36 decided, SAC-01…20 green) is recorded at M9c entry and is a precondition for any unattended or overnight dispatch, including during M9b. TM §8.10 now says this. One recommendation: OD-36 should be decided at **M8 exit**, as F proposes (`traceability.md` OD-36 row), so that option (b) (MERC-807b) does not delay M9c.
+
+---
+## 4. SEC requirement compliance matrix (against the final documents)
+
+Status key: **S** satisfied in design (the implementing document specifies the control) · **P** partial (specified, but a gap or an inconsistency remains; finding cited) · **M** missing · **C** contradicted by a final document. "UNVERIFIABLE" means the control is fully specified but its effect can only be proven on the Mac or the live service. GH = `integrations/github.md`, CL = `claude.md`, CX = `codex.md`, LN = `linear.md`, CMP = `components.md`, SM = `state-machine.md`, MS = `macos-service.md`, REC = `recovery.md`.
+
+| SEC | Tag | Status | Evidence (implementing location) | Note |
+|---|---|---|---|---|
+| 100 | GH | S | GH §9.1 ruleset JSON (PR, 1 approval, code owner, last push, stale dismissal, strict checks with integration ids, no bypass, deletion/non-FF); GH §9.4 O3/O4 | Live behaviour UNVERIFIABLE — TC-GOV-116 (SEC-T-16) in sandbox |
+| 101 | GH | **P** | GH §2.2–§2.3, §3 token purposes correct | Contradicted by ADR-008 and MS §9.1 (VE-01, VE-03) |
+| 102 | SW | S | GH §10.4 allowlist + explicit forbidden list; CMP §4.11 (no methods), CMP D6 lint, CT-04; SM INV-09 | §6.1 below |
+| 103 | SW/POL | **P** | GH §2.1 row "Operator"; MS §9.1 last para | VE-16 (`gh attestation verify` inside `mercury upgrade`) |
+| 104 | GH | S | GH §9.4 O2 | |
+| 105 | GH | S | GH §9.5; O1 (CI on drafts); O9 attestation (POL part) | |
+| 106 | POL | S | LN §9 operator policy; TM SEC-106; P0-074 checklist (verification plan §7.2 G-S1) | Policy only (N1) |
+| 107 | SW | S | CMP §4.11 ownership by App user id; GH §7.6–§7.7 | |
+| 108 | SW | S | GH §9.6 (start-up, wake, interval key `gov.drift_check_interval_min`) | Bound ≤ 60 min is in MS §2 table — UNVERIFIABLE timing, SEC-T-15 |
+| 109 | GH/POL | S | GH §10.1–§10.2; ADR-014 | G-SPLIT gated by P0-233/P0-238 |
+| 110 | GH | **P** | GH §2.3 (`mercury-ops` not on targets; `mercury-bot` not on ops repos) | MS §9.1, ADR-008, GH §9.4 O6 contradict (VE-01, VE-03, VE-08) |
+| 111 | SW | S | CX §9 step 5; GH §4.2 | |
+| 112 | GH | S | GH §9.5 tag ruleset | SHOULD |
+| 113 | SW+GH | S | GH §6, §6.1, §6.2 (`action_required`, never `neutral`/`skipped`); CMP §4.11 `CheckConclusion` type; GH §9.1 integration-id pin | TM amended (VE-19); pinning UNVERIFIABLE — P0 ASM-B-56/57, SEC-T-17 |
+| 114 | SW | S | GH §6.1 / TDD §15 (draft until CR success; review request after); SM §5.1 `spec_changed` re-draft | |
+| 115 | SW+OS | S | CMP §5.2/§5.4 (★ methods, presence assertion bound to nonce + params); MS §9.5 helper; SM §6.1 ★ actions | VE-13, VE-14 (Low); helper UNVERIFIABLE — P0-045 |
+| 201 | OS | S | MS §3.3–§3.5, §7.1, §3.11 gates; ADR-013; CMP §4.7 | **UNVERIFIABLE — P0-026…032, SEC-T-20 (G-S2)** |
+| 202 | SW+OS | S | MS §3.5 steps 6–7, §3.6, §9.4; CL §7.2; sudoers `env_reset, !setenv` (MS §3.4) | Residual ASM-B-16 (model key via Codex env), accepted |
+| 203 | SW | S | CX §5–§6; MS §7.1 `codex-home` row (config 0640 op, regenerated and byte-verified) | |
+| 204 | SW+OS | **P** | CL §2.1 (settingSources [], no MCP, dontAsk, tool lists, confinement hook, no fallback model), CL §8 self-test | Managed-settings content incomplete (VE-06); `disableAllHooks` vs SDK hook UNVERIFIABLE — P0-201 |
+| 205 | SW+OS | S | CMP §9.5; MS §7.1 snapshots row; MS §3.5 step 5 (`claude` cwd = snapshot) | §6.5 below |
+| 206 | OS | **P** | MUST no-network for Codex and `verify`: CX sandbox flags, `verify.sb` (TM §8.7). `deps_install` allowlist mechanism: **specified now in TM §10.4 (P0-049)** | UNVERIFIABLE — P0-049, SEC-T-25 |
+| 207 | SW/OS | S | MS §7.1 `runs/<run>/tmp`; CMP §9.7 | |
+| 208 | SW+OS | S | MS §3.5 Codex row (allow-list grammar, forbidden list); CX §3 line 36; managed `requirements.toml` P0-048 | |
+| 209 | SW | **P** | SM §8.8 (before every dispatch and resume) | Comparison base differs (VE-11; TM amended) |
+| 210 | SW | S | MS §3.10 `doctor` table (sudoers digests, wrapper hashes, agent home scan) | |
+| 211 | OS | S | CX §3; OD-09 | |
+| 212 | OS+SW | S | MS §3.5 (12-step validation), §3.7 (`agent-ctl` identity triple, purge roots) | Fuzzing SEC-T-28 in `test-wrappers` CI + Mac |
+| 213 | OS+SW | S (MUST) / M (SHOULD) | MUST: MS §7.3 Seatbelt writable roots, §3.9 per-repo caches | SHOULD worktree seal not specified in CMP §9 (optional; not a finding) |
+| 214 | SW+OS | S | MS §3.5 step 11, §3.8; ADR-020 | |
+| 215 | OS | S | TM §8.7 rules; MS §3.4 profiles path, §3.5 `verify`/`deps_install` grammar with pinned profile hash | Profile text not yet written; UNVERIFIABLE — P0-037, P0-049 |
+| 301 | SW | S | CL §5.2 nonce-delimited untrusted blocks; LN LN-2 | |
+| 302 | SW | S | LN LN-1/LN-2; CMP §5.4 (no approve/authorize methods); SM INV-17 | |
+| 303 | SW | S | CL §6, §6.1 (wire copies + Ajv); messages.md §5 | |
+| 304 | SW | S | CMP §4.16 `Redacted<NeutralisedText>`; LN §7 line 228; GH §5 | |
+| 305 | SW | S | SM §8.1 authorization guard; CMP §4.10 `withinEscalateAllowance` | |
+| 306 | SW | S | SM T09, T14, §8.2 | |
+| 307 | SW | S | SM §5.1 `spec_changed` (AG@apply, CR `action_required`), §8.1 | |
+| 308 | SW | S | SM §8.3; GH §6 (per-SHA check runs) | |
+| 309 | SW | S | CMP §4.10 pipeline order; CX §9 steps 1–4 | |
+| 310 | SW+GH | **P** | CX §9 step 2; GH §6.2; SM §8.7; TM SEC-310 (amended) | TDD §19 contradicts block-class for `.claude/**`/`.mcp.json` (VE-05); CX stricter (VE-09) |
+| 311 | SW | S | CL §8 upgrade procedure; verification plan TC-PI-130 | |
+| 312 | SW | S | CX §9 step 2 (bidi, zero-width, mixed script) | |
+| 313 | SW | S | GH §7.3–§7.4 (operator numeric ids; label actor) | |
+| 314 | SW | S | SM T24/T25 (two reviews); TDD §14 | |
+| 315 | SW | S | SM §9 | |
+| 316 | SW | S | SM T25 (`producer_kind = verbatim_render`); CL §3.3 hybrid rule | |
+| 401 | SW | **P** | CX §9 hardening list; CMP §9.6 | CMP flag subset (VE-10) |
+| 402 | SW | **P** | CX §9 pointer + `commondir`/`gitdir` check; CMP §9.3 `verifyGitPointer` | Mirror-config allowlist only hashed at start (VE-10) |
+| 403 | SW | S | CX §9 step 2 | |
+| 404 | SW | S | CX §9 step 1; CMP §4.10 | |
+| 405 | OS | S | MS §7.1 (single source), §3.10 `doctor` modes | |
+| 406 | SW+OS | S | MS §3.7 `purge`; CMP §9.7 | ASM-E-09 unit test TC-SEC-143 |
+| 407 | SW | S | GH §10.4 (receive-pack to `refs/heads/mercury/**` only); MS §9.3 askpass fd; CMP §9.2; GH §9.3 FF-only | |
+| 501 | SW | **P** | CMP §4.16 Redactor; MS §9.3 `Secret` type | Encodings and entropy stage not in CMP (VE-15) |
+| 502 | SW | S | CX §9 step 3 (gitleaks + own patterns + exact match) | |
+| 503 | OS/SW | S | MS §9.1–§9.3 (helper-only ACL, read once) | UNVERIFIABLE — P0-036 (else RISK-29 and signed helper in v1, Addendum A) |
+| 504 | POL/SW | S | MS §9.1 rotation column | |
+| 505 | SW | S | CMP §4.16 last para, §6.5 retention table | |
+| 506 | GH | S | GH §9.5 | SHOULD |
+| 507 | SW | S | GH §6.4; CMP §4.15 row `security_escalation` (generic text on public repos) | |
+| 601 | SW | S | CMP §4.16 `AuditAppender.actorKind`; CMP §5.2 `control_requests` | |
+| 602 | SW | S | CMP §4.16 chain; REC §4 step 7 | |
+| 603 | SW | S | CMP §4.16 HMAC (SHOULD) → `reauthorization_required` | |
+| 604 | SW+GH | **P** | CMP §4.16, GH §6.1 (private only), LN §7 `completed` comment | ADR-018 contradicts (VE-02); TM amended (VE-19) |
+| 605 | SW | S | CMP §4.16 `AuditVerifier` | |
+| 606 | SW | S | CMP §6.5 | SHOULD |
+| 607 | SW | S | CMP §4.16 epochs (★ `restore --confirm`); MS §14.4; REC step 7 | |
+| 701 | SW/POL | S | MS §13.5, §3.4 `agent.conf` hashes | |
+| 702 | SW | S | CX §9 step 2 (escalate + lockfile lint); issue-breakdown MERC-5xx | |
+| 703 | SW/OS | S | MS §3.5 `deps_install` row; CMP §8 (line 1768) | |
+| 704 | SW/OS | S | MS §2.2–§2.3, §3.5 steps 8/11; §10 | |
+| 705 | SW | S | LN §7 (mutation budget); MS §2 parameters | |
+| 706 | SW | S | MS §13.2 (`npm ci --ignore-scripts`), §15.1 (SHA-pinned Actions, `supply-chain` job) | |
+| 707 | POL/SW | S | GH §9.4 O9 attestation | SHOULD |
+| 708 | SW/OS | S | MS §3.9 | |
+| 801 | SW/POL | S | LN §2 (app actor, team restriction in code via `linear.teams`) | UNVERIFIABLE — P0-225 (ASM-E-05) |
+| 802 | SW | S | CL §2.1 (`mcpServers: {}`); CX `CODEX_HOME` config (no `mcp_servers`) | |
+| 803 | SW | S | LN §9 (delegate, coding session, foreign PR → `BLOCKED(foreign_agent)`) | |
+| 804 | POL | S | LN §9 operator policy | |
+| 805 | SW | S | LN §7 (line 224) write allowlist | |
+| 806 | POL | S | roadmap M9c (Slack token revoked) | |
+| 901 | SW | S | CMP §4.15 matrix | |
+| 902 | SW | S | CMP §5.4 `pause` (operator), `unpause --safe-mode` ★ | |
+| 903 | SW | S | SM §5.1 `security_halt` (sandbox violation); TM §8.9 | |
+| 904 | SW | S | SM §8.3 | |
+| 905 | SW | S | GH §8 M1–M8, GH §9.6 base-commit audit; SM §8.5 | TDD §15 paraphrase (VE-20) |
+| 906 | SW | S | SM §5.1 holds, §8.5; TM §8.9 (amended to GH numbering) | |
+| 907 | SW/POL | S | MS §11.6 (locked conversations, templates, App badge) | |
+| 908 | SW | S | MS §5.2; REC §4; SM `integrity_check_failed` | |
+
+**Summary:** 90 SEC rows. S = 79 (SEC-213 counted on its MUST part); P = 11 (101, 103, 110, 204, 206, 209, 310, 401, 402, 501, 604); M = 0 among MUST requirements (only the SHOULD worktree seal of SEC-213 is unspecified); **C = 0 at the requirement level**. The contradictions (VE-01/02/03/05) are in secondary documents; each requirement's owning implementer is correct.
+
+---
+## 5. Re-verification of the human-approval-boundary proof
+
+**Invariant H** (TM §5.2): no commit authored or modified by an agent or by the coordinator becomes reachable from a protected branch unless the operator approved the exact head after the last push.
+
+Method: for each path of TM §5.2.2 I traced the controls into the **final implementing documents** (not the TM's own claims). I classed each control as GH, OS or SW, and asked whether it would still hold if every LLM involved behaved adversarially (a prompt-level failure).
+
+| # | Path | Controls actually specified (final docs) | Prompt-independent? | Verdict |
+|---|---|---|---|---|
+| 1 | Direct push to `main` | GH §9.1 ruleset: `pull_request` rule, `non_fast_forward`, `deletion`, `bypass_actors: []` (GH). GH §10.4: receive-pack only to `refs/heads/mercury/**` (SW). MS §3.6, §9.4: agents hold no GitHub credential; key only on fd 3 (OS) | Yes: GH alone suffices | **Blocked** |
+| 2a | Counting approval by an agent or MERCURY | GH §9.1 `require_code_owner_review` + CODEOWNERS `* @<operator>` (GH §9.4 O2); `require_last_push_approval` (the bot is the last pusher) (GH). CMP §4.11 `createReview` typed `event: "COMMENT"`; D6 lint; GH §10.4 forbidden list (SW). Agents: no credential (OS). Detective GH §8 M8 → global halt | Yes | **Blocked** (GH alone suffices) |
+| 2b | Approval for different code (TOCTOU, replay) | GH §9.1 `dismiss_stale_reviews_on_push`, `require_last_push_approval`, strict checks (GH). GH §6: check runs per SHA, `external_id` binds `task:head:gate`; SM §8.3 review binding (SW) | Yes | **Blocked** |
+| 2c | Human approves misleading but genuine code | H holds by definition. Quality controls: `MERCURY / policy` `action_required` until a presence-bound ack (GH §6.2, CMP §5.2); draft until CR success (GH §6.1); separate security review (SM T24); neutraliser (CMP §4.16); SEC-507 | Partly: the acknowledgement path is SW + TCB; review quality is inherently LLM + human | **Holds**; residual RISK-05 |
+| 2d | Non-human merge after genuine approval | G-ORG: GH §9.2 `update` rule, operator-only team bypass (GH). G-DETECT: GH §8 M2 global halt (SW, detective). Auto-merge: `allow_auto_merge=false` (GH §9.5) and no endpoint (GH §10.4). Update-branch: no endpoint; base moves only through the coordinator merge commit, which dismisses the approval (GH §7.5, SM T41) | Yes | **Holds** (preventive under G-ORG; detective under G-DETECT, accepted in writing) |
+| 3 | Weakening the rules | No MERCURY App holds `administration` (GH §2.2–§2.3; contradicted only by stale ADR-008/MS §9.1 text, which grants nothing extra; VE-01/03). `.github/**` block-class (CX §9). Agents cannot read human credentials (MS §3.3, §7.1 0700 home). Drift monitor (GH §9.6) | Yes | **Blocked** (gated on SEC-T-20 for the OS layer) |
+| 4 | Workflow with write power | GH §9.5 (Actions approve off, read-only token); no `workflows` permission (GH §2.2); `.github/**` block (CX §9); forged check: integration-id pin `1000001`/`15368` (GH §9.1) | Yes | **Blocked** |
+| 5 | Human impersonation via Linear | LN §2 app actor, no `app:assignable`; CL §2.1 no MCP; agents cannot read human Linear session (OS) | Yes | **Blocked** for MERCURY agents (UNVERIFIABLE — P0-225 for the app actor's own reach) |
+| 6 | Agent code through an unrelated human merge | `mercury/**` only (GH §10.4); per-PR last-push rule; foreign push → `BLOCKED(foreign_push)` (GH §7.6); base-commit audit (GH §9.6) | Yes | **Covered by 2** |
+| N1 | Operator's interactive agents (human credential) | SEC-106 / OD-E-02 deny rules (POL); presence tier stops them clearing escalations (CMP §5.2, OS-backed helper); neutraliser reduces injection surface | **No** (policy) | **Open by design**, RISK-28 |
+| N2 | Push redirection via worktree `.git`/config | CX §9 pointer check + explicit `GIT_DIR`; CMP §9.6; GH §10.4 push from mirror with fixed URL; MS §9.3 askpass fd | Yes (SW) | **Blocked**; and leaks only the App token, which cannot approve (L5) |
+| N3 | Control-socket principal abuse | CMP §5.2 principals; ★ methods need `mercury-presence` nonce (MS §9.5); CMP §5.4: no approve/merge/authorize method exists | Yes (SW + TCB) | **Blocked**; cannot reach H in any case |
+
+**Confirmation of the brief's constraint ("not relying solely on prompt instructions").** **Confirmed in design.** Paths 1, 2a, 2b, 2d, 3 and 4 are each closed by a GitHub-enforced control that neither the agents nor the coordinator can change: the ruleset in GH §9.1 combined with the App permissions in GH §2.2, which contain no `administration`. That control holds even if all of MERCURY's software fails, which is TM §5.2.3, row "Coordinator compromised", for MERCURY's *own* credentials. Path 5 and the credential half of path 3 rest on OS uid separation. In every path, prompts are layer L0 only and are assumed to fail.
+
+Two qualifications are carried into §7:
+
+1. **SEC-201 is load-bearing and unverified.** If an agent-class process can read any operator or MERCURY credential *and* any publish path exists, H fails, and a secret scanner cannot compensate (TM §5.2.3, RE-24). The design gates this correctly: MS §3.11, ADR-013 and roadmap G-S2 forbid non-sandbox write runs before SEC-T-20. The proof is therefore conditional on P0-027 / SEC-T-20.
+2. **Coordinator compromise reaches the human's `gh` credential** (RISK-27). The GitHub layers stop MERCURY's tokens, not the human's. This is accepted for supervised operation, and OD-36 must be decided before unattended operation (Addendum A).
+
+Single-control-failure re-check (TM §5.2.3): every row still matches the final documents. The row "`MERCURY / claude-review` forged by another identity" now also depends on the Phase 0 confirmation that the latest App-authored run of a name governs the requirement (GH §6, ASM-B-56). That is **UNVERIFIABLE IN DESIGN — P0 for ASM-B-56/57, SEC-T-17**.
+
+---
+## 6. Specific checks
+
+Each check records what was checked, the method, the evidence and the result.
+
+### 6.1 Endpoint allowlist completeness (no approve, merge, dismiss, update-branch or auto-merge path)
+
+- **Method:** ripgrep across `integrations/github.md`, `architecture/components.md` and `architecture/state-machine.md` for `update-branch|update_branch|auto-?merge|enablePullRequestAutoMerge|/merge\b|/merges|dismiss|APPROVE|REQUEST_CHANGES|mergePullRequest`. I then read every hit in context.
+- **Evidence:** the positive allowlist is GH §10.4. Its only review write is `POST /pulls/{n}/reviews` with `event: "COMMENT"`, and its only PR state write is `PATCH /pulls/{n}` with `state: open` (reopen). The explicit forbidden list in GH §10.4 covers `PUT …/merge`, `POST /merges`, merge queue, GraphQL `mergePullRequest`/`enablePullRequestAutoMerge`/`disablePullRequestAutoMerge`/`enqueuePullRequest`, `update-branch`, `APPROVE`/`REQUEST_CHANGES` incl. pending-review submission, `…/dismissals`, rules, protection, settings, collaborators, hooks, Actions writes, commit statuses, foreign check names, and refs outside `mercury/**`. CMP §4.11 `GitHubPort` has no such method; `createReview` is typed `event: "COMMENT"` and `CheckConclusion` excludes `neutral`/`skipped`. CMP §1 rule D6 is a lint for the strings; CT-04 is the contract test. SM INV-09, T25 ("never REQUEST_CHANGES") and T41 ("never GitHub update-branch") repeat the rules. Every other hit is an explanation, a forbidden-list entry, an operator action, a Phase 0 negative test (GH §10.2) or a plan-approval state name.
+- **Result: PASS.** The only Contents write is `mercury-ops` `PUT` in the anchor repo, which SEC-102 allows. I found no path that approves, merges, dismisses, updates a branch or enables auto-merge.
+
+### 6.2 Check-run pinning and SEC-113 `action_required`
+
+- **Evidence:** GH §9.1 pins both MERCURY contexts to `integration_id` = `mercury-bot`'s App id and pins CI to GitHub Actions (`15368`). The drift monitor asserts the pin (GH §9.4 O4, §9.6). GH §6 uses only `success`/`failure`/`action_required`; CMP §4.11 enforces this in the type; SM §8.6 and §5.1 emit `action_required` for holds, cancel and spec change.
+- **Result: PASS after amendment.** SEC-113 now states `action_required` and forbids `neutral`/`skipped` (Addendum C §2). TM §7.5 pseudo-code and SAC-16 were updated to match (VE-19). The ack carry-forward (same protected-blob digest) is accepted as secure and written into SEC-310. **UNVERIFIABLE IN DESIGN:** whether a completed run's conclusion can be changed, and which run governs (ASM-B-56). Also whether `statuses:write` is needed for pinning (ASM-B-57); if it is granted, GH §10.4 still forbids status creation.
+
+### 6.3 Agent-uid controls vs `macos-service.md` §3 grammar
+
+| Control | Evidence | Result |
+|---|---|---|
+| Lateral sudo, two binaries, digest-pinned | MS §3.4 sudoers (`(_mercuryagent : mercury)`, `sha256:` digests); `doctor` lists exactly two (MS §3.10) | Pass |
+| argv validation | MS §3.5: exactly `--run-dir`; caller uid; realpath with `O_NOFOLLOW` walk; spec owner, mode and size; `argv[0]` = pinned binary + hash; per-kind allow-list token tables; cwd per kind; refusal → `config_fatal` | Pass; **VE-04** for the `claude` `--add-dir`/`cwd` rule |
+| fd 3 | MS §3.5 step 7 (length-prefixed, 1…4096 bytes, EOF; must be closed for `verify`/`deps_install`; `closefrom(3)`); `closefrom_override` only for `agent-exec` (MS §3.4) | Pass; UNVERIFIABLE — P0-026 |
+| fd 0 | MS §3.4 says `/dev/null` for Codex; CX §3 requires the prompt file | **VE-04** |
+| Environment | sudo `env_reset, !setenv`; MS §3.5 step 6 key allowlist with realpath-confined values; MS §9.4 per-kind table; CL §7.2 | Pass |
+| `agent-ctl` | MS §3.7 identity triple before any signal; `purge` realpath roots; runs as `_mercuryagent`, never root | Pass |
+| Supervised lifetime | MS §3.5 step 11 (credited deadline + lease on `WORK_ROOT/ctl/coordinator.alive`, Addendum B §3) | Pass |
+
+### 6.4 Claude isolation settings (`claude.md`)
+
+- **Evidence:** CL §2.1 sets `settingSources: []`, `disableAllHooks`, `mcpServers: {}`, `permissionMode: "dontAsk"`, tool lists (`[]` or Read/Grep/Glob) with `disallowedTools` incl. `Task`/`Agent`/`Skill`/`mcp__*`, `canUseTool` deny fallback, `PreToolUse` confinement hook, no `fallbackModel`, pinned binary, and an empty `env` (`agent-exec` builds it). CL §2.2 token table forbids `--dangerously-skip-permissions`, `--mcp-config`, `--plugin-dir`, `--fallback-model`. CL §8 self-test is a hard gate (planted hooks, MCP, symlink, out-of-root read, model id). The ALT-B-1 fallback (CL §2.3) has no subprocess and its confined tools run in Zone C over immutable snapshots.
+- **Result: PASS, except VE-06** (managed-settings content). **UNVERIFIABLE:** P0-042 (SDK spawn through sudo), P0-201 (`disableAllHooks` keeps SDK hooks; ASM-E-17), P0-048 (managed settings path).
+
+### 6.5 Snapshot builder
+
+- **Evidence:** CMP §9.5 builds from `ls-tree -r` + `cat-file --batch` in the mirror, with no `.git`, no attributes, no filters or `export-subst`, symlinks and submodules as placeholders, 0444/0555, keyed by tree SHA, manifest hash on review rows. MS §7.1 snapshots row; MS §3.5 step 5 (`claude` cwd = snapshot). SEC-T-24 covers `export-ignore`, `export-subst`, symlink, submodule and `.git` file.
+- **Result: PASS.** Note: snapshots are shared by tree SHA across tasks. That is safe because they are read-only to the agent, and the manifest is re-verified after the run (SEC-205).
+
+### 6.6 Git hardening
+
+- **Evidence:** CX §9 (explicit `GIT_DIR` to the mirror or its admin dir; `.git` pointer, `commondir` and `gitdir` checks; fixed `-c` set; `GIT_CONFIG_GLOBAL=/dev/null`, `NOSYSTEM`; `--no-textconv --no-ext-diff`; temporary index; plumbing commit; CAS `update-ref`; push from mirror). CMP §9.2/§9.6; MS §9.3 askpass fd; GH §9.3 FF-only `mercury/**`.
+- **Analysis:** CX §9 step 1 stages with `add -A` with `GIT_WORK_TREE` set, so git itself reads the worktree. With config coming only from the mirror, in-tree `.gitattributes` can transform data (eol, `ident`, encoding) but cannot run filters, which need `filter.*` config. `core.symlinks=true` stores links rather than following them. This is acceptable, and differs from the TM's illustrative `hash-object` per file.
+- **Result: PASS, with VE-10** (CMP flag subset; SEC-402 config check frequency).
+
+### 6.7 Policy gate path lists
+
+- **Evidence:** TM SEC-310 (owner), CX §9 step 2, GH §6.2, SM §8.7, TDD §19.
+- **Result:** **VE-05** (TDD loosens `.claude/**`/`.mcp.json` to escalate) and **VE-09** (CX stricter; TM now permits stricter classification and adds `.husky/**`, `.npmrc`, `.yarnrc*`). GH §6.2 and SM §8.7 are consistent with SEC-310 as amended.
+
+### 6.8 Presence-tier method list consistency
+
+| Method / action | CMP §5.2/§5.4 | ADR-019 §33 | MS §9.5 | TM SEC-115 (Phase 4) | TM SEC-115 (amended) |
+|---|---|---|---|---|---|
+| `ack-merge` | ★ | ★ | ★ | ★ | ★ |
+| `security unhalt` | ★ | ★ | ★ | ★ | ★ |
+| `unpause --safe-mode` | ★ | "after automatic security pause" | "post-incident unpause" | "after automatic pause" | ★ (`--safe-mode`) |
+| `policy ack` | ★ | ★ | ★ | ★ | ★ |
+| `grant` / `retry` (run_exhausted) | ★ | ★ (grant) | ★ (grant) | ★ (grant) | ★ |
+| `resume` security_escalation / injection_suspected | ★ | ★ | ★ | ★ | ★ |
+| `resume --reopen` / `--discard-worktree-changes` | ★ | — | — | — | ★ |
+| `resume --adopt` / `orphan adopt` | ★ | ★ (adopt) | ★ (adopt) | ★ (adopt) | ★ |
+| `outbox retry` (security) | ★ | — | — | ★ | ★ |
+| `restore --confirm` | ★ | — | ★ | ★ | ★ |
+| ruleset-emergency ack | ★ | ★ | ★ | ★ | ★ |
+| `guard_integrity_failure` resume | none (SM §6.1: cancel/abandon only) | — | — | ★ (listed) | removed |
+
+- **Result:** CMP is the superset and is now named authoritative in SEC-115. ADR-019 and MS §9.5 are subsets (**VE-14**, Low). Stopping work never needs presence in any document. Pass.
+
+### 6.9 Linear app actor and comment handling
+
+- **Evidence:** LN §2 (client-credentials `actor=app`; personal key rejected at config validation; no `app:assignable`/`app:mentionable`; own objects identified by actor id; team restriction in code; Linear writes pause if P0-225 shows merge reach). LN LN-2 (no command parser). LN §7 line 224 (write allowlist = SEC-805) and line 228 (neutraliser incl. magic words). LN §9 (delegate, coding session, foreign PR → block). LN §2 "Who is the human": operator-authored Linear actions are not proof while connectors act as the human, so eligibility only.
+- **Result: PASS.** UNVERIFIABLE — P0-225 (ASM-E-05).
+
+### 6.10 Secret redaction sinks
+
+- **Evidence:** CMP §4.16 (audit data, `runs.error_summary`, outbox payloads incl. check-run output, `control_requests.params_json`, logs, notifications; `Redacted<NeutralisedText>` type at public sinks); MS §9.3 `Secret` type, no `--inspect`/fatal reports; CX §9 step 3 pre-push scan; CMP §6.5 raw stdout until finalization.
+- **Result: PASS with VE-15** (encodings and entropy stage not restated in CMP).
+
+### 6.11 Audit chain and anchors (Addendum B: no public chain-head embed)
+
+- **Evidence:** CMP §4.16 chain (JCS, gap-free, epochs), anchors limited to Linear completion comment + private anchor repo, with the check summary on private repos only. GH §6.1 T24 row: "never on public repositories". LN §7 `completed`. REC §4 step 7 start-up verification → safe mode. MS §14.4 restore epoch via presence. ADR-018 §Decision 2 still unconditional (**VE-02**). TM fixed (**VE-19**).
+- **Result: PASS in the implementing documents.** The Linear team is workspace-internal, not internet-public, so the Linear carrier does not count as a public embed.
+
+### 6.12 Supply-chain controls
+
+- **Evidence:** MS §3.4 (`agent.conf` hashes checked at every spawn), §3.9 (toolchains verified against pinned vendor checksums; agent read and execute only), §13.2 (`npm ci --omit=dev --ignore-scripts`, SHA-256 verified release), §13.5 (agent CLI pins, no auto-update), §15.1 (SHA-pinned Actions, `permissions: contents: read`, provenance attestation, `supply-chain` and `codeql` jobs). CX §9 lockfile lint before install; MS §3.5 `deps_install` must carry ignore-scripts.
+- **Result: PASS with VE-16** (`gh` invocation in the upgrade path). Residual RISK-27: a compromised coordinator dependency reaches Zone H (OD-36).
+
+---
+## 7. Residual risk statement and conditions for approval
+
+### 7.1 Residual risk (after the reconciled design is implemented and the named gates pass)
+
+| Risk | Residual | Why it remains |
+|---|---|---|
+| RISK-05 Subtle backdoor passes Claude reviews and the human | **Medium** (inherent) | Review quality is judgement; MERCURY maximises signal (policy gate, separate security review, neutralised text) but cannot prove absence of malice |
+| RISK-27 Coordinator code execution reaches the operator's `gh` credential | **Medium** | `mercuryd` shares the operator uid (RD-1). Attack surface is MERCURY's own parsers (JSON, git objects, diffs) and dependencies. OD-36 (U2) would reduce it to Low |
+| RISK-28 Operator's interactive agents approve or merge as the human (N1) | **Medium** (policy only) | GitHub cannot distinguish them from the human |
+| RISK-03 Agent reads credentials | **Critical until G-S2**, Low after | Rests on P0-027 / SEC-T-20 on the real Mac |
+| RISK-04 Non-human merge on a personal repo | Low (G-ORG) / Medium (G-DETECT, accepted in writing) | Detective only under G-DETECT |
+| RISK-29 Keychain ACL trusts `/usr/bin/security` | Low–Medium | P0-036; signed helper moves to v1 if needed (Addendum A) |
+| RISK-13 Dependency confusion / exfil via registry egress | Low–Medium | Depends on P0-049 outcome |
+
+### 7.2 Conditions
+
+| Before | Conditions (all must be true) |
+|---|---|
+| **M3** (first real Claude run, G-S1) | VE-04(b) and VE-06 fixed; P0-042 or the ALT-B-1 switch decided; CL §8 self-test passes on the Mac; P0-201 passes |
+| **M4** (Codex planning; G-S2 evidence) | VE-04(a) and VE-11 fixed; P0-026…032 green; **SEC-T-20, -21, -28, -29 pass on the real Mac** (SAC-05/13/14/19). No non-sandbox workspace-write, `verify` or `deps_install` run until then |
+| **M5** (first sandbox push, G-S3) | VE-05, VE-09, VE-10, VE-12, VE-13, VE-14, VE-15 resolved; SAC-01/02/06/07/11/16/17 green; P0-049 executed and a mechanism chosen if `deps_install` is enabled (SAC-18); P0-045 presence helper green, else the POL fallback is recorded and RISK-30 re-rated; P0c identities created per github.md §2 (VE-01, VE-03, VE-08 fixed first) |
+| **M9b** (supervised pilot, G-S4) | G-DETECT written risk acceptance **or** G-ORG; SAC-04/09/10/12/15/20 green; every ASM-E closed or replaced by an ADR (SAC-12); OD-E-02 deny rules applied to the operator's interactive agents (SEC-106) and Linear coding sessions disabled (SEC-804); dispatch only in declared supervision windows |
+| **Unattended / overnight** (G-S5, recorded at M9c entry) | **G-ORG** on every target repo; **OD-36 decided** (recommend at M8 exit; if option (b), implemented); SEC-604 anchoring live with no public embed (VE-02 fixed); SEC-906 scoping tested (SEC-T-91); VE-07 resolved (watchdog liveness is part of unattended safety); VE-16, VE-20 fixed; **SAC-01…20 all green** |
+
+---
+
+## 8. Security acceptance criteria status (SAC-01…20)
+
+"Design-verified" means the control and its test are fully specified in the final documents with a binary criterion. Every SAC still **requires implementation evidence**. None can pass on design alone (verification plan §7.2: results from fakes never verify Mac- or sandbox-level requirements).
+
+| SAC | Criterion (TM §10.1) | Gate | Design status | Evidence still required |
+|---|---|---|---|---|
+| SAC-01 | Unauthorized-merge suite | G-S3 | Design-verified (§5, GH §9–§10) | Sandbox: TC-GOV-116 (SEC-T-16 a–h), P0-233 |
+| SAC-02 | Token scope exact | G-S3 | Design-verified after VE-01/03 fixes | Sandbox: TC-GOV-112 |
+| SAC-03 | Hook/MCP planting, 0 executions in 50 runs | G-S1 | Design-verified (CL §8) | Mac: TC-SEC-103, P0-201 |
+| SAC-04 | Prompt-injection corpus thresholds | G-S4 | Design-verified (TM §7.7, PI-01…20; ≥ 60 variants to be written) | Eval: TC-PI-130 on pinned models |
+| SAC-05 | Credential canaries 0 reads | **G-S2** | Design-verified (MS §3, §16.2) | **Mac: P0-027, TC-SEC-120** |
+| SAC-06 | Secret leakage, 40 formats | G-S3 | Partial (VE-15) | TC-SEC-150/151 |
+| SAC-07 | Git hardening | G-S3 | Partial (VE-10) | TC-SEC-140…144 |
+| SAC-08 | Audit integrity | G-S5 | Design-verified (CMP §4.16, REC §4) | TC-SEC-161/163/164 |
+| SAC-09 | Drift detected ≤ 60 min awake | G-S4 | Design-verified (GH §9.6) | Sandbox: TC-GOV-115 |
+| SAC-10 | Merge-verification scoping ≤ 5 min | G-S4 | Design-verified (GH §8, SM §8.5, TM §8.9 aligned) | Sandbox: TC-SEC-193 |
+| SAC-11 | Binding and revocation | G-S3 | Design-verified (SM §8.1–§8.3) | TC-PI-134…136 |
+| SAC-12 | Phase 0 assumption closure | G-S4 | Design-verified (all ASM-E have P0 links, TM §10.3) | Phase 0 results |
+| SAC-13 | Env allowlist | G-S2 | Design-verified (MS §9.4) | Mac: TC-SEC-121 |
+| SAC-14 | Wrapper grammar fuzz, sudoers 2 commands | G-S2 | Design-verified (MS §3.4–§3.7); VE-04 to fix first | CI `test-wrappers` + Mac: TC-SEC-128 |
+| SAC-15 | Presence tier | G-S4 | Design-verified (CMP §5.2); VE-13 | Mac: TC-SEC-145, P0-045 |
+| SAC-16 | Policy gate incl. carry-forward | G-S3 | Design-verified (TM SEC-310 amended, GH §6.2, SM §8.7); VE-05 | TC-PI-138 |
+| SAC-17 | Required-check pinning | G-S3 | Design-verified (GH §9.1) | Sandbox: TC-GOV-117, ASM-B-56/57 |
+| SAC-18 | `verify`/deps sandboxes | G-S2 | Specified (TM §8.7; P0-049 procedure now in TM §10.4) | Mac: P0-049, TC-SEC-125/171 |
+| SAC-19 | Supervised lifetime | G-S2 | Design-verified (MS §3.5, §3.8) | Mac: TC-SEC-129, P0-031 |
+| SAC-20 | Disclosure policy | G-S4 | Design-verified (GH §6.4) | TC-SEC-154 |
+
+**Summary:** 17 of 20 SACs are design-verified, and 3 are partial pending Medium/Low fixes (SAC-06, SAC-07, SAC-18). 20 of 20 require implementation or Phase 0 evidence. The ones that can only be closed on the real Mac are SAC-03, 05, 13, 14, 15, 18 and 19.
+
+---
+
+## Appendix A. Threat-model changes made in this phase (fixed in place)
+
+`security/threat-model.md`, 2026-10-13: header status; A-12; §0/§3.3 item 11; SEC-101 (`statuses:read`; `mercury-ops` not on targets; `mercury-bot` `audit` token; OD-37); SEC-108; **SEC-113 (`action_required`; never `neutral`/`skipped`)**; SEC-115 (aligned to components §5.2/§5.4 and SM §6.1); SEC-209 (acknowledged-difference rule); SEC-310 (`.husky/**`, `.npmrc`, `.yarnrc*` block-class; digest carry-forward; stricter-only repo policy); SEC-604 and §8.5 (no public chain-head embed); SEC-905, L7, §8.9 and SEC-T-93 (GitHub numbering; M8 global); §6.3 rows; §7.5 pseudo-code; §8.10 G-S5 placement; SAC-16; §10.3 P0 links; **new §10.4 P0-049 procedure**.

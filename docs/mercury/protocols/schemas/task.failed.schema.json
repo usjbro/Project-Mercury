@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.mercury.local/v1/task.failed.schema.json",
+  "title": "Task failed, cancelled or blocked",
+  "description": "T03/T04/T08/T11/T13/T19/T26/T29/T35/T39/G1/G2/G5/G6. 'blocked' is non-terminal.",
+  "allOf": [
+    {
+      "$ref": "envelope.schema.json"
+    }
+  ],
+  "properties": {
+    "schema": {
+      "const": "mercury.task.failed.v1"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "outcome": {
+          "enum": [
+            "failed",
+            "cancelled",
+            "blocked"
+          ]
+        },
+        "from_state": {
+          "$ref": "common.schema.json#/$defs/task_state"
+        },
+        "to_state": {
+          "enum": [
+            "FAILED",
+            "CANCELLED",
+            "BLOCKED"
+          ]
+        },
+        "reason_code": {
+          "type": "string",
+          "pattern": "^[a-z_]{3,60}$"
+        },
+        "detail_display": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "failed_run_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "common.schema.json#/$defs/run_id"
+          },
+          "minItems": 0,
+          "maxItems": 20
+        },
+        "operator_action_required": {
+          "type": "boolean"
+        },
+        "allowed_actions": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "resume",
+              "retry",
+              "grant",
+              "adopt",
+              "reset",
+              "reopen",
+              "discard_worktree_changes",
+              "request_reauth",
+              "ack_merge",
+              "policy_ack",
+              "policy_reject",
+              "security_unhalt",
+              "cancel",
+              "abandon"
+            ],
+            "type": "string"
+          },
+          "minItems": 0,
+          "maxItems": 14
+        },
+        "notification_kind": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[a-z_]{3,64}$",
+          "maxLength": 64,
+          "description": "Notification kind from the components §4.15 vocabulary, or null when no notification is sent."
+        },
+        "presence_required_actions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "resume",
+              "retry",
+              "grant",
+              "adopt",
+              "reset",
+              "reopen",
+              "discard_worktree_changes",
+              "request_reauth",
+              "ack_merge",
+              "policy_ack",
+              "policy_reject",
+              "security_unhalt",
+              "cancel",
+              "abandon"
+            ]
+          },
+          "minItems": 0,
+          "maxItems": 14,
+          "description": "Subset of allowed_actions that need the operator-presence tier (RD-12)."
+        }
+      },
+      "required": [
+        "outcome",
+        "from_state",
+        "to_state",
+        "reason_code",
+        "detail_display",
+        "failed_run_ids",
+        "operator_action_required",
+        "allowed_actions",
+        "notification_kind",
+        "presence_required_actions"
+      ]
+    }
+  },
+  "unevaluatedProperties": false
+}

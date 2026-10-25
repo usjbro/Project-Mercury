@@ -1,0 +1,225 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.mercury.local/v1/test.results.schema.json",
+  "title": "Test results bound to a commit",
+  "description": "T20/T21/T22/T23. codex_self_report is advisory only.",
+  "allOf": [
+    {
+      "$ref": "envelope.schema.json"
+    },
+    {
+      "if": {
+        "properties": {
+          "payload": {
+            "properties": {
+              "source": {
+                "const": "codex_self_report"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "properties": {
+              "authoritative": {
+                "const": false
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "properties": {
+    "schema": {
+      "const": "mercury.test.results.v1"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "test_result_id": {
+          "$ref": "common.schema.json#/$defs/test_result_id"
+        },
+        "source": {
+          "enum": [
+            "local_verify",
+            "codex_self_report",
+            "ci"
+          ]
+        },
+        "authoritative": {
+          "type": "boolean"
+        },
+        "commit_sha": {
+          "$ref": "common.schema.json#/$defs/git_sha"
+        },
+        "passed": {
+          "type": "boolean"
+        },
+        "suites": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "command_display": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000
+              },
+              "exit_code": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "duration_ms": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "passed": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "failed": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "skipped": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "timed_out": {
+                "type": "boolean"
+              },
+              "required": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "name",
+              "command_display",
+              "exit_code",
+              "duration_ms",
+              "passed",
+              "failed",
+              "skipped",
+              "timed_out",
+              "required"
+            ]
+          },
+          "minItems": 0,
+          "maxItems": 100
+        },
+        "ci_checks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "app": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 100
+              },
+              "conclusion": {
+                "enum": [
+                  "success",
+                  "failure",
+                  "neutral",
+                  "cancelled",
+                  "skipped",
+                  "timed_out",
+                  "action_required",
+                  "stale",
+                  null
+                ]
+              },
+              "status": {
+                "enum": [
+                  "queued",
+                  "in_progress",
+                  "completed",
+                  "pending"
+                ]
+              },
+              "required": {
+                "type": "boolean"
+              },
+              "url": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 500
+              }
+            },
+            "required": [
+              "name",
+              "app",
+              "conclusion",
+              "status",
+              "required",
+              "url"
+            ]
+          },
+          "minItems": 0,
+          "maxItems": 200
+        },
+        "known_failures_declared_in_plan": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "minItems": 0,
+          "maxItems": 20
+        },
+        "logs": {
+          "oneOf": [
+            {
+              "$ref": "common.schema.json#/$defs/artifact_ref"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "test_result_id",
+        "source",
+        "authoritative",
+        "commit_sha",
+        "passed",
+        "suites",
+        "ci_checks",
+        "known_failures_declared_in_plan",
+        "logs"
+      ]
+    }
+  },
+  "unevaluatedProperties": false
+}

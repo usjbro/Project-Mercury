@@ -1,0 +1,447 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.mercury.local/v1/task.authorization.schema.json",
+  "title": "Task authorization (versioned, immutable)",
+  "description": "Coordinator record of a Claude authorization decision (T02, T37, G1a, G4). Payload hash = authorizations.payload_sha256.",
+  "allOf": [
+    {
+      "$ref": "envelope.schema.json"
+    },
+    {
+      "if": {
+        "properties": {
+          "payload": {
+            "properties": {
+              "decision": {
+                "const": "revoke"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "properties": {
+              "scope": {
+                "type": "null"
+              },
+              "limits": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "payload": {
+            "properties": {
+              "scope": {
+                "type": "object"
+              },
+              "limits": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "properties": {
+    "schema": {
+      "const": "mercury.task.authorization.v1"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "authorization_id": {
+          "$ref": "common.schema.json#/$defs/authorization_id"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "decision": {
+          "enum": [
+            "authorize",
+            "amend",
+            "revoke"
+          ]
+        },
+        "amendment_kind": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "limits",
+            "spec_confirm",
+            "scope",
+            null
+          ]
+        },
+        "scope_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "previous_sha256": {
+          "oneOf": [
+            {
+              "$ref": "common.schema.json#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "issue_binding": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "linear_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "identifier": {
+              "$ref": "common.schema.json#/$defs/issue"
+            },
+            "title": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            },
+            "updated_at": {
+              "$ref": "common.schema.json#/$defs/timestamp"
+            },
+            "spec_sha256": {
+              "$ref": "common.schema.json#/$defs/sha256"
+            },
+            "snapshot": {
+              "$ref": "common.schema.json#/$defs/artifact_ref"
+            }
+          },
+          "required": [
+            "linear_id",
+            "identifier",
+            "title",
+            "updated_at",
+            "spec_sha256",
+            "snapshot"
+          ]
+        },
+        "repo_binding": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "repo": {
+              "$ref": "common.schema.json#/$defs/repo"
+            },
+            "base_branch": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "base_sha_at_authorization": {
+              "oneOf": [
+                {
+                  "$ref": "common.schema.json#/$defs/git_sha"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "repo",
+            "base_branch",
+            "base_sha_at_authorization"
+          ]
+        },
+        "scope": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "summary": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2000
+                },
+                "in_scope": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  },
+                  "minItems": 0,
+                  "maxItems": 50
+                },
+                "out_of_scope": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  },
+                  "minItems": 0,
+                  "maxItems": 50
+                },
+                "acceptance_criteria": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "ac_id": {
+                        "$ref": "common.schema.json#/$defs/ac_id"
+                      },
+                      "text": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 2000
+                      }
+                    },
+                    "required": [
+                      "ac_id",
+                      "text"
+                    ]
+                  },
+                  "minItems": 0,
+                  "maxItems": 100
+                },
+                "allowed_path_globs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300
+                  },
+                  "minItems": 1,
+                  "maxItems": 100
+                },
+                "denied_path_globs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300
+                  },
+                  "minItems": 0,
+                  "maxItems": 200
+                },
+                "max_files_changed": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 500
+                },
+                "max_loc_changed": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 20000
+                },
+                "dependency_changes_allowed": {
+                  "enum": [
+                    false,
+                    "escalate"
+                  ]
+                },
+                "ask_first_categories": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  },
+                  "minItems": 0,
+                  "maxItems": 20
+                },
+                "requires_security_review": {
+                  "type": "boolean"
+                },
+                "security_sensitive": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "summary",
+                "in_scope",
+                "out_of_scope",
+                "acceptance_criteria",
+                "allowed_path_globs",
+                "denied_path_globs",
+                "max_files_changed",
+                "max_loc_changed",
+                "dependency_changes_allowed",
+                "ask_first_categories",
+                "requires_security_review",
+                "security_sensitive"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "limits": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "max_plan_revisions": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 5
+                },
+                "max_pr_revisions": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 5
+                },
+                "max_verify_fix_cycles": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 6
+                },
+                "max_codex_awake_minutes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 240
+                },
+                "max_codex_tokens": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 1
+                },
+                "network": {
+                  "enum": [
+                    "none",
+                    "deps_only"
+                  ]
+                },
+                "expires_at": {
+                  "$ref": "common.schema.json#/$defs/timestamp"
+                }
+              },
+              "required": [
+                "max_plan_revisions",
+                "max_pr_revisions",
+                "max_verify_fix_cycles",
+                "max_codex_awake_minutes",
+                "max_codex_tokens",
+                "network",
+                "expires_at"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "priority": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "maximum": 4
+        },
+        "rationale_display": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "risk_flags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "minItems": 0,
+          "maxItems": 20
+        },
+        "issued_by": {
+          "$ref": "common.schema.json#/$defs/agent_info"
+        },
+        "input_digest": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        },
+        "source_output": {
+          "$ref": "common.schema.json#/$defs/artifact_ref"
+        },
+        "record_mac": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 128
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "initial",
+            "reauthorize"
+          ]
+        },
+        "trigger": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "spec_changed",
+            "authorization_expired",
+            "restore",
+            "operator_request",
+            "claude_session_request",
+            null
+          ]
+        },
+        "models_used": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "minItems": 1,
+          "maxItems": 4,
+          "description": "Models that actually produced the decision (RD-18; no fallback model)."
+        }
+      },
+      "required": [
+        "authorization_id",
+        "version",
+        "decision",
+        "amendment_kind",
+        "scope_version",
+        "previous_sha256",
+        "issue_binding",
+        "repo_binding",
+        "scope",
+        "limits",
+        "priority",
+        "rationale_display",
+        "risk_flags",
+        "issued_by",
+        "input_digest",
+        "source_output",
+        "record_mac",
+        "mode",
+        "trigger",
+        "models_used"
+      ]
+    }
+  },
+  "unevaluatedProperties": false
+}

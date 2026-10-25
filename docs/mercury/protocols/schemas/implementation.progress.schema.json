@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.mercury.local/v1/implementation.progress.schema.json",
+  "title": "Run progress (sampled)",
+  "description": "At most one per 60 s per run, or on phase change (CX \u00a78). Never drives a guard.",
+  "allOf": [
+    {
+      "$ref": "envelope.schema.json"
+    }
+  ],
+  "properties": {
+    "schema": {
+      "const": "mercury.implementation.progress.v1"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "phase": {
+          "enum": [
+            "started",
+            "heartbeat",
+            "milestone",
+            "finished",
+            "adopted",
+            "stalled"
+          ]
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "stats": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "events": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "commands_run": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "files_changed": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "tokens_in": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "tokens_out": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "awake_ms": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "todo_done": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "todo_total": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "events",
+            "commands_run",
+            "files_changed",
+            "tokens_in",
+            "tokens_out",
+            "awake_ms",
+            "todo_done",
+            "todo_total"
+          ]
+        },
+        "last_event_type": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 60
+        },
+        "commit_sha": {
+          "oneOf": [
+            {
+              "$ref": "common.schema.json#/$defs/git_sha"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "display": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 500
+        }
+      },
+      "required": [
+        "phase",
+        "sequence",
+        "stats",
+        "last_event_type",
+        "commit_sha",
+        "display"
+      ]
+    }
+  },
+  "unevaluatedProperties": false
+}

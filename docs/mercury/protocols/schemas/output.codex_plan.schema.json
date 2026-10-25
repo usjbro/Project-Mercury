@@ -1,0 +1,414 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://schemas.mercury.local/v1/output.codex_plan.schema.json",
+  "title": "Codex implementation plan",
+  "description": "Codex --output-schema for codex_plan runs (read-only sandbox). OpenAI strict subset: all properties required, nullable via type arrays.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "type": "string",
+      "enum": [
+        "mercury.output.codex_plan.v1"
+      ]
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "pattern": "^run_[0-9A-HJKMNP-TV-Z]{26}$"
+        },
+        "task_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^tsk_[0-9A-HJKMNP-TV-Z]{26}$"
+        },
+        "auth_id": {
+          "type": "string",
+          "pattern": "^auth_[0-9A-HJKMNP-TV-Z]{26}$"
+        },
+        "base_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        }
+      },
+      "required": [
+        "request_id",
+        "task_id",
+        "auth_id",
+        "base_sha"
+      ]
+    },
+    "status": {
+      "enum": [
+        "ready",
+        "needs_clarification"
+      ],
+      "type": "string"
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000
+    },
+    "approach": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8000
+    },
+    "acceptance_criteria_coverage": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ac_id": {
+            "type": "string",
+            "pattern": "^AC-[0-9]{1,3}$"
+          },
+          "coverage": {
+            "enum": [
+              "full",
+              "partial",
+              "none"
+            ],
+            "type": "string"
+          },
+          "how": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "tests": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 300
+            },
+            "minItems": 0,
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "ac_id",
+          "coverage",
+          "how",
+          "tests"
+        ]
+      },
+      "minItems": 0,
+      "maxItems": 100
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "step_id": {
+            "type": "string",
+            "pattern": "^S[0-9]{1,3}$"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            },
+            "minItems": 0,
+            "maxItems": 50
+          }
+        },
+        "required": [
+          "step_id",
+          "title",
+          "description",
+          "files"
+        ]
+      },
+      "minItems": 1,
+      "maxItems": 60
+    },
+    "file_changes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "change": {
+            "enum": [
+              "add",
+              "modify",
+              "delete",
+              "rename"
+            ],
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          }
+        },
+        "required": [
+          "path",
+          "change",
+          "reason"
+        ]
+      },
+      "minItems": 0,
+      "maxItems": 300
+    },
+    "tests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "kind": {
+            "enum": [
+              "unit",
+              "integration",
+              "e2e",
+              "manual",
+              "other"
+            ],
+            "type": "string"
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 500
+          },
+          "covers": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^AC-[0-9]{1,3}$"
+            },
+            "minItems": 0,
+            "maxItems": 50
+          }
+        },
+        "required": [
+          "name",
+          "kind",
+          "path",
+          "covers"
+        ]
+      },
+      "minItems": 0,
+      "maxItems": 200
+    },
+    "dependencies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "ecosystem": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 50
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "change": {
+            "enum": [
+              "add",
+              "upgrade",
+              "remove"
+            ],
+            "type": "string"
+          },
+          "justification": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          }
+        },
+        "required": [
+          "name",
+          "ecosystem",
+          "version",
+          "change",
+          "justification"
+        ]
+      },
+      "minItems": 0,
+      "maxItems": 30
+    },
+    "known_test_failures": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 300
+      },
+      "minItems": 0,
+      "maxItems": 20
+    },
+    "risks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "risk": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "likelihood": {
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ],
+            "type": "string"
+          },
+          "mitigation": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          }
+        },
+        "required": [
+          "risk",
+          "likelihood",
+          "mitigation"
+        ]
+      },
+      "minItems": 0,
+      "maxItems": 30
+    },
+    "security_considerations": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 1000
+      },
+      "minItems": 0,
+      "maxItems": 30
+    },
+    "out_of_scope": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 500
+      },
+      "minItems": 0,
+      "maxItems": 30
+    },
+    "open_questions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 1000
+      },
+      "minItems": 0,
+      "maxItems": 20
+    },
+    "responds_to_findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "finding_ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40
+          },
+          "resolution": {
+            "enum": [
+              "addressed",
+              "disputed",
+              "not_applicable"
+            ],
+            "type": "string"
+          },
+          "response": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "finding_ref",
+          "resolution",
+          "response"
+        ]
+      },
+      "minItems": 0,
+      "maxItems": 100
+    },
+    "estimated_size": {
+      "enum": [
+        "S",
+        "M",
+        "L",
+        "XL"
+      ],
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "binding",
+    "status",
+    "summary",
+    "approach",
+    "acceptance_criteria_coverage",
+    "steps",
+    "file_changes",
+    "tests",
+    "dependencies",
+    "known_test_failures",
+    "risks",
+    "security_considerations",
+    "out_of_scope",
+    "open_questions",
+    "responds_to_findings",
+    "estimated_size"
+  ]
+}
