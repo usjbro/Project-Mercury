@@ -35,7 +35,13 @@ class Env:
         open(os.path.join(self.repo, "README.md"), "w").write("x\n")
         sh("git add -A && git commit -qm base", self.repo)
         self.base = sh("git rev-parse HEAD", self.repo).stdout.strip()
-        self.env = dict(os.environ, DEVORCH_HOME=self.home, DEVORCH_TEST_MODE="1", DEVORCH_EVIDENCE=self.ev)
+        # git-baseline hashes ~/.gitconfig and ~/.claude/settings*.json: never the operator's real files, which
+        # Claude Code or an editor may rewrite while the suite runs (an intermittent failure on the operator's Mac)
+        self.user_home = os.path.join(self.root, "user-home")
+        os.makedirs(self.user_home)
+        self.tool = TOOL
+        self.env = dict(os.environ, DEVORCH_HOME=self.home, DEVORCH_TEST_MODE="1", DEVORCH_EVIDENCE=self.ev,
+                        HOME=self.user_home)
         issue = {"deps": [], "conditional": False, "gates": "", "p0_refs": [], "longest_path_p50": 1, "downstream": 0,
                  "needs_mac_or_operator": False, "title": "t"}
         json.dump({"issues": {k: dict(issue) for k in ("MERC-101", "MERC-102", "MERC-020")}},
@@ -46,7 +52,7 @@ class Env:
                          "--evidence", "test", ok=True)
 
     def run(self, *args, ok=None):
-        r = subprocess.run([sys.executable, TOOL, *args], env=self.env, capture_output=True, text=True)
+        r = subprocess.run([sys.executable, self.tool, *args], env=self.env, capture_output=True, text=True)
         if ok is True and r.returncode != 0:
             raise AssertionError(f"devorch {args} failed: {r.stdout}{r.stderr}")
         if ok is False and r.returncode == 0:
@@ -146,6 +152,24 @@ class Env:
         self.rec(sid, "assigned")
         self.rec(sid, "result_accepted", "result_file:" + res)
         return sid
+
+    def isolate_checkout(self):
+        """Run devorch from a scratch copy of the checkout. git-baseline hashes the checkout that contains devorch.py
+        (.git/config, hooks, .claude/, CLAUDE.md, tools/devorch/); in the live checkout, any write there between
+        `record` and `verify` (Claude Code updating .claude/settings.local.json, an editor, Finder's .DS_Store)
+        made the baseline tests fail intermittently."""
+        src = os.path.dirname(os.path.dirname(HERE))
+        co = os.path.join(self.root, "checkout")
+        for rel in ("tools/devorch/devorch.py", "tools/devorch/assignments.json", "CLAUDE.md", ".gitignore",
+                    ".claude/settings.json"):
+            os.makedirs(os.path.dirname(os.path.join(co, rel)), exist_ok=True)
+            shutil.copyfile(os.path.join(src, rel), os.path.join(co, rel))
+        sch = os.path.relpath(D.SCHEMAS, src)
+        shutil.copytree(os.path.join(src, sch), os.path.join(co, sch))
+        sh("git init -q -b main .", co)
+        self.checkout = co
+        self.tool = os.path.join(co, "tools", "devorch", "devorch.py")
+        return co
 
     def cleanup(self):
         shutil.rmtree(self.root, ignore_errors=True)
@@ -458,6 +482,7 @@ class T(unittest.TestCase):
     def test_push_requires_state_and_operator_facts(self):
         # R5 N-06 / M5: no push before AWAITING_INTEGRATION, nor without the DOD-02 and identity facts
         c, head = self.e.to_awaiting_review()
+        self.e.isolate_checkout()
         self.e.run("git-baseline", "record", ok=True)
         r = self.e.run("push", "--task", "DT-0001", ok=False)
         self.assertIn("push only from AWAITING_INTEGRATION", r.stderr)
@@ -479,6 +504,7 @@ class T(unittest.TestCase):
 
     def test_preflight_tolerates_own_lock_but_not_foreign_changes(self):
         h = self.e.home
+        self.e.isolate_checkout()
         sh("git init -q -b devorch/state . && git config user.email t@t && git config user.name t", h)
         self.e.contract("DT-0001"); self.e.rec("DT-0001", "created")
         sh("git add -A && git commit -qm l", h)
@@ -526,10 +552,8 @@ class T(unittest.TestCase):
 
     def test_baseline_detects_user_config_change(self):
         # Codex review on PR #2: user configuration was snapshotted but never compared
-        fake_home = os.path.join(self.e.root, "user-home")
-        os.makedirs(fake_home)
-        self.e.env["HOME"] = fake_home
-        gc = os.path.join(fake_home, ".gitconfig")
+        self.e.isolate_checkout()
+        gc = os.path.join(self.e.user_home, ".gitconfig")
         open(gc, "w").write("[user]\n\tname = op\n")
         self.e.run("git-baseline", "record", ok=True)
         self.e.run("git-baseline", "verify", ok=True)
@@ -540,6 +564,17 @@ class T(unittest.TestCase):
         old = json.load(open(b)); old.pop("user_config"); json.dump(old, open(b, "w"))
         r = self.e.run("git-baseline", "verify", ok=False)
         self.assertIn("no user configuration snapshot", r.stdout)
+
+    def test_baseline_tests_hash_only_their_scratch_checkout(self):
+        # the baseline tests must not depend on the live checkout or the operator's home (intermittent failure on
+        # the operator's Mac): what is hashed is the scratch copy, and a change there is still detected
+        co = self.e.isolate_checkout()
+        self.e.run("git-baseline", "record", ok=True)
+        self.e.run("git-baseline", "verify", ok=True)
+        self.assertNotIn("tools/devorch/test_devorch.py", json.load(open(os.path.join(self.e.home, "baseline.json")))["files"])
+        open(os.path.join(co, ".claude", "settings.local.json"), "w").write("{}\n")
+        r = self.e.run("git-baseline", "verify", ok=False)
+        self.assertIn("changed: .claude/settings.local.json", r.stdout)
 
 
 class ScheduleModel(unittest.TestCase):
