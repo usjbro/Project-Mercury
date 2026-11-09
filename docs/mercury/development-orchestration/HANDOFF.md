@@ -1,14 +1,14 @@
-# Handoff — Project MERCURY design and development platform (as of 2026-10-25)
+# Handoff — Project MERCURY design and development platform (as of 2026-11-09)
 
 For the operator and for the next Claude Code session. Facts are separated from proposals.
 
-**All work so far is merged into `main` by the repository owner. Nothing is deployed. No design is approved (DOD-01 and the devplat decisions are still open). No Linear issue has been created. No PR is open.**
+**All work so far is merged into `main` by the repository owner. Nothing is deployed. No design is approved (DOD-01 and the devplat decisions are still open). No Linear issue has been created. One draft PR is open: #10 (refreshes this file and `OPERATOR-BRIEF.md`).**
 
 Merging puts the content on `main`; it does not approve the design. The TDD is still v1.0-rc1 awaiting DOD-01, and Amendment 001 (devplat) is still proposed.
 
 ## 1. Where everything is
 
-All content is on `main` (head `d250d0b`, the merge of PR #7).
+All content is on `main` (head `3d3f58f`, the merge of PR #9).
 
 | Content | Path | State |
 |---|---|---|
@@ -17,7 +17,7 @@ All content is on `main` (head `d250d0b`, the merge of PR #7).
 | **Amendment 001: devplat**, a Kubernetes-native, multi-project platform. Docs 14–29, ADR-022…030, review R6, re-check and fixes | `docs/mercury/development-orchestration/`, `platform/` | Proposed. Offline-validated (§3, §8). **Never run on a cluster** |
 | devplat CI | `.github/workflows/devplat-ci.yml` | Runs on PRs and on `main` for devplat and devorch paths |
 
-**Pull requests (all merged by the owner):**
+**Pull requests (#1–#9 merged by the owner; #10 open as a draft):**
 
 | PR | Head into base | Outcome |
 |---|---|---|
@@ -28,8 +28,11 @@ All content is on `main` (head `d250d0b`, the merge of PR #7).
 | #5 | `claude/devplatform-k8s` into `main` | Merged (`fc45946`). Carried #2–#4 onto `main` |
 | #6 | `claude/nice-edison-q1ai3u` into `claude/devplatform-k8s` | Merged (`79664be`) into the old stack base; superseded by #7 |
 | #7 | `claude/nice-edison-q1ai3u` into `main` | Merged (`d250d0b`). The two Codex findings from PR #5 (§5) |
+| #8 | `claude/nice-edison-q1ai3u` into `main` | Merged (`be52b50`). This handoff refreshed to the merged state |
+| #9 | `claude/affectionate-euler-y6xnf5` into `main` | Merged (`3d3f58f`). Hermetic git-baseline tests: the intermittent devorch failure (§5) |
+| #10 | `claude/affectionate-euler-y6xnf5` into `main` | Open, draft. Stale lines in `OPERATOR-BRIEF.md` and this file |
 
-**Branches.** `claude/mercury-tdd`, `claude/dev-orchestration` and `claude/devplatform-k8s` are stale stack bases whose content is superseded by `main`. Deleting them is the owner's call. The session branch `claude/nice-edison-q1ai3u` is restarted from `main` for each new change.
+**Branches.** `claude/mercury-tdd`, `claude/dev-orchestration` and `claude/devplatform-k8s` are stale stack bases whose content is superseded by `main`. Deleting them is the owner's call. Session branches (`claude/nice-edison-q1ai3u`, then `claude/affectionate-euler-y6xnf5`) are restarted from `main` for each new change.
 
 **Lesson:** a PR stacked on another PR's branch merges into that branch, not `main`. New PRs are opened directly against `main`.
 
