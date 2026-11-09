@@ -1,10 +1,11 @@
 # Operator decision brief — devplat (Amendment 001)
 
-Prepared 2026-10-23 for the repository owner. **Nothing here is decided until you decide it.** Each item gives the recommendation, what saying no costs, and what it unblocks. The full decision records are the DOD rows in `12-amendments.md`; the gating per phase is `28-roadmap-k8s.md` §4.
+Prepared 2026-10-23 for the repository owner; status lines and §6 updated 2026-11-09. **Nothing here is decided until you decide it.** Each item gives the recommendation, what saying no costs, and what it unblocks. The full decision records are the DOD rows in `12-amendments.md`; the gating per phase is `28-roadmap-k8s.md` §4.
 
 ## Where things stand
 
-- The design package (docs 14–29, ADR-022…030, `platform/`) is proposed and validated offline only: `platform/tools/validate_all.sh --strict` passes with nothing skipped. Nothing has run on a cluster, no component of devplat is built, nothing is merged, and no PR is open.
+- The design package (docs 14–29, ADR-022…030, `platform/`) is proposed and validated offline only: `platform/tools/validate_all.sh --strict` passes with nothing skipped, locally and in `devplat-ci` on every PR that touches the platform. Nothing has run on a cluster and no component of devplat is built.
+- The package is on `main`: you merged it through PR #5, and later changes through PRs #7–#9. Merging puts the content on `main`; it does not approve the design or decide anything below.
 - Review R6 is closed offline. Two independent read-only reviews found 2 High and 11 Medium issues after the fix round; all are fixed (`reviews/R6-recheck.md`). A confirmation pass by the same reviewers accepted, with two conditions that are now fixed.
 - What only a cluster can show (NetworkPolicy enforcement, gVisor, typed admission, the gateways' request filtering, recovery) is listed as verification items in docs 16 and 29.
 
@@ -57,7 +58,7 @@ These were applied by the agent within the recorded decisions; each is easy to u
 
 ## 6. What the agent will not do without you
 
-Open PRs (your original brief requires authorization), merge or approve anything, create repositories or GitHub Apps, change rulesets or settings, provision secrets, or install software on any host or cluster.
+Open a PR other than a **draft** PR from a session you started (you mark it ready, review it and merge it; decided 2026-11-09), merge or approve anything, enable auto-merge, create repositories or GitHub Apps, change rulesets or settings, provision secrets, or install software on any host or cluster.
 
 ## 7. Time (estimates, not measured)
 
